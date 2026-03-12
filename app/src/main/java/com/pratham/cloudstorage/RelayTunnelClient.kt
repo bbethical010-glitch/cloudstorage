@@ -26,6 +26,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.Base64
+import java.util.concurrent.TimeUnit
 
 private val relayGson = Gson()
 
@@ -37,6 +38,12 @@ class RelayTunnelClient(
     private val relayWebSocketUrl = relayBaseUrl.toWebSocketUrl(shareCode)
 
     private val relayClient = HttpClient(OkHttp) {
+        engine {
+            config {
+                pingInterval(20, TimeUnit.SECONDS)
+                retryOnConnectionFailure(true)
+            }
+        }
         install(WebSockets)
         expectSuccess = false
     }
