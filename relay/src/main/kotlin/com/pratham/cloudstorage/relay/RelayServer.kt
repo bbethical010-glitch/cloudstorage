@@ -198,10 +198,16 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
         if (request.contentType().isMultipart()) {
             val responseDeferred = registry.prepareResponse(requestId)
             try {
+                agent.sendLog(requestId, "Starting multipart processing on relay")
                 val multipart = receiveMultipart()
+                var streamedAnyFile = false
+                
                 multipart.forEachPart { part ->
                     if (part is PartData.FileItem) {
                         val filename = part.originalFileName ?: "uploaded_file"
+                        streamedAnyFile = true
+                        
+                        agent.sendLog(requestId, "Streaming file: $filename")
                         
                         // 1. Send Request Start
                         agent.send(RelayEnvelope(
@@ -219,11 +225,13 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
 
                         // 2. Stream Binary Chunks
                         val channel = part.provider()
+                        val buffer = ByteArray(65536)
                         while (!channel.isClosedForRead) {
-                            val packet = channel.readRemaining(65536)
-                            val bytes = packet.readBytes()
-                            if (bytes.isNotEmpty()) {
-                                agent.sendFrame(Frame.Binary(true, bytes))
+                            val read = channel.readAvailable(buffer)
+                            if (read > 0) {
+                                agent.sendFrame(Frame.Binary(true, if (read == buffer.size) buffer else buffer.copyOfRange(0, read)))
+                            } else if (read == -1) {
+                                break
                             }
                         }
 
@@ -233,13 +241,22 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
                             subType = "upload_end",
                             requestId = requestId
                         ))
+                        agent.sendLog(requestId, "Finished streaming file: $filename")
                     }
                     part.dispose()
                 }
+
+                if (!streamedAnyFile) {
+                    agent.sendLog(requestId, "No file parts found in multipart request")
+                }
                 
                 // Wait for response from the phone
+                agent.sendLog(requestId, "Awaiting phone confirmation")
                 val response = withTimeout(45_000) { responseDeferred.await() }
                 respondRelayResponse(response)
+            } catch (e: Exception) {
+                agent.sendLog(requestId, "Error during streaming: ${e.message}")
+                throw e
             } finally {
                 registry.removeResponse(requestId)
             }
@@ -377,6 +394,10 @@ private data class AgentConnection(
         sendMutex.withLock {
             session.outgoing.send(frame)
         }
+    }
+
+    suspend fun sendLog(requestId: String, message: String) {
+        send(RelayEnvelope(type = "log", requestId = requestId, error = message))
     }
 }
 
