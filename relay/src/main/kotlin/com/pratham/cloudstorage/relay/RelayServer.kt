@@ -56,7 +56,8 @@ fun Application.relayModule() {
         // Render's reverse proxy closes idle connections aggressively.
         // Sending a ping every 20s keeps the tunnel alive.
         pingPeriod = java.time.Duration.ofSeconds(20)
-        timeout = java.time.Duration.ofSeconds(60)
+        timeout = java.time.Duration.ofSeconds(120) // Increased timeout for larger uploads
+        maxFrameSize = 100 * 1024 * 1024L // Increased to 100MB to allow large JSON envelopes
     }
 
     val registry = RelayRegistry()
@@ -180,7 +181,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
     val maxBodyBytes = 50L * 1024 * 1024 // 50 MB
     if (contentLength > maxBodyBytes) {
         respondText(
-            "File too large for relay (max 50 MB). Use the local network URL for large uploads.",
+            "File too large for relay (max 50 MB). Use the direct private LAN link listed in the app for large file transfers.",
             status = HttpStatusCode.PayloadTooLarge
         )
         return
