@@ -302,10 +302,12 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
             "Phone node did not respond in time. Check your connection and try again.",
             status = HttpStatusCode.GatewayTimeout
         )
-    } catch (e: Exception) {
+    } catch (e: Throwable) {
+        val sw = java.io.StringWriter()
+        e.printStackTrace(java.io.PrintWriter(sw))
         respondText(
-            "Relay gateway error: ${e.message?.take(120)}",
-            status = HttpStatusCode.BadGateway
+            "Relay gateway error:\n$sw",
+            status = HttpStatusCode.InternalServerError
         )
     }
 }
