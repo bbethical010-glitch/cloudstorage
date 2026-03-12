@@ -196,51 +196,52 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
         val requestId = UUID.randomUUID().toString()
 
         if (request.contentType().isMultipart()) {
-            val multipart = receiveMultipart()
-            multipart.forEachPart { part ->
-                if (part is PartData.FileItem) {
-                    val filename = part.originalFileName ?: "uploaded_file"
-                    
-                    // 1. Send Request Start
-                    agent.send(RelayEnvelope(
-                        type = "request",
-                        subType = "upload_start",
-                        requestId = requestId,
-                        method = request.httpMethod.value,
-                        path = request.path().removePrefix("/node/$shareCode").takeIf { it.isNotBlank() } ?: "/",
-                        query = request.queryString(),
-                        filename = filename,
-                        headers = request.headers.flattenEntries()
-                            .filterNot { (key, _) -> key.equals(HttpHeaders.Host, ignoreCase = true) || isHopByHopHeader(key) }
-                            .associate { (key, value) -> key to value }
-                    ))
+            val responseDeferred = registry.prepareResponse(requestId)
+            try {
+                val multipart = receiveMultipart()
+                multipart.forEachPart { part ->
+                    if (part is PartData.FileItem) {
+                        val filename = part.originalFileName ?: "uploaded_file"
+                        
+                        // 1. Send Request Start
+                        agent.send(RelayEnvelope(
+                            type = "request",
+                            subType = "upload_start",
+                            requestId = requestId,
+                            method = request.httpMethod.value,
+                            path = request.path().removePrefix("/node/$shareCode").takeIf { it.isNotBlank() } ?: "/",
+                            query = request.queryString(),
+                            filename = filename,
+                            headers = request.headers.flattenEntries()
+                                .filterNot { (key, _) -> key.equals(HttpHeaders.Host, ignoreCase = true) || isHopByHopHeader(key) }
+                                .associate { (key, value) -> key to value }
+                        ))
 
-                    // 2. Stream Binary Chunks
-                    val channel = part.provider()
-                    while (!channel.isClosedForRead) {
-                        val packet = channel.readRemaining(65536)
-                        val bytes = packet.readBytes()
-                        if (bytes.isNotEmpty()) {
-                            agent.sendFrame(Frame.Binary(true, bytes))
+                        // 2. Stream Binary Chunks
+                        val channel = part.provider()
+                        while (!channel.isClosedForRead) {
+                            val packet = channel.readRemaining(65536)
+                            val bytes = packet.readBytes()
+                            if (bytes.isNotEmpty()) {
+                                agent.sendFrame(Frame.Binary(true, bytes))
+                            }
                         }
-                    }
 
-                    // 3. Send Request End
-                    agent.send(RelayEnvelope(
-                        type = "request",
-                        subType = "upload_end",
-                        requestId = requestId
-                    ))
+                        // 3. Send Request End
+                        agent.send(RelayEnvelope(
+                            type = "request",
+                            subType = "upload_end",
+                            requestId = requestId
+                        ))
+                    }
+                    part.dispose()
                 }
-                part.dispose()
-            }
-            
-            // Wait for response from the phone
-            val response = registry.awaitResponse(requestId)
-            if (response != null) {
+                
+                // Wait for response from the phone
+                val response = withTimeout(45_000) { responseDeferred.await() }
                 respondRelayResponse(response)
-            } else {
-                respondText("Upload timed out waiting for phone confirmation", status = HttpStatusCode.GatewayTimeout)
+            } finally {
+                registry.removeResponse(requestId)
             }
             return
         }
@@ -331,28 +332,27 @@ private class RelayRegistry {
 
     fun getAgent(shareCode: String): AgentConnection? = agents[shareCode]
 
-    suspend fun awaitResponse(requestId: String): RelayEnvelope? {
+    fun prepareResponse(requestId: String): CompletableDeferred<RelayEnvelope> {
         val deferred = CompletableDeferred<RelayEnvelope>()
         pendingResponses[requestId] = deferred
-        return try {
-            withTimeout(45_000) { deferred.await() }
-        } catch (e: TimeoutCancellationException) {
-            null
-        } finally {
-            pendingResponses.remove(requestId)
-        }
+        return deferred
+    }
+
+    fun removeResponse(requestId: String) {
+        pendingResponses.remove(requestId)
     }
 
     suspend fun forwardEnvelope(agent: AgentConnection, request: RelayEnvelope): RelayEnvelope? {
         val requestId = request.requestId ?: return null
-        val deferred = CompletableDeferred<RelayEnvelope>()
-        pendingResponses[requestId] = deferred
+        val deferred = prepareResponse(requestId)
 
         return try {
             agent.send(request)
             withTimeout(45_000) { deferred.await() }
+        } catch (e: TimeoutCancellationException) {
+            null
         } finally {
-            pendingResponses.remove(requestId)
+            removeResponse(requestId)
         }
     }
 
