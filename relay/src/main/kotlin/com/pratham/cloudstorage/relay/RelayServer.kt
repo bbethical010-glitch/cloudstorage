@@ -2,21 +2,11 @@ package com.pratham.cloudstorage.relay
 
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
-import io.ktor.http.ContentType
-import io.ktor.http.HttpHeaders
-import io.ktor.http.HttpMethod
-import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
-import io.ktor.server.request.httpMethod
-import io.ktor.server.request.path
-import io.ktor.server.request.queryString
-import io.ktor.server.request.receiveStream
-import io.ktor.server.response.respondBytes
-import io.ktor.server.response.respondText
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.head
@@ -25,29 +15,24 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
-import io.ktor.server.websocket.WebSockets
-import io.ktor.server.websocket.webSocket
 import io.ktor.util.flattenEntries
-import io.ktor.websocket.CloseReason
-import io.ktor.websocket.Frame
-import io.ktor.websocket.DefaultWebSocketSession
-import io.ktor.websocket.close
-import io.ktor.websocket.readText
-import io.ktor.server.request.receiveMultipart
-import io.ktor.http.content.PartData
-import io.ktor.http.content.forEachPart
-import io.ktor.server.request.contentType
-import io.ktor.http.isMultipart
-import io.ktor.utils.io.readRemaining
-import io.ktor.utils.io.core.readBytes
+import java.util.Base64
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+
+import io.ktor.server.request.*
+import io.ktor.server.response.*
+import io.ktor.http.*
+import io.ktor.http.content.*
+import io.ktor.websocket.*
+import io.ktor.server.websocket.*
+import java.io.InputStream
+import java.time.Duration
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
-import java.util.Base64
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 
 private val gson = Gson()
 
@@ -62,8 +47,8 @@ fun Application.relayModule() {
     install(WebSockets) {
         // Render's reverse proxy closes idle connections aggressively.
         // Sending a ping every 20s keeps the tunnel alive.
-        pingPeriod = java.time.Duration.ofSeconds(20)
-        timeout = java.time.Duration.ofSeconds(120) // Increased timeout for larger uploads
+        pingPeriod = Duration.ofSeconds(20)
+        timeout = Duration.ofSeconds(120) // Increased timeout for larger uploads
         maxFrameSize = 100 * 1024 * 1024L // Increased to 100MB to allow large JSON envelopes
     }
 
@@ -179,7 +164,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
 ) {
     val shareCode = parameters["shareCode"]?.trim()?.uppercase().orEmpty()
     if (request.queryParameters.contains("debug_trace")) {
-        respondText("TRACE: shareCode=$shareCode, multipart=${request.contentType().isMultipart()}")
+        respondText("TRACE: shareCode=$shareCode, multipart=${request.isMultipart()}")
         return
     }
     
@@ -200,7 +185,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
 
         val requestId = UUID.randomUUID().toString()
 
-        if (request.contentType().isMultipart()) {
+        if (request.isMultipart()) {
             val responseDeferred = registry.prepareResponse(requestId)
             try {
                 agent.sendLog(requestId, "Starting multipart processing on relay")
@@ -229,14 +214,15 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
                         ))
 
                         // 2. Stream Binary Chunks
-                        val channel = part.provider()
-                        val buffer = ByteArray(65536)
-                        while (!channel.isClosedForRead) {
-                            val read = channel.readAvailable(buffer)
-                            if (read > 0) {
-                                agent.sendFrame(Frame.Binary(true, if (read == buffer.size) buffer else buffer.copyOfRange(0, read)))
-                            } else if (read == -1) {
-                                break
+                        part.streamProvider().use { inputStream ->
+                            val buffer = ByteArray(65536)
+                            while (true) {
+                                val read = inputStream.read(buffer)
+                                if (read == -1) break
+                                if (read > 0) {
+                                    val chunk = if (read == buffer.size) buffer else buffer.copyOfRange(0, read)
+                                    agent.sendFrame(Frame.Binary(true, chunk))
+                                }
                             }
                         }
 
