@@ -56,6 +56,27 @@ fun Application.relayModule() {
     val registry = RelayRegistry()
 
     routing {
+        get("/") {
+            val connectedCount = registry.connectedCount()
+            val codes = registry.connectedShareCodes()
+            call.respondText(
+                buildRelayLandingPage(connectedCount, codes),
+                ContentType.Text.Html
+            )
+        }
+
+        get("/join") {
+            val code = call.request.queryParameters["code"]?.trim()?.uppercase().orEmpty()
+            if (code.isBlank()) {
+                call.respondText(
+                    buildRelayLandingPage(registry.connectedCount(), registry.connectedShareCodes()),
+                    ContentType.Text.Html
+                )
+            } else {
+                call.respondRedirect("/node/$code", permanent = false)
+            }
+        }
+
         get("/health") {
             call.respondText("relay_online")
         }
@@ -282,4 +303,66 @@ private fun isHopByHopHeader(name: String): Boolean {
         name.equals(HttpHeaders.Trailer, ignoreCase = true) ||
         name.equals(HttpHeaders.TransferEncoding, ignoreCase = true) ||
         name.equals(HttpHeaders.Upgrade, ignoreCase = true)
+}
+
+private fun buildRelayLandingPage(connectedCount: Int, shareCodes: List<String>): String {
+    val nodeListHtml = if (shareCodes.isEmpty()) {
+        "<div class=\"empty\">No nodes currently connected. Open the Easy Storage app on your Android device and start the node.</div>"
+    } else {
+        shareCodes.joinToString("") { code ->
+            """<a class="node-link" href="/node/$code">
+               <span class="code">$code</span>
+               <span class="arrow">→ Open console</span>
+             </a>"""
+        }
+    }
+    return """<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Easy Storage Relay</title>
+  <style>
+    :root { color-scheme: dark; --bg: #061018; --panel: #0c1622; --line: #18384f; --text: #e2edf7; --muted: #87a0b5; --accent: #3dd2ff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: ui-monospace, monospace; background: linear-gradient(180deg,#040a10,var(--bg)); color: var(--text); padding: 24px; }
+    .shell { max-width: 700px; margin: 0 auto; display: grid; gap: 18px; }
+    .card { border: 1px solid var(--line); background: rgba(12,22,34,.95); border-radius: 20px; padding: 20px; }
+    h1 { font-size: clamp(22px,5vw,36px); margin: 0 0 6px; }
+    .muted { color: var(--muted); }
+    .label { color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .1em; margin-bottom: 12px; }
+    .badge { display: inline-block; background: rgba(61,210,255,.15); color: var(--accent); border-radius: 999px; padding: 4px 14px; font-size: 13px; margin-bottom: 10px; }
+    .node-link { display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; margin-top: 10px; text-decoration: none; color: white; background: rgba(7,16,24,.8); transition: background .2s; }
+    .node-link:hover { background: rgba(61,210,255,.07); }
+    .code { font-weight: 700; }
+    .arrow { color: var(--accent); }
+    .empty { color: var(--muted); margin-top: 8px; }
+    form { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+    input { flex: 1; min-width: 160px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; color: var(--text); font-family: inherit; font-size: 14px; }
+    button { background: linear-gradient(135deg,#0f7896,#18536f); color: white; border: none; border-radius: 10px; padding: 10px 20px; font-weight: 700; cursor: pointer; font-family: inherit; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="card">
+      <div class="label">EASY STORAGE RELAY</div>
+      <h1>Drive relay gateway</h1>
+      <p class="muted">This relay forwards requests to Android phone nodes. The files stay on the drive attached to the phone — this server only proxies traffic.</p>
+      <div class="badge">$connectedCount node(s) online</div>
+    </div>
+    <div class="card">
+      <div class="label">CONNECTED NODES</div>
+      $nodeListHtml
+    </div>
+    <div class="card">
+      <div class="label">OPEN A NODE BY SHARE CODE</div>
+      <p class="muted">Paste the share code from the Easy Storage app to open that node's file console.</p>
+      <form action="/join" method="get">
+        <input name="code" placeholder="e.g. E9455A2DC9" autocomplete="off" autocapitalize="characters">
+        <button type="submit">Go →</button>
+      </form>
+    </div>
+  </div>
+</body>
+</html>"""
 }
