@@ -15,36 +15,23 @@ class DebugCommandReceiver : BroadcastReceiver() {
     }
 
     private fun startNode(context: Context, intent: Intent) {
-        val preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val selectedUri = intent.getStringExtra(EXTRA_URI)
-            ?: preferences.getString(PREF_SELECTED_URI, null)
-        val shareCode = intent.getStringExtra(EXTRA_SHARE_CODE)
-            ?: preferences.getString(PREF_SHARE_CODE, null)
-            ?: ""
-        val relayBaseUrl = intent.getStringExtra(EXTRA_RELAY_BASE_URL)
-            ?: preferences.getString(PREF_RELAY_BASE_URL, null)
-            ?.takeIf { it.isNotBlank() }
-            ?: BuildConfig.RELAY_BASE_URL
-
-        if (selectedUri.isNullOrBlank()) {
-            return
+        // On Android 12+, BroadcastReceivers cannot call startForegroundService() directly
+        // (mAllowStartForeground is false). We launch DebugStartActivity as a trampoline;
+        // it runs in the foreground context and can start the service.
+        val activityIntent = Intent(context, DebugStartActivity::class.java).apply {
+            action = DebugStartActivity.ACTION_START_NODE
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            intent.getStringExtra(EXTRA_URI)?.let { putExtra(EXTRA_URI, it) }
+            intent.getStringExtra(EXTRA_SHARE_CODE)?.let { putExtra(EXTRA_SHARE_CODE, it) }
+            intent.getStringExtra(EXTRA_RELAY_BASE_URL)?.let { putExtra(EXTRA_RELAY_BASE_URL, it) }
         }
-
-        val startIntent = Intent(context, ServerService::class.java).apply {
-            action = ServerService.ACTION_START_SERVER
-            putExtra(ServerService.EXTRA_URI, selectedUri)
-            putExtra(ServerService.EXTRA_SHARE_CODE, shareCode)
-            putExtra(ServerService.EXTRA_RELAY_BASE_URL, relayBaseUrl)
-        }
-
-        ContextCompat.startForegroundService(context, startIntent)
+        context.startActivity(activityIntent)
     }
 
     private fun stopNode(context: Context) {
-        val stopIntent = Intent(context, ServerService::class.java).apply {
+        context.startService(Intent(context, ServerService::class.java).apply {
             action = ServerService.ACTION_STOP_SERVER
-        }
-        context.startService(stopIntent)
+        })
     }
 
     companion object {

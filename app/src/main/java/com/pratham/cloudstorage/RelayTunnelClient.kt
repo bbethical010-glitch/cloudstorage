@@ -18,6 +18,10 @@ import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import io.ktor.utils.io.core.readBytes
 import io.ktor.utils.io.readRemaining
+import android.content.Context
+import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
+import java.io.OutputStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -31,20 +35,27 @@ import java.util.concurrent.TimeUnit
 private val relayGson = Gson()
 
 class RelayTunnelClient(
-    relayBaseUrl: String,
-    private val shareCode: String
+    private val context: Context,
+    val relayBaseUrl: String,
+    val shareCode: String,
+    private val rootUri: Uri
 ) {
+    private var currentStreamingRequestId: String? = null
+    private var currentUploadStream: OutputStream? = null
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val relayWebSocketUrl = relayBaseUrl.toWebSocketUrl(shareCode)
 
     private val relayClient = HttpClient(OkHttp) {
+        install(WebSockets) {
+            maxFrameSize = 100_000_000L // 100MB frame limit for large uploads
+        }
         engine {
             config {
-                pingInterval(20, TimeUnit.SECONDS)
+                pingInterval(30, TimeUnit.SECONDS)
                 retryOnConnectionFailure(true)
             }
         }
-        install(WebSockets)
         expectSuccess = false
     }
 
@@ -63,18 +74,47 @@ class RelayTunnelClient(
                     relayClient.webSocket(urlString = relayWebSocketUrl) {
                         Log.i(TAG, "Relay tunnel connected for $shareCode")
                         for (frame in incoming) {
-                            if (frame is Frame.Text) {
-                                frame.readText().toEnvelopeOrNull()?.let { envelope ->
-                                    if (envelope.type == "request") {
-                                        val response = forwardToLocalNode(envelope)
-                                        outgoing.send(Frame.Text(relayGson.toJson(response)))
+                            when (frame) {
+                                is Frame.Text -> {
+                                    frame.readText().toEnvelopeOrNull()?.let { envelope ->
+                                        when (envelope.type) {
+                                            "log" -> {
+                                                Log.d(TAG, "[RELAY LOG] ${envelope.error ?: "unspecified"}")
+                                            }
+                                            "request" -> {
+                                                when (envelope.subType) {
+                                                    "upload_start" -> {
+                                                        handleUploadStart(envelope)
+                                                    }
+                                                    "upload_end" -> {
+                                                        val response = handleUploadEnd(envelope)
+                                                        outgoing.send(Frame.Text(relayGson.toJson(response)))
+                                                    }
+                                                    else -> {
+                                                        val response = forwardToLocalNode(envelope)
+                                                        outgoing.send(Frame.Text(relayGson.toJson(response)))
+                                                    }
+                                                }
+                                            }
+                                            else -> {}
+                                        }
                                     }
                                 }
+                                is Frame.Binary -> {
+                                    val bytes = frame.data
+                                    if (bytes.isNotEmpty()) {
+                                        currentUploadStream?.let { out ->
+                                            out.write(bytes)
+                                        }
+                                    }
+                                }
+                                else -> {}
                             }
                         }
                     }
                 } catch (error: Exception) {
                     Log.w(TAG, "Relay tunnel disconnected for $shareCode: ${error.message}")
+                    cleanupStreaming()
                 }
 
                 if (isActive) {
@@ -136,6 +176,67 @@ class RelayTunnelClient(
         }
     }
 
+    private fun handleUploadStart(request: RelayEnvelope) {
+        val filename = request.filename ?: "uploaded_file"
+        val requestId = request.requestId
+        
+        Log.i(TAG, "Starting streaming upload: $filename ($requestId)")
+        
+        try {
+            cleanupStreaming()
+            
+            val rootDoc = DocumentFile.fromTreeUri(context, rootUri)
+            val file = rootDoc?.createFile("application/octet-stream", filename)
+            if (file != null) {
+                currentUploadStream = context.contentResolver.openOutputStream(file.uri)
+                currentStreamingRequestId = requestId
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start streaming upload", e)
+        }
+    }
+
+    private fun handleUploadEnd(request: RelayEnvelope): RelayEnvelope {
+        val requestId = request.requestId
+        Log.i(TAG, "Finalizing streaming upload: $requestId")
+        
+        val success = currentUploadStream != null && currentStreamingRequestId == requestId
+        cleanupStreaming()
+        
+        return if (success) {
+            // Return a simple success page that goes back
+            RelayEnvelope(
+                type = "response",
+                requestId = requestId,
+                status = 200,
+                headers = mapOf(HttpHeaders.ContentType to "text/html"),
+                bodyBase64 = """
+                    <html><body>
+                    <h2>Upload Successful</h2>
+                    <p>File has been streamed to your drive.</p>
+                    <script>setTimeout(() => history.back(), 1500);</script>
+                    </body></html>
+                """.trimIndent().encodeToByteArray().encodeBase64()
+            )
+        } else {
+            RelayEnvelope(
+                type = "response",
+                requestId = requestId,
+                status = 500,
+                headers = mapOf(HttpHeaders.ContentType to "text/plain"),
+                bodyBase64 = "Upload failed during streaming.".encodeToByteArray().encodeBase64()
+            )
+        }
+    }
+
+    private fun cleanupStreaming() {
+        try {
+            currentUploadStream?.close()
+        } catch (_: Exception) {}
+        currentUploadStream = null
+        currentStreamingRequestId = null
+    }
+
     companion object {
         private const val RECONNECT_DELAY_MS = 3_000L
         private const val TAG = "RelayTunnelClient"
@@ -151,7 +252,9 @@ private data class RelayEnvelope(
     val headers: Map<String, String>? = null,
     val bodyBase64: String? = null,
     val status: Int? = null,
-    val error: String? = null
+    val error: String? = null,
+    val subType: String? = null,
+    val filename: String? = null
 )
 
 private fun String.toEnvelopeOrNull(): RelayEnvelope? {

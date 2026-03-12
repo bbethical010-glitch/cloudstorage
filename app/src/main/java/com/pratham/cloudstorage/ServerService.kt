@@ -79,7 +79,7 @@ class ServerService : Service() {
 
         startForeground(1, notification)
         startKtorServer(rootUri, shareCode, relayBaseUrl)
-        startRelayTunnel(relayBaseUrl, shareCode)
+        startRelayTunnel(relayBaseUrl, shareCode, rootUri)
     }
 
     private fun createNotificationChannel() {
@@ -188,17 +188,21 @@ class ServerService : Service() {
         stopSelf()
     }
 
-    private fun startRelayTunnel(relayBaseUrl: String, shareCode: String) {
-        relayTunnelClient?.stop()
-        relayTunnelClient = null
+    private fun startRelayTunnel(relayBaseUrl: String, shareCode: String, rootUri: Uri) {
+        if (relayBaseUrl.isBlank() || shareCode.isBlank()) return
 
-        if (relayBaseUrl.isBlank() || shareCode.isBlank()) {
+        // Don't restart the tunnel if already connected with the same config.
+        val current = relayTunnelClient
+        if (current != null && current.relayBaseUrl == relayBaseUrl && current.shareCode == shareCode) {
             return
         }
 
+        current?.stop()
         relayTunnelClient = RelayTunnelClient(
+            context = this,
             relayBaseUrl = relayBaseUrl,
-            shareCode = shareCode
+            shareCode = shareCode,
+            rootUri = rootUri
         ).also { it.start() }
     }
 
@@ -232,8 +236,15 @@ class ServerService : Service() {
                 )
 
                 if (newFile != null) {
+                    // Stream upload to storage. provider() returns a ByteReadPacket;
+                    // we read it and write straight to the output stream.
                     contentResolver.openOutputStream(newFile.uri)?.use { output ->
-                        output.write(part.provider().readBytes())
+                        val input = part.provider()
+                        try {
+                            output.write(input.readBytes())
+                        } finally {
+                            input.close()
+                        }
                     }
                 }
             }
@@ -241,7 +252,18 @@ class ServerService : Service() {
         }
 
         if (redirectToHome) {
-            respondRedirect("/")
+            // history.back() returns to the node console URL in the browser.
+            // respondRedirect("/") would go to the relay root (404), so we use JS instead.
+            respondText(
+                """<!DOCTYPE html><html><head><meta charset="utf-8">
+                <style>body{font-family:monospace;background:#061018;color:#e2edf7;display:flex;
+                align-items:center;justify-content:center;height:100vh;margin:0}
+                .msg{text-align:center}.tick{font-size:48px;color:#3dd2ff}</style></head>
+                <body><div class="msg"><div class="tick">✓</div>
+                <p>Upload successful</p><p style="color:#87a0b5;font-size:12px">Returning…</p></div>
+                <script>setTimeout(function(){history.back()},1200);</script></body></html>""",
+                io.ktor.http.ContentType.Text.Html
+            )
         } else {
             respondText("Upload successful")
         }
@@ -422,21 +444,23 @@ private fun renderHomePage(
                 <div class="line">share_code = ${escapeHtml(shareCode.ifBlank { "not_set" })}</div>
                 <div class="line">drive_name = ${escapeHtml(root.name ?: "selected_storage")}</div>
               </div>
-              <div class="card">
-                <div class="label">PUBLIC ROUTING</div>
+              <div class="card" style="border-left: 4px solid var(--accent)">
+                <div class="label" style="color: var(--accent)">PUBLIC RELAY ACCESS</div>
+                <div class="muted" style="font-size: 11px; margin-bottom: 8px">Use for sharing links over the internet. Supports large streaming uploads.</div>
                 $publicMarkup
               </div>
             </div>
 
-            <div class="card">
-              <div class="label">LOCAL ROUTES</div>
+            <div class="card" style="border-left: 4px solid var(--accent2)">
+              <div class="label" style="color: var(--accent2)">DIRECT PRIVATE LAN (FAST)</div>
+              <div class="muted" style="font-size: 11px; margin-bottom: 8px">Use when on the same Wi-Fi. Fast and proximity-based.</div>
               $localMarkup
             </div>
 
             <div class="card">
               <div class="label">UPLOAD INTO DRIVE</div>
-              <form action="/upload" method="post" enctype="multipart/form-data">
-                <input type="file" name="file" multiple>
+              <form id="upload-form" method="post" enctype="multipart/form-data">
+                <input type="file" id="file-input" name="file" multiple>
                 <button type="submit">UPLOAD TO NODE</button>
               </form>
             </div>
@@ -446,6 +470,38 @@ private fun renderHomePage(
               $filesMarkup
             </div>
           </div>
+
+          <script>
+            (function() {
+              const path = window.location.pathname;
+              if (path.includes('/node/')) {
+                // Determine base path: /node/{shareCode}
+                const segments = path.split('/');
+                const nodeIdx = segments.indexOf('node');
+                if (nodeIdx !== -1 && segments.length > nodeIdx + 1) {
+                  const base = segments.slice(0, nodeIdx + 2).join('/');
+                  
+                  // Update Upload Form
+                  const form = document.getElementById('upload-form');
+                  if (form) {
+                    const currentAction = form.getAttribute('action');
+                    if (currentAction && !currentAction.startsWith(base)) {
+                      form.action = base + (currentAction.startsWith('/') ? '' : '/') + currentAction;
+                    }
+                  }
+
+                  // Update Download Links
+                  const downloads = document.querySelectorAll('a.download');
+                  downloads.forEach(link => {
+                    const href = link.getAttribute('href');
+                    if (href && !href.startsWith(base)) {
+                      link.href = base + (href.startsWith('/') ? '' : '/') + href;
+                    }
+                  });
+                }
+              }
+            })();
+          </script>
         </body>
         </html>
     """.trimIndent()

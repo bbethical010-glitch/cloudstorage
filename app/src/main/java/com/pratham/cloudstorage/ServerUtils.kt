@@ -41,6 +41,37 @@ fun normalizeRelayBaseUrl(value: String): String {
     return value.trim().trimEnd('/')
 }
 
+fun isLocalDevelopmentRelayBaseUrl(value: String): Boolean {
+    val normalized = normalizeRelayBaseUrl(value)
+    if (normalized.isBlank()) {
+        return false
+    }
+
+    val host = runCatching { Uri.parse(normalized).host.orEmpty() }.getOrDefault("")
+    return host.equals("127.0.0.1", ignoreCase = true) ||
+        host.equals("localhost", ignoreCase = true) ||
+        host.equals("0.0.0.0", ignoreCase = true) ||
+        host.equals("::1", ignoreCase = true)
+}
+
+fun resolveRelayBaseUrl(
+    persistedValue: String,
+    configuredValue: String
+): String {
+    val persisted = normalizeRelayBaseUrl(persistedValue)
+    val configured = normalizeRelayBaseUrl(configuredValue)
+
+    if (persisted.isBlank()) {
+        return configured
+    }
+
+    return if (isLocalDevelopmentRelayBaseUrl(persisted) && configured.isNotBlank()) {
+        configured
+    } else {
+        persisted
+    }
+}
+
 fun buildRelayBrowserUrl(relayBaseUrl: String, shareCode: String): String? {
     val normalized = normalizeRelayBaseUrl(relayBaseUrl)
     if (normalized.isBlank()) {

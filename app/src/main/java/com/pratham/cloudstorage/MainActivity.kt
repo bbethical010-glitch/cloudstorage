@@ -108,9 +108,16 @@ class MainActivity : ComponentActivity() {
 
         selectedUri = preferences.getString(PREF_SELECTED_URI, null)?.let(Uri::parse)
         shareCode = preferences.getString(PREF_SHARE_CODE, null) ?: generateAndPersistShareCode()
-        relayBaseUrl = preferences.getString(PREF_RELAY_BASE_URL, null)
-            ?.takeIf { it.isNotBlank() }
-            ?: BuildConfig.RELAY_BASE_URL.trim()
+        val persistedRelayBaseUrl = preferences.getString(PREF_RELAY_BASE_URL, null).orEmpty()
+        val configuredRelayBaseUrl = BuildConfig.RELAY_BASE_URL.trim()
+        relayBaseUrl = resolveRelayBaseUrl(
+            persistedValue = persistedRelayBaseUrl,
+            configuredValue = configuredRelayBaseUrl
+        )
+        if (relayBaseUrl != normalizeRelayBaseUrl(persistedRelayBaseUrl)) {
+            preferences.edit().putString(PREF_RELAY_BASE_URL, relayBaseUrl).apply()
+            statusMessage = "Updated the saved relay route to the current public deployment."
+        }
         relayBaseUrlDraft = relayBaseUrl
         showOnboarding = !preferences.getBoolean(PREF_ONBOARDING_DONE, false)
 
