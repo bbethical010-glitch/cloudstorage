@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Easy Storage Cloud</string>
+    <string name="select_folder_first">Choose a drive or storage folder before starting the node.</string>
+    <string name="link_copied">Share link copied</string>
+    <string name="code_copied">Share code copied</string>
+    <string name="share_subject">Easy Storage Cloud node invite</string>
+    <string name="share_chooser_title">Share node invite via</string>
+</resources>

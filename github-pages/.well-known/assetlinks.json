@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.pratham.cloudstorage",
+      "sha256_cert_fingerprints": [
+        "53:54:DC:D9:8E:CA:9D:AC:43:13:09:2B:98:F3:06:F3:9E:E5:A7:8A:89:21:45:35:2B:4C:09:48:18:95:3F:CF"
+      ]
+    }
+  }
+]

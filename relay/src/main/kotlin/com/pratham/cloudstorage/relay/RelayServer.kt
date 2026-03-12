@@ -1,0 +1,285 @@
+package com.pratham.cloudstorage.relay
+
+import com.google.gson.Gson
+import com.google.gson.JsonSyntaxException
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
+import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.Application
+import io.ktor.server.application.call
+import io.ktor.server.application.install
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.netty.Netty
+import io.ktor.server.request.httpMethod
+import io.ktor.server.request.path
+import io.ktor.server.request.queryString
+import io.ktor.server.request.receiveStream
+import io.ktor.server.response.respondBytes
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.delete
+import io.ktor.server.routing.get
+import io.ktor.server.routing.head
+import io.ktor.server.routing.options
+import io.ktor.server.routing.post
+import io.ktor.server.routing.put
+import io.ktor.server.routing.route
+import io.ktor.server.routing.routing
+import io.ktor.server.websocket.WebSockets
+import io.ktor.server.websocket.webSocket
+import io.ktor.util.flattenEntries
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.Frame
+import io.ktor.websocket.DefaultWebSocketSession
+import io.ktor.websocket.close
+import io.ktor.websocket.readText
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
+import java.util.Base64
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+
+private val gson = Gson()
+
+fun main() {
+    val port = System.getenv("PORT")?.toIntOrNull() ?: 8787
+    embeddedServer(Netty, host = "0.0.0.0", port = port) {
+        relayModule()
+    }.start(wait = true)
+}
+
+fun Application.relayModule() {
+    install(WebSockets)
+
+    val registry = RelayRegistry()
+
+    routing {
+        get("/health") {
+            call.respondText("relay_online")
+        }
+
+        get("/agents") {
+            call.respondText(
+                gson.toJson(
+                    mapOf(
+                        "count" to registry.connectedCount(),
+                        "shareCodes" to registry.connectedShareCodes()
+                    )
+                ),
+                ContentType.Application.Json
+            )
+        }
+
+        webSocket("/agent/connect") {
+            val shareCode = call.request.queryParameters["shareCode"]
+                ?.trim()
+                ?.uppercase()
+                .orEmpty()
+
+            if (shareCode.isBlank()) {
+                close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "Missing shareCode"))
+                return@webSocket
+            }
+
+            registry.register(shareCode, this)
+            sendEnvelope(RelayEnvelope(type = "connected", shareCode = shareCode))
+
+            try {
+                for (frame in incoming) {
+                    if (frame is Frame.Text) {
+                        val envelope = frame.readText().toEnvelopeOrNull() ?: continue
+                        if (envelope.type == "response" && !envelope.requestId.isNullOrBlank()) {
+                            registry.completeResponse(envelope)
+                        }
+                    }
+                }
+            } finally {
+                registry.unregister(shareCode, this)
+            }
+        }
+
+        route("/node/{shareCode}") {
+            get { call.proxyNodeRequest(registry, emptyList()) }
+            post { call.proxyNodeRequest(registry, emptyList()) }
+            put { call.proxyNodeRequest(registry, emptyList()) }
+            delete { call.proxyNodeRequest(registry, emptyList()) }
+            head { call.proxyNodeRequest(registry, emptyList()) }
+            options { call.proxyNodeRequest(registry, emptyList()) }
+        }
+
+        route("/node/{shareCode}/{...}") {
+            get {
+                val tail = call.parameters.getAll("...").orEmpty()
+                call.proxyNodeRequest(registry, tail)
+            }
+            post {
+                val tail = call.parameters.getAll("...").orEmpty()
+                call.proxyNodeRequest(registry, tail)
+            }
+            put {
+                val tail = call.parameters.getAll("...").orEmpty()
+                call.proxyNodeRequest(registry, tail)
+            }
+            delete {
+                val tail = call.parameters.getAll("...").orEmpty()
+                call.proxyNodeRequest(registry, tail)
+            }
+            head {
+                val tail = call.parameters.getAll("...").orEmpty()
+                call.proxyNodeRequest(registry, tail)
+            }
+            options {
+                val tail = call.parameters.getAll("...").orEmpty()
+                call.proxyNodeRequest(registry, tail)
+            }
+        }
+    }
+}
+
+private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
+    registry: RelayRegistry,
+    tail: List<String>
+) {
+    val shareCode = parameters["shareCode"]?.trim()?.uppercase().orEmpty()
+    if (shareCode.isBlank()) {
+        respondText("Missing share code", status = HttpStatusCode.BadRequest)
+        return
+    }
+
+    val requestBody = receiveStream().readBytes()
+    val relayRequest = RelayEnvelope(
+        type = "request",
+        requestId = UUID.randomUUID().toString(),
+        method = request.httpMethod.value,
+        path = request.path()
+            .removePrefix("/node/$shareCode")
+            .takeIf { it.isNotBlank() }
+            ?: "/",
+        query = request.queryString(),
+        headers = request.headers.flattenEntries()
+            .filterNot { (key, _) -> key.equals(HttpHeaders.Host, ignoreCase = true) || isHopByHopHeader(key) }
+            .associate { (key, value) -> key to value },
+        bodyBase64 = requestBody.encodeBase64()
+    )
+
+    val relayResponse = registry.forwardRequest(shareCode, relayRequest)
+    if (relayResponse == null) {
+        respondText("No active phone node is connected for share code $shareCode", status = HttpStatusCode.ServiceUnavailable)
+        return
+    }
+
+    val status = relayResponse.status?.let(HttpStatusCode::fromValue) ?: HttpStatusCode.BadGateway
+    relayResponse.headers.orEmpty()
+        .filterNot { (key, _) -> isHopByHopHeader(key) || key.equals(HttpHeaders.ContentLength, ignoreCase = true) }
+        .forEach { (key, value) ->
+            response.headers.append(key, value, safeOnly = false)
+        }
+
+    val bodyBytes = relayResponse.bodyBase64.decodeBase64()
+    val contentType = relayResponse.headers?.entries
+        ?.firstOrNull { (key, _) -> key.equals(HttpHeaders.ContentType, ignoreCase = true) }
+        ?.value
+        ?.takeIf { it.isNotBlank() }
+        ?.let(ContentType::parse)
+
+    respondBytes(bodyBytes, contentType = contentType, status = status)
+}
+
+private class RelayRegistry {
+    private val agents = ConcurrentHashMap<String, AgentConnection>()
+    private val pendingResponses = ConcurrentHashMap<String, CompletableDeferred<RelayEnvelope>>()
+
+    suspend fun register(shareCode: String, session: DefaultWebSocketSession) {
+        val previous = agents.put(shareCode, AgentConnection(shareCode, session))
+        previous?.session?.close(CloseReason(CloseReason.Codes.NORMAL, "Replaced by newer connection"))
+    }
+
+    fun unregister(shareCode: String, session: DefaultWebSocketSession) {
+        agents.computeIfPresent(shareCode) { _, existing ->
+            if (existing.session == session) null else existing
+        }
+    }
+
+    fun connectedCount(): Int = agents.size
+
+    fun connectedShareCodes(): List<String> = agents.keys().toList().sorted()
+
+    suspend fun forwardRequest(shareCode: String, request: RelayEnvelope): RelayEnvelope? {
+        val agent = agents[shareCode] ?: return null
+        val requestId = request.requestId ?: return null
+        val deferred = CompletableDeferred<RelayEnvelope>()
+        pendingResponses[requestId] = deferred
+
+        return try {
+            agent.send(request)
+            withTimeout(45_000) { deferred.await() }
+        } finally {
+            pendingResponses.remove(requestId)
+        }
+    }
+
+    fun completeResponse(response: RelayEnvelope) {
+        val requestId = response.requestId ?: return
+        pendingResponses.remove(requestId)?.complete(response)
+    }
+}
+
+private data class AgentConnection(
+    val shareCode: String,
+    val session: DefaultWebSocketSession,
+    val sendMutex: Mutex = Mutex()
+) {
+    suspend fun send(envelope: RelayEnvelope) {
+        sendMutex.withLock {
+            session.sendEnvelope(envelope)
+        }
+    }
+}
+
+private data class RelayEnvelope(
+    val type: String,
+    val requestId: String? = null,
+    val shareCode: String? = null,
+    val method: String? = null,
+    val path: String? = null,
+    val query: String? = null,
+    val headers: Map<String, String>? = null,
+    val bodyBase64: String? = null,
+    val status: Int? = null,
+    val error: String? = null
+)
+
+private suspend fun DefaultWebSocketSession.sendEnvelope(envelope: RelayEnvelope) {
+    outgoing.send(Frame.Text(gson.toJson(envelope)))
+}
+
+private fun String.toEnvelopeOrNull(): RelayEnvelope? {
+    return try {
+        gson.fromJson(this, RelayEnvelope::class.java)
+    } catch (_: JsonSyntaxException) {
+        null
+    }
+}
+
+private fun ByteArray?.encodeBase64(): String? {
+    if (this == null || isEmpty()) return null
+    return Base64.getEncoder().encodeToString(this)
+}
+
+private fun String?.decodeBase64(): ByteArray {
+    if (this.isNullOrBlank()) return ByteArray(0)
+    return Base64.getDecoder().decode(this)
+}
+
+private fun isHopByHopHeader(name: String): Boolean {
+    return name.equals(HttpHeaders.Connection, ignoreCase = true) ||
+        name.equals("Keep-Alive", ignoreCase = true) ||
+        name.equals(HttpHeaders.ProxyAuthenticate, ignoreCase = true) ||
+        name.equals(HttpHeaders.ProxyAuthorization, ignoreCase = true) ||
+        name.equals(HttpHeaders.TE, ignoreCase = true) ||
+        name.equals(HttpHeaders.Trailer, ignoreCase = true) ||
+        name.equals(HttpHeaders.TransferEncoding, ignoreCase = true) ||
+        name.equals(HttpHeaders.Upgrade, ignoreCase = true)
+}

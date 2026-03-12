@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application android:usesCleartextTraffic="true">
+        <activity
+            android:name=".DebugStartActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="com.pratham.cloudstorage.debug.START_NODE" />
+                <action android:name="com.pratham.cloudstorage.debug.STOP_NODE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        <receiver
+            android:name=".DebugCommandReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.pratham.cloudstorage.debug.START_NODE" />
+                <action android:name="com.pratham.cloudstorage.debug.STOP_NODE" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

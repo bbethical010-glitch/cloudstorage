@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Easy Storage Cloud Invite</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #071018;
+      --panel: #0c1622;
+      --line: #18435f;
+      --text: #e4eef7;
+      --muted: #90a8bb;
+      --accent: #37c7ff;
+      --accent-2: #33e1c6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      background:
+        radial-gradient(circle at top right, rgba(55,199,255,.12), transparent 28%),
+        linear-gradient(180deg, #050b12, var(--bg));
+      color: var(--text);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .shell {
+      width: min(760px, 100%);
+      border: 1px solid var(--line);
+      background: rgba(12, 22, 34, 0.95);
+      border-radius: 24px;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+      overflow: hidden;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,0.02);
+    }
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent-2);
+      box-shadow: 0 0 16px rgba(51,225,198,.7);
+    }
+    .label {
+      color: var(--accent-2);
+      letter-spacing: 0.08em;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .body {
+      padding: 24px;
+      display: grid;
+      gap: 20px;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 6vw, 42px);
+      line-height: 1.05;
+    }
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px;
+      background: rgba(7, 16, 24, 0.92);
+    }
+    .kv {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(24,67,95,.65);
+    }
+    .kv:last-child { border-bottom: 0; }
+    .k { color: #7eb3d1; }
+    .v {
+      color: white;
+      text-align: right;
+      word-break: break-all;
+    }
+    .actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 48px;
+      padding: 0 18px;
+      border-radius: 14px;
+      text-decoration: none;
+      border: 1px solid var(--line);
+      color: white;
+      background: linear-gradient(135deg, #0f7896, #18536f);
+      font-weight: 700;
+    }
+    .button.secondary {
+      background: transparent;
+      color: var(--accent);
+    }
+    .footer {
+      font-size: 13px;
+      color: #7892a6;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <div class="dot"></div>
+      <div class="label">EASY STORAGE CLOUD / INVITE GATEWAY</div>
+    </div>
+    <div class="body">
+      <div>
+        <h1>Open Invite Inside The App</h1>
+        <p>This invite is designed to route directly into Easy Storage Cloud. If the app is installed and app links are verified, Android should open the in-app console automatically.</p>
+      </div>
+
+      <div class="card">
+        <div class="kv">
+          <div class="k">route</div>
+          <div class="v">/join</div>
+        </div>
+        <div class="kv">
+          <div class="k">share_code</div>
+          <div id="shareCode" class="v">missing</div>
+        </div>
+        <div class="kv">
+          <div class="k">fallback_scheme</div>
+          <div id="fallbackLink" class="v">easystoragecloud://join</div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <a id="openAppButton" class="button" href="easystoragecloud://join">Open in app</a>
+        <button id="copyButton" class="button secondary" type="button">Copy code</button>
+      </div>
+
+      <p class="footer">If the app does not open automatically, use the button above or paste the share code manually inside Easy Storage Cloud.</p>
+    </div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code") || "";
+    const fallbackLink = code
+      ? `easystoragecloud://join?code=${encodeURIComponent(code)}`
+      : "easystoragecloud://join";
+
+    document.getElementById("shareCode").textContent = code || "missing";
+    document.getElementById("fallbackLink").textContent = fallbackLink;
+    document.getElementById("openAppButton").setAttribute("href", fallbackLink);
+
+    document.getElementById("copyButton").addEventListener("click", async () => {
+      if (!code) return;
+      try {
+        await navigator.clipboard.writeText(code);
+        document.getElementById("copyButton").textContent = "Code copied";
+      } catch (_error) {
+        document.getElementById("copyButton").textContent = "Copy manually";
+      }
+    });
+
+    if (code) {
+      setTimeout(() => {
+        window.location.href = fallbackLink;
+      }, 350);
+    }
+  </script>
+</body>
+</html>

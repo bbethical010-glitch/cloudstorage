@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: easy-storage-relay
+    runtime: docker
+    dockerContext: ./relay
+    dockerfilePath: ./relay/Dockerfile
+    healthCheckPath: /health
+    region: singapore
+    plan: free
+    autoDeployTrigger: commit
