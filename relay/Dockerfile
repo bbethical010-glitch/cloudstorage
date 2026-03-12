@@ -8,9 +8,9 @@ RUN gradle --no-daemon installDist
 FROM eclipse-temurin:17-jre
 
 WORKDIR /app
-COPY --from=build /workspace/build/install/relay/ ./
+COPY --from=build /workspace/build/install/easy-storage-relay/ ./
 
 ENV PORT=10000
 EXPOSE 10000
 
-CMD ["./bin/relay"]
+CMD ["./bin/easy-storage-relay"]
