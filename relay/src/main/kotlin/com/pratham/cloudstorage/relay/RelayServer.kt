@@ -33,6 +33,13 @@ import io.ktor.websocket.Frame
 import io.ktor.websocket.DefaultWebSocketSession
 import io.ktor.websocket.close
 import io.ktor.websocket.readText
+import io.ktor.server.request.receiveMultipart
+import io.ktor.http.content.PartData
+import io.ktor.http.content.forEachPart
+import io.ktor.server.request.contentType
+import io.ktor.http.isMultipart
+import io.ktor.utils.io.readRemaining
+import io.ktor.utils.io.core.readBytes
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.sync.Mutex
@@ -176,22 +183,83 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
         return
     }
 
-    // Guard: reject bodies larger than 50MB to avoid OOM on Render's free tier.
-    val contentLength = request.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
-    val maxBodyBytes = 50L * 1024 * 1024 // 50 MB
-    if (contentLength > maxBodyBytes) {
-        respondText(
-            "File too large for relay (max 50 MB). Use the direct private LAN link listed in the app for large file transfers.",
-            status = HttpStatusCode.PayloadTooLarge
-        )
-        return
-    }
-
     try {
+        val agent = registry.getAgent(shareCode)
+        if (agent == null) {
+            respondText(
+                "No active phone node connected for share code $shareCode. Is the Easy Storage app running?",
+                status = HttpStatusCode.ServiceUnavailable
+            )
+            return
+        }
+
+        val requestId = UUID.randomUUID().toString()
+
+        if (request.contentType().isMultipart()) {
+            val multipart = receiveMultipart()
+            multipart.forEachPart { part ->
+                if (part is PartData.FileItem) {
+                    val filename = part.originalFileName ?: "uploaded_file"
+                    
+                    // 1. Send Request Start
+                    agent.send(RelayEnvelope(
+                        type = "request",
+                        subType = "upload_start",
+                        requestId = requestId,
+                        method = request.httpMethod.value,
+                        path = request.path().removePrefix("/node/$shareCode").takeIf { it.isNotBlank() } ?: "/",
+                        query = request.queryString(),
+                        filename = filename,
+                        headers = request.headers.flattenEntries()
+                            .filterNot { (key, _) -> key.equals(HttpHeaders.Host, ignoreCase = true) || isHopByHopHeader(key) }
+                            .associate { (key, value) -> key to value }
+                    ))
+
+                    // 2. Stream Binary Chunks
+                    val channel = part.provider()
+                    while (!channel.isClosedForRead) {
+                        val packet = channel.readRemaining(65536)
+                        val bytes = packet.readBytes()
+                        if (bytes.isNotEmpty()) {
+                            agent.sendFrame(Frame.Binary(true, bytes))
+                        }
+                    }
+
+                    // 3. Send Request End
+                    agent.send(RelayEnvelope(
+                        type = "request",
+                        subType = "upload_end",
+                        requestId = requestId
+                    ))
+                }
+                part.dispose()
+            }
+            
+            // Wait for response from the phone
+            val response = registry.awaitResponse(requestId)
+            if (response != null) {
+                respondRelayResponse(response)
+            } else {
+                respondText("Upload timed out waiting for phone confirmation", status = HttpStatusCode.GatewayTimeout)
+            }
+            return
+        }
+
+        // Standard non-multipart request handling
+        val contentLength = request.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
+        val maxBodyBytes = 50L * 1024 * 1024 // 50 MB for non-streaming
+        if (contentLength > maxBodyBytes) {
+            respondText(
+                "Payload too large (max 50 MB for non-streaming).",
+                status = HttpStatusCode.PayloadTooLarge
+            )
+            return
+        }
+
         val requestBody = receiveStream().readBytes()
         val relayRequest = RelayEnvelope(
             type = "request",
-            requestId = UUID.randomUUID().toString(),
+            requestId = requestId,
             method = request.httpMethod.value,
             path = request.path()
                 .removePrefix("/node/$shareCode")
@@ -204,47 +272,42 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
             bodyBase64 = requestBody.encodeBase64()
         )
 
-        val relayResponse = registry.forwardRequest(shareCode, relayRequest)
-        if (relayResponse == null) {
-            respondText(
-                "No active phone node connected for share code $shareCode. Is the Easy Storage app running?",
-                status = HttpStatusCode.ServiceUnavailable
-            )
-            return
+        val relayResponse = registry.forwardEnvelope(agent, relayRequest)
+        if (relayResponse != null) {
+            respondRelayResponse(relayResponse)
+        } else {
+            respondText("Phone node did not respond in time.", status = HttpStatusCode.GatewayTimeout)
         }
-
-        val status = relayResponse.status?.let(HttpStatusCode::fromValue) ?: HttpStatusCode.BadGateway
-        relayResponse.headers.orEmpty()
-            .filterNot { (key, _) -> isHopByHopHeader(key) || key.equals(HttpHeaders.ContentLength, ignoreCase = true) }
-            .forEach { (key, value) ->
-                response.headers.append(key, value, safeOnly = false)
-            }
-
-        val bodyBytes = relayResponse.bodyBase64.decodeBase64()
-        val contentType = relayResponse.headers?.entries
-            ?.firstOrNull { (key, _) -> key.equals(HttpHeaders.ContentType, ignoreCase = true) }
-            ?.value
-            ?.takeIf { it.isNotBlank() }
-            ?.let(ContentType::parse)
-
-        respondBytes(bodyBytes, contentType = contentType, status = status)
 
     } catch (e: TimeoutCancellationException) {
         respondText(
             "Phone node did not respond in time. Check your connection and try again.",
             status = HttpStatusCode.GatewayTimeout
         )
-    } catch (e: OutOfMemoryError) {
-        respondText(
-            "File too large to relay (server out of memory). Use the local URL for large files.",
-            status = HttpStatusCode.PayloadTooLarge
-        )
     } catch (e: Exception) {
         respondText(
-            "Relay error: ${e.message?.take(120)}",
+            "Relay gateway error: ${e.message?.take(120)}",
             status = HttpStatusCode.BadGateway
         )
     }
+}
+
+private suspend fun io.ktor.server.application.ApplicationCall.respondRelayResponse(relayResponse: RelayEnvelope) {
+    val status = relayResponse.status?.let(HttpStatusCode::fromValue) ?: HttpStatusCode.BadGateway
+    relayResponse.headers.orEmpty()
+        .filterNot { (key, _) -> isHopByHopHeader(key) || key.equals(HttpHeaders.ContentLength, ignoreCase = true) }
+        .forEach { (key, value) ->
+            response.headers.append(key, value, safeOnly = false)
+        }
+
+    val bodyBytes = relayResponse.bodyBase64.decodeBase64()
+    val contentType = relayResponse.headers?.entries
+        ?.firstOrNull { (key, _) -> key.equals(HttpHeaders.ContentType, ignoreCase = true) }
+        ?.value
+        ?.takeIf { it.isNotBlank() }
+        ?.let(ContentType::parse)
+
+    respondBytes(bodyBytes, contentType = contentType, status = status)
 }
 
 private class RelayRegistry {
@@ -266,8 +329,21 @@ private class RelayRegistry {
 
     fun connectedShareCodes(): List<String> = agents.keys().toList().sorted()
 
-    suspend fun forwardRequest(shareCode: String, request: RelayEnvelope): RelayEnvelope? {
-        val agent = agents[shareCode] ?: return null
+    fun getAgent(shareCode: String): AgentConnection? = agents[shareCode]
+
+    suspend fun awaitResponse(requestId: String): RelayEnvelope? {
+        val deferred = CompletableDeferred<RelayEnvelope>()
+        pendingResponses[requestId] = deferred
+        return try {
+            withTimeout(45_000) { deferred.await() }
+        } catch (e: TimeoutCancellationException) {
+            null
+        } finally {
+            pendingResponses.remove(requestId)
+        }
+    }
+
+    suspend fun forwardEnvelope(agent: AgentConnection, request: RelayEnvelope): RelayEnvelope? {
         val requestId = request.requestId ?: return null
         val deferred = CompletableDeferred<RelayEnvelope>()
         pendingResponses[requestId] = deferred
@@ -296,6 +372,12 @@ private data class AgentConnection(
             session.sendEnvelope(envelope)
         }
     }
+
+    suspend fun sendFrame(frame: Frame) {
+        sendMutex.withLock {
+            session.outgoing.send(frame)
+        }
+    }
 }
 
 private data class RelayEnvelope(
@@ -308,7 +390,9 @@ private data class RelayEnvelope(
     val headers: Map<String, String>? = null,
     val bodyBase64: String? = null,
     val status: Int? = null,
-    val error: String? = null
+    val error: String? = null,
+    val subType: String? = null,
+    val filename: String? = null
 )
 
 private suspend fun DefaultWebSocketSession.sendEnvelope(envelope: RelayEnvelope) {
