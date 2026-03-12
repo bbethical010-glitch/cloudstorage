@@ -34,6 +34,7 @@ import io.ktor.websocket.DefaultWebSocketSession
 import io.ktor.websocket.close
 import io.ktor.websocket.readText
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
@@ -174,43 +175,75 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
         return
     }
 
-    val requestBody = receiveStream().readBytes()
-    val relayRequest = RelayEnvelope(
-        type = "request",
-        requestId = UUID.randomUUID().toString(),
-        method = request.httpMethod.value,
-        path = request.path()
-            .removePrefix("/node/$shareCode")
-            .takeIf { it.isNotBlank() }
-            ?: "/",
-        query = request.queryString(),
-        headers = request.headers.flattenEntries()
-            .filterNot { (key, _) -> key.equals(HttpHeaders.Host, ignoreCase = true) || isHopByHopHeader(key) }
-            .associate { (key, value) -> key to value },
-        bodyBase64 = requestBody.encodeBase64()
-    )
-
-    val relayResponse = registry.forwardRequest(shareCode, relayRequest)
-    if (relayResponse == null) {
-        respondText("No active phone node is connected for share code $shareCode", status = HttpStatusCode.ServiceUnavailable)
+    // Guard: reject bodies larger than 50MB to avoid OOM on Render's free tier.
+    val contentLength = request.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
+    val maxBodyBytes = 50L * 1024 * 1024 // 50 MB
+    if (contentLength > maxBodyBytes) {
+        respondText(
+            "File too large for relay (max 50 MB). Use the local network URL for large uploads.",
+            status = HttpStatusCode.PayloadTooLarge
+        )
         return
     }
 
-    val status = relayResponse.status?.let(HttpStatusCode::fromValue) ?: HttpStatusCode.BadGateway
-    relayResponse.headers.orEmpty()
-        .filterNot { (key, _) -> isHopByHopHeader(key) || key.equals(HttpHeaders.ContentLength, ignoreCase = true) }
-        .forEach { (key, value) ->
-            response.headers.append(key, value, safeOnly = false)
+    try {
+        val requestBody = receiveStream().readBytes()
+        val relayRequest = RelayEnvelope(
+            type = "request",
+            requestId = UUID.randomUUID().toString(),
+            method = request.httpMethod.value,
+            path = request.path()
+                .removePrefix("/node/$shareCode")
+                .takeIf { it.isNotBlank() }
+                ?: "/",
+            query = request.queryString(),
+            headers = request.headers.flattenEntries()
+                .filterNot { (key, _) -> key.equals(HttpHeaders.Host, ignoreCase = true) || isHopByHopHeader(key) }
+                .associate { (key, value) -> key to value },
+            bodyBase64 = requestBody.encodeBase64()
+        )
+
+        val relayResponse = registry.forwardRequest(shareCode, relayRequest)
+        if (relayResponse == null) {
+            respondText(
+                "No active phone node connected for share code $shareCode. Is the Easy Storage app running?",
+                status = HttpStatusCode.ServiceUnavailable
+            )
+            return
         }
 
-    val bodyBytes = relayResponse.bodyBase64.decodeBase64()
-    val contentType = relayResponse.headers?.entries
-        ?.firstOrNull { (key, _) -> key.equals(HttpHeaders.ContentType, ignoreCase = true) }
-        ?.value
-        ?.takeIf { it.isNotBlank() }
-        ?.let(ContentType::parse)
+        val status = relayResponse.status?.let(HttpStatusCode::fromValue) ?: HttpStatusCode.BadGateway
+        relayResponse.headers.orEmpty()
+            .filterNot { (key, _) -> isHopByHopHeader(key) || key.equals(HttpHeaders.ContentLength, ignoreCase = true) }
+            .forEach { (key, value) ->
+                response.headers.append(key, value, safeOnly = false)
+            }
 
-    respondBytes(bodyBytes, contentType = contentType, status = status)
+        val bodyBytes = relayResponse.bodyBase64.decodeBase64()
+        val contentType = relayResponse.headers?.entries
+            ?.firstOrNull { (key, _) -> key.equals(HttpHeaders.ContentType, ignoreCase = true) }
+            ?.value
+            ?.takeIf { it.isNotBlank() }
+            ?.let(ContentType::parse)
+
+        respondBytes(bodyBytes, contentType = contentType, status = status)
+
+    } catch (e: TimeoutCancellationException) {
+        respondText(
+            "Phone node did not respond in time. Check your connection and try again.",
+            status = HttpStatusCode.GatewayTimeout
+        )
+    } catch (e: OutOfMemoryError) {
+        respondText(
+            "File too large to relay (server out of memory). Use the local URL for large files.",
+            status = HttpStatusCode.PayloadTooLarge
+        )
+    } catch (e: Exception) {
+        respondText(
+            "Relay error: ${e.message?.take(120)}",
+            status = HttpStatusCode.BadGateway
+        )
+    }
 }
 
 private class RelayRegistry {
