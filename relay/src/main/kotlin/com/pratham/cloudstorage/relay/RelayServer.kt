@@ -178,6 +178,11 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
     tail: List<String>
 ) {
     val shareCode = parameters["shareCode"]?.trim()?.uppercase().orEmpty()
+    if (request.queryParameters.contains("debug_trace")) {
+        respondText("TRACE: shareCode=$shareCode, multipart=${request.contentType().isMultipart()}")
+        return
+    }
+    
     if (shareCode.isBlank()) {
         respondText("Missing share code", status = HttpStatusCode.BadRequest)
         return
