@@ -23,10 +23,8 @@ import java.util.concurrent.ConcurrentHashMap
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.http.*
-import io.ktor.http.content.*
 import io.ktor.websocket.*
 import io.ktor.server.websocket.*
-import java.io.InputStream
 import java.time.Duration
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
@@ -185,74 +183,6 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
 
         val requestId = UUID.randomUUID().toString()
 
-        if (request.isMultipart()) {
-            val responseDeferred = registry.prepareResponse(requestId)
-            try {
-                agent.sendLog(requestId, "Starting multipart processing on relay")
-                val multipart = receiveMultipart()
-                var streamedAnyFile = false
-                
-                multipart.forEachPart { part ->
-                    if (part is PartData.FileItem) {
-                        val filename = part.originalFileName ?: "uploaded_file"
-                        streamedAnyFile = true
-                        
-                        agent.sendLog(requestId, "Streaming file: $filename")
-                        
-                        // 1. Send Request Start
-                        agent.send(RelayEnvelope(
-                            type = "request",
-                            subType = "upload_start",
-                            requestId = requestId,
-                            method = request.httpMethod.value,
-                            path = request.path().removePrefix("/node/$shareCode").takeIf { it.isNotBlank() } ?: "/",
-                            query = request.queryString(),
-                            filename = filename,
-                            headers = request.headers.flattenEntries()
-                                .filterNot { (key, _) -> key.equals(HttpHeaders.Host, ignoreCase = true) || isHopByHopHeader(key) }
-                                .associate { (key, value) -> key to value }
-                        ))
-
-                        // 2. Stream Binary Chunks
-                        part.streamProvider().use { inputStream ->
-                            val buffer = ByteArray(65536)
-                            while (true) {
-                                val read = inputStream.read(buffer)
-                                if (read == -1) break
-                                if (read > 0) {
-                                    val chunk = if (read == buffer.size) buffer else buffer.copyOfRange(0, read)
-                                    agent.sendFrame(Frame.Binary(true, chunk))
-                                }
-                            }
-                        }
-
-                        // 3. Send Request End
-                        agent.send(RelayEnvelope(
-                            type = "request",
-                            subType = "upload_end",
-                            requestId = requestId
-                        ))
-                        agent.sendLog(requestId, "Finished streaming file: $filename")
-                    }
-                    part.dispose()
-                }
-
-                if (!streamedAnyFile) {
-                    agent.sendLog(requestId, "No file parts found in multipart request")
-                }
-                
-                // Wait for response from the phone
-                agent.sendLog(requestId, "Awaiting phone confirmation")
-                val response = withTimeout(45_000) { responseDeferred.await() }
-                respondRelayResponse(response)
-            } catch (e: Exception) {
-                agent.sendLog(requestId, "Error during streaming: ${e.message}")
-                throw e
-            } finally {
-                registry.removeResponse(requestId)
-            }
-            return
-        }
 
         // Standard non-multipart request handling
         val contentLength = request.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
