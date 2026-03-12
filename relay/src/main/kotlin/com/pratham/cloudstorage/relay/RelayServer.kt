@@ -51,7 +51,12 @@ fun main() {
 }
 
 fun Application.relayModule() {
-    install(WebSockets)
+    install(WebSockets) {
+        // Render's reverse proxy closes idle connections aggressively.
+        // Sending a ping every 20s keeps the tunnel alive.
+        pingPeriod = java.time.Duration.ofSeconds(20)
+        timeout = java.time.Duration.ofSeconds(60)
+    }
 
     val registry = RelayRegistry()
 
