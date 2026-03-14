@@ -42,6 +42,7 @@ fun main() {
 }
 
 fun Application.relayModule() {
+    install(io.ktor.server.routing.IgnoreTrailingSlash)
     install(WebSockets) {
         // Render's reverse proxy closes idle connections aggressively.
         // Sending a ping every 20s keeps the tunnel alive.
@@ -206,15 +207,18 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
             return
         }
 
+        val originalShareCode = parameters["shareCode"] ?: shareCode
         val requestBody = receiveStream().readBytes()
+        val relayPath = request.path()
+            .removePrefix("/node/$originalShareCode")
+            .removePrefix("/")
+            .let { "/$it" }
+
         val relayRequest = RelayEnvelope(
             type = "request",
             requestId = requestId,
             method = request.httpMethod.value,
-            path = request.path()
-                .removePrefix("/node/$shareCode")
-                .takeIf { it.isNotBlank() }
-                ?: "/",
+            path = relayPath,
             query = request.queryString(),
             headers = request.headers.flattenEntries()
                 .filterNot { (key, _) -> key.equals(HttpHeaders.Host, ignoreCase = true) || isHopByHopHeader(key) }
