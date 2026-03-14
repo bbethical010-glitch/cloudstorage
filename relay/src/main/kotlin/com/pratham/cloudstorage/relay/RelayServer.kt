@@ -208,7 +208,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
         }
 
         val originalShareCode = parameters["shareCode"] ?: shareCode
-        val requestBody = receiveStream().readBytes()
+        val requestBody = receive<ByteArray>()
         val relayPath = request.path()
             .removePrefix("/node/$originalShareCode")
             .removePrefix("/")
