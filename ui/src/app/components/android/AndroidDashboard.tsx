@@ -152,9 +152,23 @@ export function AndroidDashboard() {
               
               <div>
                 <h2 className="text-xl font-bold">{isOnline ? "Node is Active" : "Node Stopped"}</h2>
-                <p className="text-xs text-[#9CA3AF] mt-1 font-mono uppercase tracking-[0.2em]">
-                  {isOnline ? "Broadcasting Storage" : "Local Only Mode"}
-                </p>
+                <div className="flex items-center justify-center gap-2 mt-2">
+                  <p className="text-[10px] text-[#9CA3AF] font-mono uppercase tracking-[0.2em]">
+                    {isOnline ? "Broadcasting Storage" : "Local Only Mode"}
+                  </p>
+                  {isOnline && appState?.tunnelStatus && (
+                    <Badge variant="outline" className={`text-[9px] px-2 py-0 border ${
+                      appState.tunnelStatus === 'Connected' ? 'border-[#22C55E]/30 text-[#22C55E] bg-[#22C55E]/5' :
+                      appState.tunnelStatus === 'Connecting' ? 'border-yellow-500/30 text-yellow-500 bg-yellow-500/5' :
+                      appState.tunnelStatus === 'Error' ? 'border-red-500/30 text-red-500 bg-red-500/5' :
+                      'border-gray-500/30 text-gray-400 bg-gray-500/5'
+                    }`}>
+                      {appState.tunnelStatus === 'Connected' ? 'TUNNEL CONNECTED' :
+                       appState.tunnelStatus === 'Connecting' ? 'CONNECTING...' :
+                       appState.tunnelStatus === 'Error' ? 'TUNNEL ERROR' : 'OFFLINE'}
+                    </Badge>
+                  )}
+                </div>
               </div>
 
               <div className="w-full flex gap-3">

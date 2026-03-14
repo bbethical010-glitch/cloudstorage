@@ -32,19 +32,27 @@ import kotlinx.coroutines.launch
 import java.util.Base64
 import java.util.concurrent.TimeUnit
 
+enum class TunnelStatus {
+    Offline,
+    Connecting,
+    Connected,
+    Error
+}
+
 private val relayGson = Gson()
 
 class RelayTunnelClient(
     private val context: Context,
     val relayBaseUrl: String,
     val shareCode: String,
-    private val rootUri: Uri
+    private val rootUri: Uri,
+    private val onStatusChange: (TunnelStatus) -> Unit = {}
 ) {
     private var currentStreamingRequestId: String? = null
     private var currentUploadStream: OutputStream? = null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val relayWebSocketUrl = relayBaseUrl.toWebSocketUrl(shareCode)
+    private val relayWebSocketUrl = relayBaseUrl.toWebSocketUrl(shareCode.uppercase().trim())
 
     private val relayClient = HttpClient(OkHttp) {
         install(WebSockets) {
@@ -69,10 +77,12 @@ class RelayTunnelClient(
         }
 
         scope.launch {
+            onStatusChange(TunnelStatus.Connecting)
             while (isActive) {
                 try {
                     relayClient.webSocket(urlString = relayWebSocketUrl) {
                         Log.i(TAG, "Relay tunnel connected for $shareCode")
+                        onStatusChange(TunnelStatus.Connected)
                         for (frame in incoming) {
                             when (frame) {
                                 is Frame.Text -> {
@@ -114,17 +124,20 @@ class RelayTunnelClient(
                     }
                 } catch (error: Exception) {
                     Log.w(TAG, "Relay tunnel disconnected for $shareCode: ${error.message}")
+                    onStatusChange(TunnelStatus.Error)
                     cleanupStreaming()
                 }
 
                 if (isActive) {
                     delay(RECONNECT_DELAY_MS)
+                    onStatusChange(TunnelStatus.Connecting)
                 }
             }
         }
     }
 
     fun stop() {
+        onStatusChange(TunnelStatus.Offline)
         scope.cancel()
         relayClient.close()
         localNodeClient.close()

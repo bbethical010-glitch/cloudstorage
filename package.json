@@ -1,0 +1,29 @@
+{
+  "name": "androidcloudstorageapp",
+  "version": "1.0.0",
+  "description": "A high-performance Android storage node that transforms your phone's external storage into a personal cloud accessible from anywhere in the world.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bbethical010-glitch/cloudstorage.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/bbethical010-glitch/cloudstorage/issues"
+  },
+  "homepage": "https://github.com/bbethical010-glitch/cloudstorage#readme",
+  "dependencies": {
+    "@capacitor/android": "^8.2.0",
+    "@capacitor/cli": "^8.2.0",
+    "@capacitor/core": "^8.2.0",
+    "@capacitor/ios": "^8.2.0"
+  }
+}

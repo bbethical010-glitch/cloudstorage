@@ -119,7 +119,18 @@ fun Application.relayModule() {
         }
 
         route("/node/{shareCode}") {
-            get { call.proxyNodeRequest(registry, emptyList()) }
+            get {
+                // If it doesn't end with a slash, redirect to the trailing slash version
+                // so the browser resolves relative asset paths (like ./assets/) against the sharecode, not 'node'
+                val shareCode = call.parameters["shareCode"]?.trim()?.uppercase().orEmpty()
+                val requestUri = call.request.uri
+                if (!requestUri.endsWith("/")) {
+                    val queryString = call.request.queryString().let { if (it.isNotBlank()) "?$it" else "" }
+                    call.respondRedirect("/node/$shareCode/$queryString", permanent = true)
+                    return@get
+                }
+                call.proxyNodeRequest(registry, emptyList())
+            }
             post { call.proxyNodeRequest(registry, emptyList()) }
             put { call.proxyNodeRequest(registry, emptyList()) }
             delete { call.proxyNodeRequest(registry, emptyList()) }

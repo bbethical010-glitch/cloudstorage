@@ -15,6 +15,10 @@ import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -88,6 +92,7 @@ class MainActivity : ComponentActivity() {
     private var shareCode by mutableStateOf("")
     private var relayBaseUrl by mutableStateOf("")
     private var isNodeRunning by mutableStateOf(false)
+    private var tunnelStatus by mutableStateOf(TunnelStatus.Offline.name)
 
     private val selectFolderLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -112,9 +117,25 @@ class MainActivity : ComponentActivity() {
 
         selectedUri = preferences.getString(PREF_SELECTED_URI, null)?.let(Uri::parse)
         shareCode = preferences.getString(PREF_SHARE_CODE, null) ?: generateAndPersistShareCode()
-        relayBaseUrl = preferences.getString(PREF_RELAY_BASE_URL, null).orEmpty()
+        
+        val savedRelayUrl = preferences.getString(PREF_RELAY_BASE_URL, null).orEmpty()
+        if (savedRelayUrl.isBlank()) {
+            relayBaseUrl = BuildConfig.RELAY_BASE_URL
+            preferences.edit().putString(PREF_RELAY_BASE_URL, relayBaseUrl).apply()
+        } else {
+            relayBaseUrl = savedRelayUrl
+        }
 
         setupWebView()
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                ServerService.tunnelStatusFlow.collect { status ->
+                    tunnelStatus = status.name
+                    updateWebState()
+                }
+            }
+        }
     }
 
     private fun setupWebView() {
@@ -177,6 +198,7 @@ class MainActivity : ComponentActivity() {
                 put("shareCode", shareCode)
                 put("relayBaseUrl", relayBaseUrl)
                 put("isNodeRunning", isNodeRunning)
+                put("tunnelStatus", tunnelStatus)
                 put("storageUsed", stats.first)
                 put("storageTotal", stats.second)
                 put("usagePercent", stats.third)
@@ -218,6 +240,7 @@ class MainActivity : ComponentActivity() {
             put("shareCode", shareCode)
             put("relayBaseUrl", relayBaseUrl)
             put("isNodeRunning", isNodeRunning)
+            put("tunnelStatus", tunnelStatus)
             put("storageUsed", stats.first)
             put("storageTotal", stats.second)
             put("usagePercent", stats.third)

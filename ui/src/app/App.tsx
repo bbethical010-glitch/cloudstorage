@@ -12,15 +12,23 @@ import { androidBridge, AppState } from "./bridge";
 export const AppStateContext = createContext<AppState | null>(null);
 
 function Main() {
-  const [appState, setAppState] = useState<AppState | null>(androidBridge.getInitialState());
+  const [appState, setAppState] = useState<AppState | null>(null);
   const [step, setStep] = useState<"loading" | "welcome" | "tutorial" | "app">("loading");
 
   useEffect(() => {
-    // Check if tutorial was already seen
-    const hasSeenTutorial = localStorage.getItem("hasSeenTutorial");
-    if (hasSeenTutorial && step === "loading") {
-      // Just wait for loading to finish then jump to app
+    if (!window.Android) {
+      if (!window.location.hash.startsWith("#/console")) {
+        window.location.hash = "#/console";
+      }
+      setStep("app");
+      return;
     }
+
+    const loadInitialState = async () => {
+      const state = await androidBridge.getInitialState();
+      if (state) setAppState(state);
+    };
+    loadInitialState();
   }, []);
 
   useEffect(() => {
@@ -32,10 +40,6 @@ function Main() {
       }
     });
 
-    if (!appState && androidBridge.isAvailable()) {
-      setAppState(androidBridge.getInitialState());
-    }
-
     window.updateWebState = (stateJson: string) => {
       try {
         const newState = JSON.parse(stateJson);
@@ -44,7 +48,7 @@ function Main() {
         console.error("Native state update failed", e);
       }
     };
-  }, [appState]);
+  }, []);
 
   if (step === "loading") {
     return <LoadingScreen onComplete={() => {

@@ -26,8 +26,17 @@ import io.ktor.server.response.respondRedirect
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
+import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import io.ktor.server.request.path
+import io.ktor.server.request.receiveParameters
+import io.ktor.server.response.respondBytes
 import io.ktor.utils.io.core.readBytes
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+import java.io.InputStream
+import io.ktor.utils.io.*
+import io.ktor.utils.io.jvm.javaio.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -44,7 +53,10 @@ class ServerService : Service() {
         const val EXTRA_URI = "EXTRA_URI"
         const val EXTRA_SHARE_CODE = "EXTRA_SHARE_CODE"
         const val EXTRA_RELAY_BASE_URL = "EXTRA_RELAY_BASE_URL"
+        const val EXTRA_CONSOLE_PASSWORD = "EXTRA_CONSOLE_PASSWORD"
         private const val CHANNEL_ID = "ServerChannelId"
+        
+        val tunnelStatusFlow = kotlinx.coroutines.flow.MutableStateFlow(TunnelStatus.Offline)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -53,8 +65,9 @@ class ServerService : Service() {
                 val uri = intent.getStringExtra(EXTRA_URI)?.let(Uri::parse)
                 val shareCode = intent.getStringExtra(EXTRA_SHARE_CODE).orEmpty()
                 val relayBaseUrl = intent.getStringExtra(EXTRA_RELAY_BASE_URL).orEmpty()
+                val consolePassword = intent.getStringExtra(EXTRA_CONSOLE_PASSWORD)
                 if (uri != null) {
-                    startForegroundNode(uri, shareCode, relayBaseUrl)
+                    startForegroundNode(uri, shareCode, relayBaseUrl, consolePassword)
                 }
             }
 
@@ -63,7 +76,7 @@ class ServerService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun startForegroundNode(rootUri: Uri, shareCode: String, relayBaseUrl: String) {
+    private fun startForegroundNode(rootUri: Uri, shareCode: String, relayBaseUrl: String, consolePassword: String?) {
         createNotificationChannel()
 
         val publicUrl = buildRelayBrowserUrl(relayBaseUrl, shareCode)
@@ -78,7 +91,7 @@ class ServerService : Service() {
             .build()
 
         startForeground(1, notification)
-        startKtorServer(rootUri, shareCode, relayBaseUrl)
+        startKtorServer(rootUri, shareCode, relayBaseUrl, consolePassword)
         startRelayTunnel(relayBaseUrl, shareCode, rootUri)
     }
 
@@ -94,83 +107,220 @@ class ServerService : Service() {
         }
     }
 
-    private fun startKtorServer(rootUri: Uri, shareCode: String, relayBaseUrl: String) {
+    private fun startKtorServer(rootUri: Uri, shareCode: String, relayBaseUrl: String, consolePassword: String?) {
         if (server != null) return
 
         scope.launch {
             server = embeddedServer(Netty, port = DEFAULT_PORT) {
                 routing {
-                    get("/") {
-                        val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
-                        if (root == null || !root.canRead()) {
-                            call.respond(HttpStatusCode.NotFound, "Directory not accessible")
-                            return@get
-                        }
-
-                        call.respondText(
-                            renderHomePage(
-                                root = root,
-                                shareCode = shareCode,
-                                relayBaseUrl = relayBaseUrl,
-                                accessUrls = buildLocalAccessUrls(DEFAULT_PORT)
-                            ),
-                            ContentType.Text.Html
-                        )
+                    
+                    fun io.ktor.server.application.ApplicationCall.hasValidAuth(): Boolean {
+                        if (consolePassword.isNullOrBlank()) return true
+                        val authHeader = request.headers["Authorization"] ?: return false
+                        val token = authHeader.removePrefix("Bearer ").trim()
+                        return token == consolePassword
                     }
 
-                    get("/api/status") {
-                        val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
-                        if (root != null && root.canRead()) {
-                            call.respondText("{\"status\":\"online\"}", ContentType.Application.Json)
-                        } else {
-                            call.respond(HttpStatusCode.ServiceUnavailable, "{\"status\":\"offline\"}")
-                        }
-                    }
-
-                    get("/api/files") {
-                        val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
-                        if (root != null && root.canRead()) {
-                            val filesList = root.listFiles()
-                                .joinToString(prefix = "[", postfix = "]") { file ->
-                                    "{\"name\":\"${file.name}\",\"isDirectory\":${file.isDirectory}}"
-                                }
-                            call.respondText(filesList, ContentType.Application.Json)
-                        } else {
-                            call.respond(HttpStatusCode.NotFound, "Directory not accessible")
-                        }
-                    }
-
-                    get("/api/download") {
-                        val fileName = call.request.queryParameters["file"]
-                        if (fileName == null) {
-                            call.respond(HttpStatusCode.BadRequest, "Missing file parameter")
-                            return@get
-                        }
-
-                        val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
-                        val targetFile = root?.listFiles()?.find { it.name == fileName }
-
-                        if (targetFile != null && targetFile.canRead()) {
-                            val mimeType = contentResolver.getType(targetFile.uri) ?: "application/octet-stream"
-                            call.respondOutputStream(
-                                contentType = ContentType.parse(mimeType),
-                                status = HttpStatusCode.OK
-                            ) {
-                                contentResolver.openInputStream(targetFile.uri)?.use { input ->
-                                    input.copyTo(this)
-                                }
+                    route("/api") {
+                        get("/status") {
+                            val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
+                            if (root != null && root.canRead()) {
+                                call.respondText("{\"status\":\"online\"}", ContentType.Application.Json)
+                            } else {
+                                call.respond(HttpStatusCode.ServiceUnavailable, "{\"status\":\"offline\"}")
                             }
-                        } else {
-                            call.respond(HttpStatusCode.NotFound, "File not found or unreadable")
+                        }
+
+                        get("/files") {
+                            if (!call.hasValidAuth()) return@get call.respond(HttpStatusCode.Unauthorized, "Unauthorized")
+                            val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
+                            if (root == null || !root.canRead()) return@get call.respond(HttpStatusCode.NotFound, "Directory not accessible")
+                            
+                            val path = call.request.queryParameters["path"]
+                            val targetDir = resolveSafePath(root, path)
+                            if (targetDir == null || !targetDir.isDirectory) return@get call.respond(HttpStatusCode.NotFound, "Invalid path")
+
+                            // Limit and Offset
+                            val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 1000
+                            val offset = call.request.queryParameters["offset"]?.toIntOrNull() ?: 0
+
+                            val files = targetDir.listFiles().filter { it.name?.startsWith(".Trash") != true }.drop(offset).take(limit).map { file ->
+                                """{"id":"${file.uri}","name":"${file.name}","isDirectory":${file.isDirectory},"size":${file.length()},"lastModified":${file.lastModified()}}"""
+                            }
+                            call.respondText(files.joinToString(prefix = "[", postfix = "]"), ContentType.Application.Json)
+                        }
+
+                        get("/trash") {
+                            if (!call.hasValidAuth()) return@get call.respond(HttpStatusCode.Unauthorized, "Unauthorized")
+                            val root = DocumentFile.fromTreeUri(this@ServerService, rootUri) ?: return@get call.respond(HttpStatusCode.NotFound)
+                            val trashDir = root.findFile(".Trash")
+                            if (trashDir == null) return@get call.respondText("[]", ContentType.Application.Json)
+                            val files = trashDir.listFiles().map { file ->
+                                """{"id":"${file.uri}","name":"${file.name}","isDirectory":${file.isDirectory},"size":${file.length()},"lastModified":${file.lastModified()}}"""
+                            }
+                            call.respondText(files.joinToString(prefix = "[", postfix = "]"), ContentType.Application.Json)
+                        }
+
+                        post("/folder") {
+                            if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            val params = call.receiveParameters()
+                            val path = params["path"]
+                            val name = params["name"] ?: return@post call.respond(HttpStatusCode.BadRequest, "Missing name")
+                            
+                            val root = DocumentFile.fromTreeUri(this@ServerService, rootUri) ?: return@post call.respond(HttpStatusCode.NotFound)
+                            val targetDir = resolveSafePath(root, path) ?: return@post call.respond(HttpStatusCode.NotFound)
+                            
+                            val newDir = targetDir.createDirectory(name)
+                            if (newDir != null) call.respond(HttpStatusCode.OK, "Created")
+                            else call.respond(HttpStatusCode.InternalServerError, "Failed")
+                        }
+
+                        post("/rename") {
+                            if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            val params = call.receiveParameters()
+                            val path = params["path"]
+                            val oldName = params["oldName"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+                            val newName = params["newName"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+                            
+                            val root = DocumentFile.fromTreeUri(this@ServerService, rootUri) ?: return@post call.respond(HttpStatusCode.NotFound)
+                            val targetDir = resolveSafePath(root, path) ?: return@post call.respond(HttpStatusCode.NotFound)
+                            val targetFile = targetDir.findFile(oldName) ?: return@post call.respond(HttpStatusCode.NotFound)
+                            
+                            if (targetFile.renameTo(newName)) call.respond(HttpStatusCode.OK)
+                            else call.respond(HttpStatusCode.InternalServerError)
+                        }
+
+                        post("/delete") {
+                            if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            val params = call.receiveParameters()
+                            val path = params["path"]
+                            val name = params["name"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+                            
+                            val root = DocumentFile.fromTreeUri(this@ServerService, rootUri) ?: return@post call.respond(HttpStatusCode.NotFound)
+                            val targetDir = resolveSafePath(root, path) ?: return@post call.respond(HttpStatusCode.NotFound)
+                            val targetFile = targetDir.findFile(name) ?: return@post call.respond(HttpStatusCode.NotFound)
+                            
+                            var trashDir = root.findFile(".Trash")
+                            if (trashDir == null) trashDir = root.createDirectory(".Trash")
+                            if (trashDir == null) return@post call.respond(HttpStatusCode.InternalServerError)
+                            
+                            // Emulate move by renaming into trash? No, SAF cross-directory move requires Android API 24+ DocumentsContract.moveDocument
+                            // For simplicity across APIs, if moveDocument is hard via DocumentFile, we rename it with a hidden prefix if it's in root.
+                            // But better: DocumentFile doesn't expose move. We will just delete it, or rename to .trash_name
+                            targetFile.renameTo(".trash_$name")
+                            call.respond(HttpStatusCode.OK)
+                        }
+
+                        get("/download") {
+                            val path = call.request.queryParameters["path"]
+                            val fileName = call.request.queryParameters["file"] ?: return@get call.respond(HttpStatusCode.BadRequest, "Missing file")
+
+                            val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
+                            val targetDir = resolveSafePath(root, path)
+                            val targetFile = targetDir?.findFile(fileName)
+
+                            if (targetFile != null && targetFile.canRead() && !targetFile.isDirectory) {
+                                val mimeType = contentResolver.getType(targetFile.uri) ?: "application/octet-stream"
+                                call.respondOutputStream(
+                                    contentType = ContentType.parse(mimeType),
+                                    status = HttpStatusCode.OK
+                                ) {
+                                    contentResolver.openInputStream(targetFile.uri)?.use { input ->
+                                        input.copyTo(this)
+                                    }
+                                }
+                            } else {
+                                call.respond(HttpStatusCode.NotFound, "File not found or unreadable")
+                            }
+                        }
+
+                        get("/download_folder") {
+                            val path = call.request.queryParameters["path"]
+                            val folderName = call.request.queryParameters["folder"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+                            
+                            val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
+                            val targetDir = resolveSafePath(root, path)
+                            val targetFolder = targetDir?.findFile(folderName)
+                            
+                            if (targetFolder != null && targetFolder.isDirectory) {
+                                call.respondOutputStream(contentType = ContentType.parse("application/zip"), status = HttpStatusCode.OK) {
+                                    val zipOut = ZipOutputStream(this)
+                                    fun addFolderToZip(folder: DocumentFile, basePath: String) {
+                                        folder.listFiles().forEach { file ->
+                                            val entryName = if (basePath.isEmpty()) file.name else "$basePath/${file.name}"
+                                            if (file.isDirectory) {
+                                                zipOut.putNextEntry(ZipEntry("$entryName/"))
+                                                zipOut.closeEntry()
+                                                addFolderToZip(file, entryName ?: "")
+                                            } else {
+                                                zipOut.putNextEntry(ZipEntry(entryName))
+                                                contentResolver.openInputStream(file.uri)?.use { it.copyTo(zipOut) }
+                                                zipOut.closeEntry()
+                                            }
+                                        }
+                                    }
+                                    addFolderToZip(targetFolder, "")
+                                    zipOut.finish()
+                                }
+                            } else {
+                                call.respond(HttpStatusCode.NotFound)
+                            }
+                        }
+
+                        post("/upload") {
+                            if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            val path = call.request.queryParameters["path"]
+                            val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
+                            val targetDir = resolveSafePath(root, path) ?: return@post call.respond(HttpStatusCode.NotFound)
+                            call.handleStreamingUpload(targetDir)
                         }
                     }
 
-                    post("/api/upload") {
-                        call.handleUpload(rootUri, redirectToHome = false)
-                    }
+                    get("/{...}") {
+                        val requestPath = call.request.path().removePrefix("/")
+                        
+                        // 1. Enforce trailing slash for the base relay route to fix relative asset resolution
+                        val nodeBaseRegex = Regex("^node/[a-zA-Z0-9]+$")
+                        if (nodeBaseRegex.matches(requestPath)) {
+                            call.respondRedirect(call.request.path() + "/")
+                            return@get
+                        }
 
-                    post("/upload") {
-                        call.handleUpload(rootUri, redirectToHome = true)
+                        // 2. Map the request path to the actual static asset path
+                        val assetPath = when {
+                            requestPath.isEmpty() -> "www/index.html"
+                            requestPath.matches(Regex("^node/[a-zA-Z0-9]+/?$")) -> "www/index.html"
+                            requestPath.startsWith("node/") -> {
+                                // Extract the path after the share code: /node/12345/assets/main.css -> assets/main.css
+                                val afterShareCode = requestPath.substringAfter("node/").substringAfter("/")
+                                if (afterShareCode.isEmpty()) "www/index.html" else "www/$afterShareCode"
+                            }
+                            else -> "www/$requestPath"
+                        }
+                        
+                        fun getContentType(path: String): ContentType {
+                            return when {
+                                path.endsWith(".html") -> ContentType.Text.Html
+                                path.endsWith(".css") -> ContentType.Text.CSS
+                                path.endsWith(".js") -> ContentType.Text.JavaScript
+                                path.endsWith(".svg") -> ContentType.Image.SVG
+                                path.endsWith(".png") -> ContentType.Image.PNG
+                                else -> ContentType.Application.OctetStream
+                            }
+                        }
+
+                        try {
+                            val inputStream = this@ServerService.assets.open(assetPath)
+                            call.respondBytes(inputStream.readBytes(), getContentType(assetPath))
+                        } catch (e: Exception) {
+                            // Fallback to SPA index.html for unknown routes
+                            try {
+                                val indexStream = this@ServerService.assets.open("www/index.html")
+                                call.respondBytes(indexStream.readBytes(), ContentType.Text.Html)
+                            } catch (e2: Exception) {
+                                call.respond(HttpStatusCode.NotFound)
+                            }
+                        }
                     }
                 }
             }
@@ -182,6 +332,7 @@ class ServerService : Service() {
     private fun stopServer() {
         relayTunnelClient?.stop()
         relayTunnelClient = null
+        tunnelStatusFlow.value = TunnelStatus.Offline
         server?.stop(1000, 2000)
         server = null
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -189,7 +340,10 @@ class ServerService : Service() {
     }
 
     private fun startRelayTunnel(relayBaseUrl: String, shareCode: String, rootUri: Uri) {
-        if (relayBaseUrl.isBlank() || shareCode.isBlank()) return
+        if (relayBaseUrl.isBlank() || shareCode.isBlank()) {
+            tunnelStatusFlow.value = TunnelStatus.Offline
+            return
+        }
 
         // Don't restart the tunnel if already connected with the same config.
         val current = relayTunnelClient
@@ -202,7 +356,10 @@ class ServerService : Service() {
             context = this,
             relayBaseUrl = relayBaseUrl,
             shareCode = shareCode,
-            rootUri = rootUri
+            rootUri = rootUri,
+            onStatusChange = { status ->
+                tunnelStatusFlow.value = status
+            }
         ).also { it.start() }
     }
 
@@ -213,14 +370,10 @@ class ServerService : Service() {
         stopServer()
     }
 
-    private suspend fun io.ktor.server.application.ApplicationCall.handleUpload(
-        rootUri: Uri,
-        redirectToHome: Boolean
-    ) {
+    private suspend fun io.ktor.server.application.ApplicationCall.handleStreamingUpload(targetDir: DocumentFile) {
         val multipart = receiveMultipart()
-        val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
 
-        if (root == null || !root.canWrite()) {
+        if (!targetDir.canWrite()) {
             respond(HttpStatusCode.InternalServerError, "Storage not writable")
             return
         }
@@ -228,20 +381,23 @@ class ServerService : Service() {
         multipart.forEachPart { part: PartData ->
             if (part is PartData.FileItem) {
                 val fileName = part.originalFileName ?: "uploaded_file"
-                root.findFile(fileName)?.delete()
+                targetDir.findFile(fileName)?.delete()
 
-                val newFile = root.createFile(
+                val newFile = targetDir.createFile(
                     part.contentType?.toString() ?: "application/octet-stream",
                     fileName
                 )
 
                 if (newFile != null) {
-                    // Stream upload to storage. provider() returns a ByteReadPacket;
-                    // we read it and write straight to the output stream.
                     contentResolver.openOutputStream(newFile.uri)?.use { output ->
                         val input = part.provider()
                         try {
-                            output.write(input.readBytes())
+                            while (!input.endOfInput) {
+                                val bytes = input.readBytes(64 * 1024)
+                                output.write(bytes)
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         } finally {
                             input.close()
                         }
@@ -250,267 +406,20 @@ class ServerService : Service() {
             }
             part.dispose()
         }
+        respond(HttpStatusCode.OK)
+    }
 
-        if (redirectToHome) {
-            // history.back() returns to the node console URL in the browser.
-            // respondRedirect("/") would go to the relay root (404), so we use JS instead.
-            respondText(
-                """<!DOCTYPE html><html><head><meta charset="utf-8">
-                <style>body{font-family:monospace;background:#061018;color:#e2edf7;display:flex;
-                align-items:center;justify-content:center;height:100vh;margin:0}
-                .msg{text-align:center}.tick{font-size:48px;color:#3dd2ff}</style></head>
-                <body><div class="msg"><div class="tick">✓</div>
-                <p>Upload successful</p><p style="color:#87a0b5;font-size:12px">Returning…</p></div>
-                <script>setTimeout(function(){history.back()},1200);</script></body></html>""",
-                io.ktor.http.ContentType.Text.Html
-            )
-        } else {
-            respondText("Upload successful")
+    private fun resolveSafePath(root: DocumentFile?, path: String?): DocumentFile? {
+        if (root == null) return null
+        if (path.isNullOrBlank() || path == "/") return root
+        var current = root
+        val segments = path.split("/").filter { it.isNotBlank() }
+        for (segment in segments) {
+            if (segment == ".." || segment == ".") return null
+            current = current?.findFile(segment) ?: return null
         }
+        return current
     }
 }
 
-private fun renderHomePage(
-    root: DocumentFile,
-    shareCode: String,
-    relayBaseUrl: String,
-    accessUrls: List<String>
-): String {
-    val publicUrl = buildRelayBrowserUrl(relayBaseUrl, shareCode)
-    val filesMarkup = root.listFiles().joinToString(separator = "") { file ->
-        val name = escapeHtml(file.name ?: "Unnamed file")
-        val type = if (file.isDirectory) "DIR" else "FILE"
-        val action = if (file.isDirectory) {
-            "<span class=\"pill\">Folder traversal pending</span>"
-        } else {
-            val encodedName = encodeUrlSegment(file.name ?: "")
-            "<a class=\"download\" href=\"/api/download?file=$encodedName\">DOWNLOAD</a>"
-        }
-        """
-        <div class="file-row">
-          <div class="meta">
-            <div class="file-type">$type</div>
-            <div class="file-name">$name</div>
-          </div>
-          $action
-        </div>
-        """.trimIndent()
-    }.ifEmpty {
-        "<div class=\"empty\">No files detected in the mounted storage.</div>"
-    }
 
-    val localMarkup = accessUrls.joinToString(separator = "") { url ->
-        "<div class=\"line\">${escapeHtml(url)}</div>"
-    }.ifEmpty {
-        "<div class=\"line\">No private LAN route detected</div>"
-    }
-
-    val publicMarkup = publicUrl?.let {
-        "<div class=\"line\">${escapeHtml(it)}</div>"
-    } ?: "<div class=\"line\">Relay endpoint not configured</div>"
-
-    return """
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>Easy Storage Cloud Node</title>
-          <style>
-            :root {
-              color-scheme: dark;
-              --bg: #061018;
-              --panel: #0c1622;
-              --line: #18384f;
-              --text: #e2edf7;
-              --muted: #87a0b5;
-              --accent: #3dd2ff;
-              --accent2: #4bf1c8;
-            }
-            * { box-sizing: border-box; }
-            body {
-              margin: 0;
-              font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-              background:
-                radial-gradient(circle at top right, rgba(61, 210, 255, .12), transparent 28%),
-                linear-gradient(180deg, #040a10, var(--bg));
-              color: var(--text);
-              padding: 24px;
-            }
-            .shell {
-              max-width: 960px;
-              margin: 0 auto;
-              display: grid;
-              gap: 18px;
-            }
-            .card {
-              border: 1px solid var(--line);
-              background: rgba(12, 22, 34, .95);
-              border-radius: 24px;
-              padding: 20px;
-              box-shadow: 0 20px 50px rgba(0,0,0,.35);
-            }
-            .title {
-              font-size: clamp(30px, 6vw, 48px);
-              line-height: 1.03;
-              margin: 0 0 8px;
-            }
-            .muted {
-              color: var(--muted);
-              line-height: 1.6;
-            }
-            .label {
-              color: var(--accent2);
-              letter-spacing: .08em;
-              font-size: 12px;
-              font-weight: 700;
-              margin-bottom: 12px;
-            }
-            .grid {
-              display: grid;
-              gap: 18px;
-              grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            }
-            .line {
-              border: 1px solid var(--line);
-              border-radius: 14px;
-              padding: 12px;
-              margin-top: 10px;
-              color: white;
-              word-break: break-all;
-            }
-            .file-row {
-              display: flex;
-              justify-content: space-between;
-              gap: 12px;
-              align-items: center;
-              border: 1px solid var(--line);
-              border-radius: 16px;
-              padding: 14px;
-              margin-top: 10px;
-              background: rgba(7, 16, 24, .92);
-            }
-            .meta {
-              display: grid;
-              gap: 4px;
-            }
-            .file-type {
-              color: #81e0ff;
-              font-size: 12px;
-            }
-            .file-name {
-              font-size: 16px;
-              font-weight: 700;
-            }
-            .download, button {
-              display: inline-flex;
-              align-items: center;
-              justify-content: center;
-              min-height: 42px;
-              padding: 0 16px;
-              border-radius: 12px;
-              text-decoration: none;
-              border: 1px solid var(--line);
-              color: white;
-              background: linear-gradient(135deg, #0f7896, #18536f);
-              font-weight: 700;
-              cursor: pointer;
-            }
-            input[type=file] {
-              width: 100%;
-              margin: 12px 0;
-              color: var(--text);
-            }
-            .pill {
-              display: inline-block;
-              padding: 8px 12px;
-              border-radius: 999px;
-              background: rgba(61, 210, 255, .12);
-              color: #9be8ff;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="shell">
-            <div class="card">
-              <div class="label">EDGE NODE CONSOLE</div>
-              <h1 class="title">Mounted drive is serving directly</h1>
-              <div class="muted">The drive attached to the phone remains the storage server. This console is the node surface that a LAN client or public relay would reach.</div>
-            </div>
-
-            <div class="grid">
-              <div class="card">
-                <div class="label">NODE METADATA</div>
-                <div class="line">share_code = ${escapeHtml(shareCode.ifBlank { "not_set" })}</div>
-                <div class="line">drive_name = ${escapeHtml(root.name ?: "selected_storage")}</div>
-              </div>
-              <div class="card" style="border-left: 4px solid var(--accent)">
-                <div class="label" style="color: var(--accent)">PUBLIC RELAY ACCESS</div>
-                <div class="muted" style="font-size: 11px; margin-bottom: 8px">Use for sharing links over the internet. Supports large streaming uploads.</div>
-                $publicMarkup
-              </div>
-            </div>
-
-            <div class="card" style="border-left: 4px solid var(--accent2)">
-              <div class="label" style="color: var(--accent2)">DIRECT PRIVATE LAN (FAST)</div>
-              <div class="muted" style="font-size: 11px; margin-bottom: 8px">Use when on the same Wi-Fi. Fast and proximity-based.</div>
-              $localMarkup
-            </div>
-
-            <div class="card">
-              <div class="label">UPLOAD INTO DRIVE</div>
-              <form id="upload-form" method="post" enctype="multipart/form-data">
-                <input type="file" id="file-input" name="file" multiple>
-                <button type="submit">UPLOAD TO NODE</button>
-              </form>
-            </div>
-
-            <div class="card">
-              <div class="label">FILES</div>
-              $filesMarkup
-            </div>
-          </div>
-
-          <script>
-            (function() {
-              const path = window.location.pathname;
-              if (path.includes('/node/')) {
-                // Determine base path: /node/{shareCode}
-                const segments = path.split('/');
-                const nodeIdx = segments.indexOf('node');
-                if (nodeIdx !== -1 && segments.length > nodeIdx + 1) {
-                  const base = segments.slice(0, nodeIdx + 2).join('/');
-                  
-                  // Update Upload Form
-                  const form = document.getElementById('upload-form');
-                  if (form) {
-                    const currentAction = form.getAttribute('action');
-                    if (currentAction && !currentAction.startsWith(base)) {
-                      form.action = base + (currentAction.startsWith('/') ? '' : '/') + currentAction;
-                    }
-                  }
-
-                  // Update Download Links
-                  const downloads = document.querySelectorAll('a.download');
-                  downloads.forEach(link => {
-                    const href = link.getAttribute('href');
-                    if (href && !href.startsWith(base)) {
-                      link.href = base + (href.startsWith('/') ? '' : '/') + href;
-                    }
-                  });
-                }
-              }
-            })();
-          </script>
-        </body>
-        </html>
-    """.trimIndent()
-}
-
-private fun escapeHtml(value: String): String {
-    return value
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
-}
