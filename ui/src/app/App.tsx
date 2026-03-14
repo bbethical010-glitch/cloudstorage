@@ -17,10 +17,9 @@ function Main() {
 
   useEffect(() => {
     if (!window.Android) {
-      if (!window.location.hash.startsWith("#/console")) {
+      if (!window.location.hash.startsWith("#/console") && !window.location.hash.startsWith("#/onboarding")) {
         window.location.hash = "#/console";
       }
-      setStep("app");
       return;
     }
 
@@ -52,8 +51,12 @@ function Main() {
 
   if (step === "loading") {
     return <LoadingScreen onComplete={() => {
-      const hasSeenTutorial = localStorage.getItem("hasSeenTutorial");
-      setStep(hasSeenTutorial ? "app" : "welcome");
+      if (!window.Android) {
+        setStep("app");
+      } else {
+        const hasSeenTutorial = localStorage.getItem("hasSeenTutorial");
+        setStep(hasSeenTutorial ? "app" : "welcome");
+      }
     }} />;
   }
 

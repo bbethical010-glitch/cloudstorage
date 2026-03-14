@@ -11,7 +11,7 @@ export function Root() {
 
   useEffect(() => {
     const hasSeenTutorial = localStorage.getItem("hasSeenTutorial");
-    if (!hasSeenTutorial && location.pathname !== "/onboarding") {
+    if (window.Android && !hasSeenTutorial && location.pathname !== "/onboarding") {
       navigate("/onboarding");
     }
   }, [location, navigate]);

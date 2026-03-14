@@ -30,6 +30,7 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.server.request.path
 import io.ktor.server.request.receiveParameters
+import io.ktor.server.request.receiveText
 import io.ktor.server.response.respondBytes
 import io.ktor.utils.io.core.readBytes
 import java.util.zip.ZipEntry
@@ -37,6 +38,7 @@ import java.util.zip.ZipOutputStream
 import java.io.InputStream
 import io.ktor.utils.io.*
 import io.ktor.utils.io.jvm.javaio.*
+import io.ktor.utils.io.core.readAvailable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -131,6 +133,40 @@ class ServerService : Service() {
                             }
                         }
 
+                        get("/storage") {
+                            if (!call.hasValidAuth()) return@get call.respond(HttpStatusCode.Unauthorized)
+                            try {
+                                val docId = android.provider.DocumentsContract.getTreeDocumentId(rootUri)
+                                val rootId = docId?.substringBefore(":") ?: "primary"
+                                val rootsUri = android.provider.DocumentsContract.buildRootUri(rootUri.authority!!, rootId)
+                                
+                                var availableBytes = 0L
+                                var capacityBytes = 0L
+                                contentResolver.query(
+                                    rootsUri,
+                                    arrayOf(
+                                        android.provider.DocumentsContract.Root.COLUMN_AVAILABLE_BYTES,
+                                        android.provider.DocumentsContract.Root.COLUMN_CAPACITY_BYTES
+                                    ),
+                                    null, null, null
+                                )?.use { cursor ->
+                                    if (cursor.moveToFirst()) {
+                                        availableBytes = cursor.getLong(0)
+                                        capacityBytes = cursor.getLong(1)
+                                    }
+                                }
+                                
+                                val usedBytes = if (capacityBytes > 0) capacityBytes - availableBytes else 0L
+                                call.respondText(
+                                    """{"total":$capacityBytes,"free":$availableBytes,"used":$usedBytes}""",
+                                    ContentType.Application.Json
+                                )
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                                call.respondText("""{"total":0,"free":0,"used":0}""", ContentType.Application.Json)
+                            }
+                        }
+
                         get("/files") {
                             if (!call.hasValidAuth()) return@get call.respond(HttpStatusCode.Unauthorized, "Unauthorized")
                             val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
@@ -204,11 +240,66 @@ class ServerService : Service() {
                             if (trashDir == null) trashDir = root.createDirectory(".Trash")
                             if (trashDir == null) return@post call.respond(HttpStatusCode.InternalServerError)
                             
-                            // Emulate move by renaming into trash? No, SAF cross-directory move requires Android API 24+ DocumentsContract.moveDocument
-                            // For simplicity across APIs, if moveDocument is hard via DocumentFile, we rename it with a hidden prefix if it's in root.
-                            // But better: DocumentFile doesn't expose move. We will just delete it, or rename to .trash_name
-                            targetFile.renameTo(".trash_$name")
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                                try {
+                                    android.provider.DocumentsContract.moveDocument(contentResolver, targetFile.uri, targetDir.uri, trashDir.uri)
+                                } catch (e: Exception) {
+                                    targetFile.renameTo(".trash_$name")
+                                }
+                            } else {
+                                targetFile.renameTo(".trash_$name")
+                            }
                             call.respond(HttpStatusCode.OK)
+                        }
+
+                        post("/bulk_action") {
+                            if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            try {
+                                val jsonStr: String = call.receiveText()
+                                val json = org.json.JSONObject(jsonStr)
+                                val action = json.optString("action")
+                                val items = json.optJSONArray("items") ?: org.json.JSONArray()
+                                val destPath = json.optString("destinationPath", "")
+
+                                val root = DocumentFile.fromTreeUri(this@ServerService, rootUri) ?: return@post call.respond(HttpStatusCode.NotFound)
+                                
+                                var trashDir: DocumentFile? = null
+                                if (action == "delete") {
+                                    trashDir = root.findFile(".Trash") ?: root.createDirectory(".Trash")
+                                }
+                                val destDir = if (action == "move") resolveSafePath(root, destPath) else null
+
+                                val finalTrashDir = trashDir
+                                for (i in 0 until items.length()) {
+                                    val item = items.getJSONObject(i)
+                                    val path = item.optString("path", "")
+                                    val name = item.optString("name", "")
+                                    val targetDir = resolveSafePath(root, path) ?: continue
+                                    val targetFile = targetDir.findFile(name) ?: continue
+
+                                    if (action == "delete" && finalTrashDir != null) {
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                                            try {
+                                                android.provider.DocumentsContract.moveDocument(contentResolver, targetFile.uri, targetDir.uri, finalTrashDir.uri)
+                                            } catch (e: Exception) {
+                                                targetFile.renameTo(".trash_$name")
+                                            }
+                                        } else {
+                                            targetFile.renameTo(".trash_$name")
+                                        }
+                                    } else if (action == "move" && destDir != null) {
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                                            try {
+                                                android.provider.DocumentsContract.moveDocument(contentResolver, targetFile.uri, targetDir.uri, destDir.uri)
+                                            } catch (e: Exception) {}
+                                        }
+                                    }
+                                }
+                                call.respond(HttpStatusCode.OK)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                                call.respond(HttpStatusCode.InternalServerError)
+                            }
                         }
 
                         get("/download") {
@@ -264,6 +355,51 @@ class ServerService : Service() {
                                 }
                             } else {
                                 call.respond(HttpStatusCode.NotFound)
+                            }
+                        }
+
+                        get("/download_bulk") {
+                            val itemsJsonStr = call.request.queryParameters["items"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+                            val items = org.json.JSONArray(itemsJsonStr)
+                            
+                            val root = DocumentFile.fromTreeUri(this@ServerService, rootUri) ?: return@get call.respond(HttpStatusCode.NotFound)
+                            
+                            call.respondOutputStream(contentType = ContentType.parse("application/zip"), status = HttpStatusCode.OK) {
+                                val zipOut = ZipOutputStream(this)
+                                
+                                fun addFolderToZip(folder: DocumentFile, basePath: String) {
+                                    folder.listFiles().forEach { file ->
+                                        val entryName = if (basePath.isEmpty()) file.name else "$basePath/${file.name}"
+                                        if (file.isDirectory) {
+                                            zipOut.putNextEntry(ZipEntry("$entryName/"))
+                                            zipOut.closeEntry()
+                                            addFolderToZip(file, entryName ?: "")
+                                        } else {
+                                            zipOut.putNextEntry(ZipEntry(entryName))
+                                            contentResolver.openInputStream(file.uri)?.use { it.copyTo(zipOut) }
+                                            zipOut.closeEntry()
+                                        }
+                                    }
+                                }
+
+                                for (i in 0 until items.length()) {
+                                    val item = items.getJSONObject(i)
+                                    val path = item.optString("path", "")
+                                    val name = item.optString("name", "")
+                                    val targetDir = resolveSafePath(root, path) ?: continue
+                                    val targetFile = targetDir.findFile(name) ?: continue
+                                    
+                                    if (targetFile.isDirectory) {
+                                        zipOut.putNextEntry(ZipEntry("${targetFile.name}/"))
+                                        zipOut.closeEntry()
+                                        addFolderToZip(targetFile, targetFile.name ?: "folder")
+                                    } else {
+                                        zipOut.putNextEntry(ZipEntry(targetFile.name))
+                                        contentResolver.openInputStream(targetFile.uri)?.use { it.copyTo(zipOut) }
+                                        zipOut.closeEntry()
+                                    }
+                                }
+                                zipOut.finish()
                             }
                         }
 
@@ -390,11 +526,17 @@ class ServerService : Service() {
 
                 if (newFile != null) {
                     contentResolver.openOutputStream(newFile.uri)?.use { output ->
+
                         val input = part.provider()
                         try {
-                            while (!input.endOfInput) {
-                                val bytes = input.readBytes(64 * 1024)
-                                output.write(bytes)
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                val buffer = ByteArray(64 * 1024)
+                                while (!input.endOfInput) {
+                                    val count = input.readAvailable(buffer)
+                                    if (count > 0) {
+                                        output.write(buffer, 0, count)
+                                    }
+                                }
                             }
                         } catch (e: Exception) {
                             e.printStackTrace()

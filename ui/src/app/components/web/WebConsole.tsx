@@ -32,7 +32,9 @@ import {
   User,
   FileEdit,
   Move,
-  Home
+  Home,
+  X,
+  Check
 } from "lucide-react";
 import { Card } from "../ui/card";
 import { Button } from "../ui/button";
@@ -68,8 +70,40 @@ export function WebConsole() {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [storageStats, setStorageStats] = useState({ total: 0, used: 0, free: 0 });
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortField, setSortField] = useState<"name" | "size" | "lastModified" | "type">("name");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
+  const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const toggleSort = (field: "name" | "size" | "lastModified" | "type") => {
+    if (sortField === field) setSortDirection(prev => prev === "asc" ? "desc" : "asc");
+    else { setSortField(field); setSortDirection("asc"); }
+  };
+
+  const filteredAndSortedFiles = files
+    .filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    .sort((a, b) => {
+      // folders first
+      if (a.isDirectory && !b.isDirectory) return -1;
+      if (!a.isDirectory && b.isDirectory) return 1;
+
+      let val = 0;
+      switch (sortField) {
+        case "name": val = a.name.localeCompare(b.name); break;
+        case "size": val = (a.size || 0) - (b.size || 0); break;
+        case "lastModified": val = (a.lastModified || 0) - (b.lastModified || 0); break;
+        case "type":
+          const getExt = (n: string) => n.split('.').pop()?.toLowerCase() || '';
+          val = getExt(a.name).localeCompare(getExt(b.name));
+          break;
+      }
+      return sortDirection === "asc" ? val : -val;
+    });
 
   const getBaseUrl = () => {
     const path = window.location.pathname;
@@ -91,11 +125,40 @@ export function WebConsole() {
 
   useEffect(() => {
     loadFiles(currentPath);
+    loadStorageStats();
   }, [currentPath, activeTab]);
+
+  const loadStorageStats = async () => {
+    try {
+      const res = await fetch(`${getBaseUrl()}/api/storage`, { headers: getHeaders() });
+      if (res.ok) setStorageStats(await res.json());
+    } catch {}
+  };
+
+  const clearSelection = () => {
+    setSelectedFiles(new Set());
+    setLastSelectedIndex(null);
+  };
+
+  const toggleSelection = (e: React.MouseEvent, fileId: string, index: number) => {
+    e.stopPropagation();
+    const newSelection = new Set(selectedFiles);
+    if (e.shiftKey && lastSelectedIndex !== null) {
+      const start = Math.min(index, lastSelectedIndex);
+      const end = Math.max(index, lastSelectedIndex);
+      for (let i = start; i <= end; i++) newSelection.add(filteredAndSortedFiles[i].id);
+    } else {
+      if (newSelection.has(fileId)) newSelection.delete(fileId);
+      else newSelection.add(fileId);
+    }
+    setSelectedFiles(newSelection);
+    setLastSelectedIndex(index);
+  };
 
   const loadFiles = async (path: string) => {
     setIsRefreshing(true);
     setSelectedFile(null);
+    clearSelection();
     try {
       const endpoint = activeTab === "Trash" ? "/api/trash" : `/api/files?path=${encodeURIComponent(path)}`;
       const res = await fetch(`${getBaseUrl()}${endpoint}`, { headers: getHeaders() });
@@ -242,6 +305,55 @@ export function WebConsole() {
     }
   };
 
+  const handleBulkAction = async (action: 'delete' | 'move', destPath = '') => {
+    const items = filteredAndSortedFiles
+      .filter(f => selectedFiles.has(f.id))
+      .map(f => ({ path: currentPath, name: f.name }));
+      
+    try {
+      const res = await fetch(`${getBaseUrl()}/api/bulk_action`, {
+        method: 'POST',
+        headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, destinationPath: destPath, items })
+      });
+      if (res.ok) {
+        toast.success(`Items ${action === 'delete' ? 'deleted' : 'moved'}!`);
+        clearSelection();
+        loadFiles(currentPath);
+      } else {
+        toast.error(`Bulk ${action} failed`);
+      }
+    } catch {
+      toast.error('Network error');
+    }
+  };
+
+  const handleBulkDelete = () => {
+    if (confirm(`Delete ${selectedFiles.size} items?`)) handleBulkAction('delete');
+  };
+
+  const handleBulkMove = () => {
+    const dest = prompt("Enter destination folder path (e.g. Documents):");
+    if (dest !== null) handleBulkAction('move', dest);
+  };
+
+  const handleBulkDownload = () => {
+    const items = filteredAndSortedFiles
+      .filter(f => selectedFiles.has(f.id))
+      .map(f => ({ path: currentPath, name: f.name }));
+      
+    const url = `${getBaseUrl()}/api/download_bulk?items=${encodeURIComponent(JSON.stringify(items))}`;
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `archive-${Date.now()}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    toast.info("Bulk download started");
+    clearSelection();
+  };
+
   const handleRename = async (file: FileNode) => {
     const newName = prompt("Enter new filename:", file.name);
     if (!newName || newName === file.name) return;
@@ -295,13 +407,21 @@ export function WebConsole() {
           
           <div className="flex items-center gap-2 text-xs font-medium text-[#9CA3AF]">
             <Layers className="w-3.5 h-3.5" />
-            <span>Drive</span>
-            {currentPath.split('/').filter(Boolean).map((segment, idx) => (
-               <div key={idx} className="flex items-center gap-2">
-                 <ChevronRight className="w-3 h-3" />
-                 <span className="text-[#E5E7EB] font-bold">{segment}</span>
-               </div>
-            ))}
+            <span className="cursor-pointer hover:text-white transition-colors" onClick={() => setCurrentPath('')}>Drive</span>
+            {currentPath.split('/').filter(Boolean).map((segment, idx, arr) => {
+               const pathSoFar = arr.slice(0, idx + 1).join('/');
+               return (
+                 <div key={idx} className="flex items-center gap-2">
+                   <ChevronRight className="w-3 h-3" />
+                   <span 
+                     className="text-[#E5E7EB] font-bold cursor-pointer hover:text-blue-400 transition-colors"
+                     onClick={() => setCurrentPath(pathSoFar)}
+                   >
+                     {segment}
+                   </span>
+                 </div>
+               );
+            })}
           </div>
         </div>
 
@@ -310,6 +430,8 @@ export function WebConsole() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#4B5563]" />
             <Input 
               placeholder="Search files and folders..." 
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
               className="h-9 bg-[#111827] border-[#1F2937] text-sm pl-10 focus:ring-1 ring-[#2563EB]/50 rounded-xl transition-all w-full"
             />
           </div>
@@ -349,6 +471,8 @@ export function WebConsole() {
                   <h4 className="text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] px-3 mb-3">Main</h4>
                   {[
                     { label: "Drive", icon: HardDrive },
+                    { label: "Recent", icon: Clock },
+                    { label: "Shared", icon: Share2 },
                     { label: "Trash", icon: Trash2 },
                   ].map((item, i) => (
                     <button 
@@ -369,10 +493,10 @@ export function WebConsole() {
                   <div className="px-3 space-y-4">
                     <div className="space-y-2">
                        <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-[#9CA3AF]">
-                        <span>Storage Used</span>
-                        <span className="text-[#E5E7EB]">Live</span>
+                        <span>{storageStats.total > 0 ? `${formatSize(storageStats.used)} / ${formatSize(storageStats.total)}` : "Analyzing..."}</span>
+                        <span className="text-[#E5E7EB]">{storageStats.total > 0 ? Math.round((storageStats.used / storageStats.total) * 100) : 0}%</span>
                       </div>
-                      <Progress value={Math.random() * 100} className="h-1.5 bg-[#1F2937]" />
+                      <Progress value={storageStats.total > 0 ? (storageStats.used / storageStats.total) * 100 : 0} className="h-1.5 bg-[#1F2937]" />
                     </div>
                   </div>
                 </div>
@@ -385,14 +509,31 @@ export function WebConsole() {
 
         {/* File Browser Area */}
         <Panel defaultSize={62} minSize={40} className="bg-[#0B1220] flex flex-col relative w-full h-full"
-          onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
+          onDragOver={(e) => { e.preventDefault(); setIsDragging(true); e.dataTransfer.dropEffect = "copy"; }}
+          onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
           onDrop={(e) => {
             e.preventDefault();
+            setIsDragging(false);
             if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-              // Create a synthetic event matching signature
               handleUpload({ target: { files: e.dataTransfer.files } } as any);
             }
           }}>
+          
+          <AnimatePresence>
+            {isDragging && (
+              <motion.div 
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                className="absolute inset-0 z-50 bg-[#2563EB]/10 backdrop-blur-sm border-2 border-dashed border-[#2563EB] m-4 rounded-3xl flex flex-col items-center justify-center pointer-events-none"
+              >
+                <div className="w-20 h-20 bg-[#2563EB]/20 rounded-full flex items-center justify-center mb-6">
+                  <Upload className="w-10 h-10 text-[#2563EB] animate-bounce" />
+                </div>
+                <h2 className="text-3xl font-bold text-white tracking-tight">Drop files here</h2>
+                <p className="mt-2 text-[#9CA3AF]">Upload instantly to {currentPath ? `/${currentPath}` : 'Drive root'}</p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           <div className="flex flex-col h-full w-full">
             {/* Toolbar */}
             <div className="h-14 px-6 flex items-center justify-between border-b border-[#1F2937] bg-[#0B1220]/50 backdrop-blur-sm shrink-0">
@@ -430,30 +571,41 @@ export function WebConsole() {
             {/* List Header */}
             {viewMode === 'list' && (
               <div className="grid grid-cols-12 px-8 py-3 bg-[#0B1220] border-b border-[#1F2937] text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] shrink-0">
-                <div className="col-span-6 flex items-center gap-2">Name <ChevronDown className="w-3 h-3" /></div>
-                <div className="col-span-2">Size</div>
-                <div className="col-span-4 text-right">Modified</div>
+                <div className="col-span-6 flex items-center gap-2 cursor-pointer hover:text-white transition-colors" onClick={() => toggleSort('name')}>
+                  Name {sortField === 'name' && (sortDirection === 'asc' ? <ChevronUp className="w-3 h-3"/> : <ChevronDown className="w-3 h-3"/>)}
+                </div>
+                <div className="col-span-2 cursor-pointer hover:text-white transition-colors flex items-center gap-2" onClick={() => toggleSort('size')}>
+                  Size {sortField === 'size' && (sortDirection === 'asc' ? <ChevronUp className="w-3 h-3"/> : <ChevronDown className="w-3 h-3"/>)}
+                </div>
+                <div className="col-span-4 text-right cursor-pointer hover:text-white transition-colors flex items-center justify-end gap-2" onClick={() => toggleSort('lastModified')}>
+                  {sortField === 'lastModified' && (sortDirection === 'asc' ? <ChevronUp className="w-3 h-3"/> : <ChevronDown className="w-3 h-3"/>)} Modified
+                </div>
               </div>
             )}
 
             <ScrollArea className="flex-1 w-full h-[0px]">
-              {files.length === 0 && !isRefreshing ? (
+              {filteredAndSortedFiles.length === 0 && !isRefreshing ? (
                  <div className="flex flex-col items-center justify-center p-20 text-[#4B5563]">
                     <div className="w-24 h-24 mb-6 opacity-20"><Cloud className="w-full h-full"/></div>
-                    <h3 className="text-xl font-bold text-[#E5E7EB]">Nothing here yet</h3>
-                    <p className="mt-2 text-sm text-center max-w-sm">Upload files or create folders to populate your storage space. Drag and drop works anywhere in this area.</p>
+                    <h3 className="text-xl font-bold text-[#E5E7EB]">{searchQuery ? "No matches found" : "Nothing here yet"}</h3>
+                    <p className="mt-2 text-sm text-center max-w-sm">{searchQuery ? "Try adjusting your search terms." : "Upload files or create folders to populate your storage space. Drag and drop works anywhere in this area."}</p>
                  </div>
               ) : (
                   <div className={viewMode === 'list' ? "divide-y divide-[#1F2937]/50" : "grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-4 p-4"}>
-                    {files.map((file) => (
+                    {filteredAndSortedFiles.map((file, index) => (
                       viewMode === 'list' ? (
                         <button
                           key={file.id}
                           onClick={() => file.isDirectory ? navigateTo(file.name) : setSelectedFile(file)}
-                          className={`grid grid-cols-12 w-full px-6 py-3.5 text-left text-sm transition-all relative group ${
+                          className={`grid grid-cols-12 w-full px-6 py-3.5 text-left text-sm transition-all relative group pl-12 ${
                             selectedFile?.id === file.id ? 'bg-[#2563EB]/5' : 'hover:bg-[#111827]/40'
-                          }`}
+                          } ${selectedFiles.has(file.id) ? 'bg-[#2563EB]/10' : ''}`}
                         >
+                          <div className={`absolute left-4 top-1/2 -translate-y-1/2 flex items-center transition-opacity ${selectedFiles.has(file.id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`} onClick={e => e.stopPropagation()}>
+                            <div onClick={(e) => toggleSelection(e, file.id, index)} className={`w-4 h-4 rounded border flex items-center justify-center cursor-pointer transition-colors ${selectedFiles.has(file.id) ? 'bg-[#2563EB] border-[#2563EB]' : 'border-[#4B5563] hover:border-[#E5E7EB]'}`}>
+                              {selectedFiles.has(file.id) && <Check className="w-3 h-3 text-white" />}
+                            </div>
+                          </div>
                           {selectedFile?.id === file.id && <div className="absolute left-0 top-1.5 bottom-1.5 w-1 bg-[#2563EB] rounded-r-full" />}
                           <div className="col-span-6 flex items-center gap-4 pr-4">
                             <div className="transition-transform group-hover:scale-110 duration-200">
@@ -486,12 +638,17 @@ export function WebConsole() {
                           onClick={() => file.isDirectory ? navigateTo(file.name) : setSelectedFile(file)}
                           className={`p-4 bg-[#111827]/40 border-[#1F2937] hover:border-[#2563EB]/50 transition-all cursor-pointer flex flex-col items-center justify-center group relative min-h-[140px] ${
                             selectedFile?.id === file.id ? 'ring-1 ring-[#2563EB] bg-[#2563EB]/5' : ''
-                          }`}
+                          } ${selectedFiles.has(file.id) ? 'ring-1 ring-[#2563EB] bg-[#2563EB]/10' : ''}`}
                         >
+                          <div className={`absolute top-3 left-3 flex items-center transition-opacity z-10 ${selectedFiles.has(file.id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`} onClick={e => e.stopPropagation()}>
+                            <div onClick={(e) => toggleSelection(e, file.id, index)} className={`w-4 h-4 rounded border flex items-center justify-center cursor-pointer transition-colors ${selectedFiles.has(file.id) ? 'bg-[#2563EB] border-[#2563EB]' : 'border-[#4B5563] hover:border-[#E5E7EB]'}`}>
+                              {selectedFiles.has(file.id) && <Check className="w-3 h-3 text-white" />}
+                            </div>
+                          </div>
                           <div className="aspect-square w-[72px] h-[72px] shrink-0 rounded-xl bg-[#0B1220] flex items-center justify-center mb-4 transition-transform group-hover:scale-105">
                             {getFileIcon(file.name, file.isDirectory, "w-8 h-8")}
                           </div>
-                          <span className="text-[11px] font-medium w-full text-center px-1 break-words line-clamp-2">{file.name}</span>
+                          <span className="text-[11px] font-medium w-full text-center px-1 break-words line-clamp-2 leading-tight">{file.name}</span>
                           <p className="text-[9px] text-[#4B5563] mt-1 font-mono uppercase tracking-widest shrink-0">{formatSize(file.size)}</p>
                         </Card>
                       )
@@ -499,6 +656,36 @@ export function WebConsole() {
                   </div>
               )}
             </ScrollArea>
+            
+            {/* Floating Bulk Actions Bar */}
+            <AnimatePresence>
+              {selectedFiles.size > 0 && (
+                <motion.div 
+                  initial={{ opacity: 0, y: 50, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 50, scale: 0.95 }}
+                  className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 bg-[#1F2937]/90 backdrop-blur-xl border border-[#374151] shadow-2xl rounded-2xl p-2 px-4 shadow-black/50"
+                >
+                  <div className="flex items-center gap-2 px-2 border-r border-[#374151]">
+                     <div className="w-6 h-6 rounded-full bg-[#2563EB] flex items-center justify-center text-xs font-bold">{selectedFiles.size}</div>
+                     <span className="text-sm font-medium pr-2 text-white">{selectedFiles.size === 1 ? 'item' : 'items'} selected</span>
+                  </div>
+                  <Button variant="ghost" className="h-9 hover:bg-[#374151] hover:text-white text-[#E5E7EB]" onClick={handleBulkDownload}>
+                    <Download className="w-4 h-4 mr-2" /> Download
+                  </Button>
+                  <Button variant="ghost" className="h-9 hover:bg-[#374151] hover:text-white text-[#E5E7EB]" onClick={handleBulkMove}>
+                    <Move className="w-4 h-4 mr-2" /> Move
+                  </Button>
+                  <Button variant="ghost" className="h-9 hover:bg-red-500/20 hover:text-red-400 text-red-500 transition-colors" onClick={handleBulkDelete}>
+                    <Trash2 className="w-4 h-4 mr-2" /> Delete
+                  </Button>
+                  <div className="w-px h-6 bg-[#374151] mx-1" />
+                  <Button variant="ghost" size="icon" className="h-9 w-9 hover:bg-[#374151] text-[#9CA3AF]" onClick={clearSelection}>
+                    <X className="w-4 h-4" />
+                  </Button>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </Panel>
 
@@ -524,13 +711,17 @@ export function WebConsole() {
 
                 <div className="aspect-square shrink-0 w-full min-h-[180px] bg-gradient-to-br from-[#111827] to-[#0B1220] rounded-[2rem] border border-[#1F2937] flex items-center justify-center mb-8 shadow-2xl relative overflow-hidden group">
                   <div className="absolute inset-0 bg-[#2563EB]/5 opacity-0 group-hover:opacity-100 transition-opacity" />
-                  
-                  {['png', 'jpg', 'jpeg', 'gif'].includes(selectedFile.name.split('.').pop()?.toLowerCase() || '') ? (
-                      <img src={`${getBaseUrl()}/api/download?path=${encodeURIComponent(currentPath)}&file=${encodeURIComponent(selectedFile.name)}`} 
-                           className="object-cover w-full h-full" alt="Preview" />
-                  ) : (
-                      getFileIcon(selectedFile.name, selectedFile.isDirectory, "w-20 h-20 transition-transform group-hover:scale-110 duration-500")
-                  )}
+                  {(() => {
+                    const ext = selectedFile.name.split('.').pop()?.toLowerCase() || '';
+                    const url = `${getBaseUrl()}/api/download?path=${encodeURIComponent(currentPath)}&file=${encodeURIComponent(selectedFile.name)}`;
+                    if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
+                      return <img src={url} className="object-cover w-full h-full" alt="Preview" />;
+                    }
+                    if (['mp4', 'webm', 'mov', 'avi'].includes(ext)) {
+                      return <video src={url} controls className="object-contain w-full h-full bg-black/50" />;
+                    }
+                    return getFileIcon(selectedFile.name, selectedFile.isDirectory, "w-20 h-20 transition-transform group-hover:scale-110 duration-500");
+                  })()}
                   
                   <div className="absolute bottom-4 left-4 right-4">
                      <div className="bg-[#0B1220]/80 backdrop-blur-md p-3 rounded-2xl border border-[#374151]/30 opacity-0 group-hover:opacity-100 translate-y-4 group-hover:translate-y-0 transition-all">
@@ -579,8 +770,20 @@ export function WebConsole() {
                        <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs" onClick={() => handleRename(selectedFile)}>
                          <FileEdit className="w-3.5 h-3.5" /> Rename
                        </Button>
+                       <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs" onClick={() => {}}>
+                         <Share2 className="w-3.5 h-3.5" /> Share
+                       </Button>
+                       <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs" onClick={() => {
+                          const dest = prompt("Enter destination folder path (e.g. Documents):");
+                          if (dest !== null) {
+                             setSelectedFiles(new Set([selectedFile.id]));
+                             handleBulkAction('move', dest);
+                          }
+                       }}>
+                         <Move className="w-3.5 h-3.5" /> Move
+                       </Button>
                        <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs text-[#EF4444]" onClick={() => handleDelete(selectedFile)}>
-                         <Trash2 className="w-3.5 h-3.5" /> Move
+                         <Trash2 className="w-3.5 h-3.5" /> Delete
                        </Button>
                     </div>
                   </div>
@@ -592,7 +795,7 @@ export function WebConsole() {
                   <Eye className="w-8 h-8 opacity-20" />
                 </div>
                 <h3 className="text-sm font-bold uppercase tracking-widest text-[#E5E7EB]">No Preview</h3>
-                <p className="text-xs mt-3 leading-relaxed">Select a document or image to see high-resolution details</p>
+                <p className="text-xs mt-3 leading-relaxed">Select a file to view its preview and details</p>
               </div>
             )}
           </AnimatePresence>

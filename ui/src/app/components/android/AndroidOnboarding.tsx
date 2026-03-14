@@ -36,22 +36,32 @@ const onboardingSteps = [
 ];
 
 interface AndroidOnboardingProps {
-  onComplete: () => void;
+  onComplete?: () => void;
 }
 
 export function AndroidOnboarding({ onComplete }: AndroidOnboardingProps) {
   const [currentStep, setCurrentStep] = useState(0);
+  const navigate = useNavigate();
+
+  const handleComplete = () => {
+    localStorage.setItem("hasSeenTutorial", "true");
+    if (onComplete) {
+      onComplete();
+    } else {
+      navigate(window.Android ? "/" : "/console");
+    }
+  };
 
   const handleNext = () => {
     if (currentStep < onboardingSteps.length - 1) {
       setCurrentStep(currentStep + 1);
     } else {
-      onComplete();
+      handleComplete();
     }
   };
 
   const handleSkip = () => {
-    onComplete();
+    handleComplete();
   };
 
   const step = onboardingSteps[currentStep];
