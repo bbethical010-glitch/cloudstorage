@@ -60,10 +60,10 @@ export function formatDate(timestamp: number) {
 
 export function AndroidBrowser() {
   const navigate = useNavigate();
-  const appState = useContext(AppStateContext);
+  const ctx = useContext(AppStateContext);
+  const appState = ctx?.state;
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
-  const [files, setFiles] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<any | null>(null);
   
@@ -77,36 +77,30 @@ export function AndroidBrowser() {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const isOnline = appState?.isNodeRunning ?? false;
+  const isOnline = appState?.node?.isRunning ?? false;
 
   useEffect(() => {
     if (isOnline) {
       fetchFiles(currentPath);
-    } else {
-      setFiles([]);
     }
   }, [isOnline, currentPath]);
 
   const fetchFiles = async (path: string) => {
+    console.log("[JS_DEBUG] fetchFiles called for path: " + path + ". Has ctx.refreshFiles: ", !!ctx?.refreshFiles);
     setLoading(true);
-    try {
-      const response = await fetch(`http://localhost:8080/api/files${path ? `?path=${encodeURIComponent(path)}` : ''}`, {
-         headers: { 'Authorization': `Bearer ${appState?.shareCode}` }
-      });
-      if (!response.ok) throw new Error("Failed to fetch files");
-      const data = await response.json();
-      setFiles(data.map((f: any) => ({
-        ...f,
-        type: f.isDirectory ? "Folder" : "File",
-        size: f.isDirectory ? "Folder" : formatSize(f.size),
-        modified: formatDate(f.lastModified)
-      })));
-    } catch (e) {
-      console.error("Fetch failed", e);
-    } finally {
-      setLoading(false);
+    if (ctx?.refreshFiles) {
+       await ctx.refreshFiles(path);
+       console.log("[JS_DEBUG] ctx.refreshFiles completed. New AppState files length: ", ctx.state?.files?.items?.length);
     }
+    setLoading(false);
   };
+  
+  const files = (appState?.files?.items || []).map((f: any) => ({
+      ...f,
+      type: f.isDirectory ? "Folder" : "File",
+      size: f.isDirectory ? "Folder" : formatSize(f.size),
+      modified: formatDate(f.lastModified)
+  }));
 
   const getFileIcon = (file: any) => {
     if (file.isDirectory) return <Folder className="w-6 h-6 text-[#2563EB]" />;
@@ -147,14 +141,6 @@ export function AndroidBrowser() {
         clearInterval(interval);
         setUploadProgress(null);
         toast.success(`Complete: ${file.name}`);
-        setFiles(prev => [{
-          name: file.name,
-          isDirectory: false,
-          size: formatSize(file.size),
-          modified: "Just now",
-          type: "File",
-          rawFile: file // Store raw file blob for previews
-        }, ...prev]);
       } else {
         setUploadProgress(prev => prev ? { ...prev, progress: Math.min(prog, 100) } : null);
       }
@@ -184,14 +170,14 @@ export function AndroidBrowser() {
     setShowCreateFolder(false);
     
     try {
-      const parentUrl = appState?.relayBaseUrl || "http://localhost:8080";
+      const parentUrl = appState?.node?.relayBaseUrl || "http://localhost:8080";
       const actualPath = currentPath === "/" ? "" : currentPath;
       
       const res = await fetch(`${parentUrl}/api/folder`, {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${appState?.shareCode}`
+          "Authorization": `Bearer ${appState?.node?.shareCode}`
         },
         body: JSON.stringify({ name, path: actualPath })
       });
@@ -289,7 +275,7 @@ export function AndroidBrowser() {
               className={`cursor-pointer hover:text-white transition-colors ${!currentPath ? 'text-white' : ''}`}
               onClick={() => setCurrentPath("")}
             >
-              {appState?.folderName || "Drive"}
+              {appState?.node?.folderName || "Drive"}
             </span>
             {pathParts.map((part, idx) => (
               <React.Fragment key={idx}>

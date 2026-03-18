@@ -109,6 +109,9 @@ class MainActivity : ComponentActivity() {
                             uri,
                             Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                         )
+                    }.onFailure {
+                        Toast.makeText(this@MainActivity, "Cannot authorize root directory. Please select a specific sub-folder like Documents or Pictures.", Toast.LENGTH_LONG).show()
+                        return@let
                     }
                     selectedUri = uri
                     preferences.edit().putString(PREF_SELECTED_URI, uri.toString()).apply()
@@ -215,7 +218,7 @@ class MainActivity : ComponentActivity() {
                 override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
                     consoleMessage?.let {
                         val msg = "JS Console: ${it.message()} -- From line ${it.lineNumber()} of ${it.sourceId()}"
-                        android.util.Log.d("WebViewDebug", msg)
+                        android.util.Log.e("WebViewDebug", msg)
                         if (it.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.ERROR) {
                             runOnUiThread {
                                 Toast.makeText(this@MainActivity, "JS Error: ${it.message()}", Toast.LENGTH_LONG).show()
@@ -229,7 +232,7 @@ class MainActivity : ComponentActivity() {
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
-                    android.util.Log.d("WebViewDebug", "Page loaded: $url")
+                    android.util.Log.e("WebViewDebug", "Page loaded: $url")
                     updateWebState()
                 }
 
@@ -256,21 +259,27 @@ class MainActivity : ComponentActivity() {
         fun getInitialState(): String {
             val stats = resolveStorageStats(selectedUri ?: Uri.EMPTY)
             val state = JSONObject().apply {
-                put("folderName", resolveFolderName(selectedUri ?: Uri.EMPTY))
-                put("shareCode", shareCode)
-                put("relayBaseUrl", relayBaseUrl)
-                put("isNodeRunning", isNodeRunning)
-                put("tunnelStatus", tunnelStatus)
-                put("storageUsed", stats.first)
-                put("storageTotal", stats.second)
-                put("usagePercent", stats.third)
-                put("health", JSONObject().apply {
-                    put("cpu", healthCpu)
-                    put("memory", healthMem)
-                    put("ping", healthPing)
-                    put("io", healthIo)
+                put("node", JSONObject().apply {
+                    put("folderName", resolveFolderName(selectedUri ?: Uri.EMPTY))
+                    put("shareCode", shareCode)
+                    put("relayBaseUrl", relayBaseUrl)
+                    put("isRunning", isNodeRunning)
+                    put("tunnelConnected", tunnelStatus == TunnelStatus.Connected.name)
+                    put("tunnelStatus", tunnelStatus)
+                    put("health", JSONObject().apply {
+                        put("cpu", healthCpu)
+                        put("memory", healthMem)
+                        put("ping", healthPing)
+                        put("io", healthIo)
+                    })
+                })
+                put("storage", JSONObject().apply {
+                    put("usedBytes", stats.first)
+                    put("totalBytes", stats.second)
+                    put("freeBytes", if (stats.second > 0L) stats.second - stats.first else 0L)
                 })
             }
+            android.util.Log.e("API_DEBUG", "Emitted initial SSOT: $state")
             return state.toString()
         }
 
@@ -306,19 +315,48 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun updateWebState() {
-        if (!::webView.isInitialized) return
-        val stats = resolveStorageStats(selectedUri ?: Uri.EMPTY)
-        val state = JSONObject().apply {
-            put("folderName", resolveFolderName(selectedUri ?: Uri.EMPTY))
-            put("shareCode", shareCode)
-            put("relayBaseUrl", relayBaseUrl)
-            put("isNodeRunning", isNodeRunning)
-            put("tunnelStatus", tunnelStatus)
-            put("storageUsed", stats.first)
-            put("storageTotal", stats.second)
-            put("usagePercent", stats.third)
+        android.util.Log.e("API_DEBUG", "updateWebState STARTED")
+        if (!::webView.isInitialized) {
+            android.util.Log.e("API_DEBUG", "webView not initialized, aborting")
+            return
         }
+        val uriToResolve = selectedUri ?: Uri.EMPTY
+        android.util.Log.e("API_DEBUG", "Resolving stats for URI: $uriToResolve")
+        val stats = resolveStorageStats(uriToResolve)
+        android.util.Log.e("API_DEBUG", "Stats resolved: $stats")
+
+        val folderN = resolveFolderName(uriToResolve)
+        android.util.Log.e("API_DEBUG", "Folder resolved: $folderN")
+        
+        val state = try {
+            JSONObject().apply {
+            put("node", JSONObject().apply {
+                put("folderName", resolveFolderName(selectedUri ?: Uri.EMPTY))
+                put("shareCode", shareCode)
+                put("relayBaseUrl", relayBaseUrl)
+                put("isRunning", isNodeRunning)
+                put("tunnelConnected", tunnelStatus == TunnelStatus.Connected.name)
+                put("tunnelStatus", tunnelStatus)
+                put("health", JSONObject().apply {
+                    put("cpu", healthCpu)
+                    put("memory", healthMem)
+                    put("ping", healthPing)
+                    put("io", healthIo)
+                })
+            })
+                put("storage", JSONObject().apply {
+                    put("usedBytes", stats.first)
+                    put("totalBytes", stats.second)
+                    put("freeBytes", if (stats.second > 0L) stats.second - stats.first else 0L)
+                })
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("API_DEBUG", "Failed to build JSON: ${e.message}")
+            return
+        }
+        android.util.Log.e("API_DEBUG", "Live Web Context Update: $state")
         webView.post {
+            android.util.Log.e("API_DEBUG", "Evaluating JS inside webView.post")
             webView.evaluateJavascript("window.updateWebState?.('${state.toString()}');", null)
         }
     }
@@ -366,6 +404,7 @@ class MainActivity : ComponentActivity() {
             
             val used = capacityBytes - availableBytes
             val percent = if (capacityBytes > 0L) ((used.toDouble() / capacityBytes.toDouble()) * 100).toInt() else 0
+            android.util.Log.e("STORAGE_DEBUG", "Resolved Storage: Total=$capacityBytes Free=$availableBytes Used=$used Pct=$percent")
             Triple(used, capacityBytes, percent)
         } catch (e: Exception) {
             Triple(0L, 0L, 0)
@@ -397,12 +436,14 @@ class MainActivity : ComponentActivity() {
         }
 
         if (isNodeRunning) {
+            android.util.Log.e("NODE_DEBUG", "Shutting down the engine...")
             val stopIntent = Intent(this, ServerService::class.java).apply {
                 action = ServerService.ACTION_STOP_SERVER
             }
             startService(stopIntent)
             isNodeRunning = false
         } else {
+            android.util.Log.e("NODE_DEBUG", "Launching the engine on relay: $relayBaseUrl")
             val startIntent = Intent(this, ServerService::class.java).apply {
                 action = ServerService.ACTION_START_SERVER
                 putExtra(ServerService.EXTRA_URI, selectedUri.toString())

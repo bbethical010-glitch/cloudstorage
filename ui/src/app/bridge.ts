@@ -1,20 +1,44 @@
 import { Capacitor } from '@capacitor/core';
 
+export interface FileItem {
+  id: string;
+  name: string;
+  isDirectory: boolean;
+  size: number;
+  lastModified: number;
+}
+
 export interface AppState {
-  folderName: string | null;
-  shareCode: string;
-  relayBaseUrl: string;
-  isNodeRunning: boolean;
-  tunnelStatus: 'Offline' | 'Connecting' | 'Connected' | 'Error';
-  storageUsed: number;
-  storageTotal: number;
-  usagePercent: number;
-  health?: {
-    cpu: string;
-    memory: string;
-    ping: string;
-    io: string;
+  node: {
+    isRunning: boolean;
+    tunnelConnected: boolean;
+    tunnelStatus?: string;
+    folderName: string | null;
+    shareCode: string;
+    relayBaseUrl: string;
+    health?: {
+      cpu: string;
+      memory: string;
+      ping: string;
+      io: string;
+    };
   };
+  storage: {
+    totalBytes: number;
+    freeBytes: number;
+    usedBytes: number;
+  };
+  files: {
+    currentPath: string;
+    items: FileItem[];
+  };
+}
+
+export interface GlobalContextType {
+  state: AppState | null;
+  refreshStorage: () => Promise<void>;
+  refreshNodeStatus: () => Promise<void>;
+  refreshFiles: (path: string) => Promise<void>;
 }
 
 declare global {
@@ -32,69 +56,40 @@ declare global {
   }
 }
 
-// Custom hook-like bridge that delegates to Android or Capacitor (iOS)
 export const androidBridge = {
-  getInitialState: async (): Promise<AppState | null> => {
+  getInitialState: async (): Promise<string | null> => {
     if (window.Android) {
       try {
-        return JSON.parse(window.Android.getInitialState()) as AppState;
+        return window.Android.getInitialState();
       } catch (e) {
-        console.error("Failed to parse Android initial state", e);
+        console.error("[API_DEBUG] Failed to fetch Android initial state", e);
       }
-    } else if (Capacitor.getPlatform() === 'ios') {
-       // On iOS we'll use a Capacitor Plugin
-       // Placeholder for now, implemented via Swift bridge
-       return null; 
     }
     return null;
   },
 
   selectFolder: () => {
-    if (window.Android) {
-      window.Android.selectFolder();
-    } else {
-      // iOS / Capacitor implementation
-      (window as any).Capacitor?.Plugins?.StoragePlugin?.selectFolder();
-    }
+    if (window.Android) window.Android.selectFolder();
   },
 
   toggleNode: () => {
-    if (window.Android) {
-      window.Android.toggleNode();
-    } else {
-      (window as any).Capacitor?.Plugins?.StoragePlugin?.toggleNode();
-    }
+    if (window.Android) window.Android.toggleNode();
   },
 
   shareInvite: () => {
-    if (window.Android) {
-      window.Android.shareInvite();
-    } else {
-      (window as any).Capacitor?.Plugins?.StoragePlugin?.shareInvite();
-    }
+    if (window.Android) window.Android.shareInvite();
   },
 
   copyToClipboard: (text: string, toastMsg: string) => {
-    if (window.Android) {
-      window.Android.copyToClipboard(text, toastMsg);
-    } else {
-      // iOS / Capacitor placeholder
-      (window as any).Capacitor?.Plugins?.StoragePlugin?.copyToClipboard({ text, toast: toastMsg });
-    }
+    if (window.Android) window.Android.copyToClipboard(text, toastMsg);
   },
 
   updateRelayBaseUrl: (url: string) => {
-    if (window.Android) {
-      window.Android.updateRelayBaseUrl(url);
-    } else {
-      (window as any).Capacitor?.Plugins?.StoragePlugin?.updateRelayBaseUrl({ url });
-    }
+    if (window.Android) window.Android.updateRelayBaseUrl(url);
   },
 
   scanDocument: () => {
-    if (window.Android?.scanDocument) {
-      window.Android.scanDocument();
-    }
+    if (window.Android?.scanDocument) window.Android.scanDocument();
   },
   
   isAvailable: () => {

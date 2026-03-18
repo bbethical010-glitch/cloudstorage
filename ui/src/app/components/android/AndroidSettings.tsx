@@ -42,10 +42,11 @@ interface SettingsSection {
 
 export function AndroidSettings() {
   const navigate = useNavigate();
-  const appState = useContext(AppStateContext);
+  const ctx = useContext(AppStateContext);
+  const appState = ctx?.state;
   
   const [editingRelay, setEditingRelay] = useState(false);
-  const [relayInput, setRelayInput] = useState(appState?.relayBaseUrl || "");
+  const [relayInput, setRelayInput] = useState(appState?.node?.relayBaseUrl || "");
 
   const [settings, setSettings] = useState(() => {
     const saved = localStorage.getItem('appSettings');
@@ -76,9 +77,9 @@ export function AndroidSettings() {
 
   useEffect(() => {
     if (!editingRelay) {
-      setRelayInput(appState?.relayBaseUrl || "");
+      setRelayInput(appState?.node?.relayBaseUrl || "");
     }
-  }, [appState?.relayBaseUrl, editingRelay]);
+  }, [appState?.node?.relayBaseUrl, editingRelay]);
 
   const handleUpdateRelay = () => {
     if (!relayInput.startsWith("http")) {
@@ -106,7 +107,7 @@ export function AndroidSettings() {
         { 
           icon: HardDrive, 
           label: "Storage Location", 
-          value: appState?.folderName || "Not selected",
+          value: appState?.node?.folderName || "Not selected",
           onClick: () => androidBridge.selectFolder()
         },
         { icon: Shield, label: "Storage Permissions", value: "Granted" },
@@ -195,7 +196,7 @@ export function AndroidSettings() {
               ) : (
                 <div className="bg-[#0B1220] border border-[#374151] rounded-xl p-3">
                   <span className="text-[11px] font-mono text-[#2563EB] break-all">
-                    {appState?.relayBaseUrl || "No relay configured"}
+                    {appState?.node?.relayBaseUrl || "No relay configured"}
                   </span>
                 </div>
               )}
@@ -212,28 +213,28 @@ export function AndroidSettings() {
                 <span className="text-xs text-[#9CA3AF] font-medium">CPU Usage</span>
                 <ActivityIcon className="w-4 h-4 text-[#2563EB]" />
               </div>
-              <span className="text-xl font-bold text-[#E5E7EB]">{appState?.health?.cpu || "0%"}</span>
+              <span className="text-xl font-bold text-[#E5E7EB]">{appState?.node?.health?.cpu || "0%"}</span>
             </Card>
             <Card className="bg-[#111827] border-[#374151] p-4 flex flex-col gap-2">
               <div className="flex justify-between items-center">
                 <span className="text-xs text-[#9CA3AF] font-medium">Memory</span>
                 <HardDrive className="w-4 h-4 text-[#10B981]" />
               </div>
-              <span className="text-xl font-bold text-[#E5E7EB]">{appState?.health?.memory || "0 MB"}</span>
+              <span className="text-xl font-bold text-[#E5E7EB]">{appState?.node?.health?.memory || "0 MB"}</span>
             </Card>
             <Card className="bg-[#111827] border-[#374151] p-4 flex flex-col gap-2">
               <div className="flex justify-between items-center">
                 <span className="text-xs text-[#9CA3AF] font-medium">Network Ping</span>
                 <Wifi className="w-4 h-4 text-[#A855F7]" />
               </div>
-              <span className="text-xl font-bold text-[#E5E7EB]">{appState?.health?.ping || "0 ms"}</span>
+              <span className="text-xl font-bold text-[#E5E7EB]">{appState?.node?.health?.ping || "0 ms"}</span>
             </Card>
             <Card className="bg-[#111827] border-[#374151] p-4 flex flex-col gap-2">
               <div className="flex justify-between items-center">
                 <span className="text-xs text-[#9CA3AF] font-medium">Storage IO</span>
                 <Save className="w-4 h-4 text-[#F59E0B]" />
               </div>
-              <span className="text-xl font-bold text-[#E5E7EB]">{appState?.health?.io || "Idle"}</span>
+              <span className="text-xl font-bold text-[#E5E7EB]">{appState?.node?.health?.io || "Idle"}</span>
             </Card>
           </div>
         </section>
