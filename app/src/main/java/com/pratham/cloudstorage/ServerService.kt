@@ -24,6 +24,9 @@ import io.ktor.server.response.respond
 import io.ktor.server.response.respondOutputStream
 import io.ktor.server.response.respondRedirect
 import io.ktor.server.response.respondText
+import io.ktor.server.application.install
+import io.ktor.server.plugins.cors.routing.CORS
+import io.ktor.http.HttpMethod
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
@@ -114,6 +117,18 @@ class ServerService : Service() {
 
         scope.launch {
             server = embeddedServer(Netty, port = DEFAULT_PORT) {
+                install(CORS) {
+                    allowMethod(HttpMethod.Options)
+                    allowMethod(HttpMethod.Put)
+                    allowMethod(HttpMethod.Delete)
+                    allowMethod(HttpMethod.Patch)
+                    allowMethod(HttpMethod.Post)
+                    allowHeader(io.ktor.http.HttpHeaders.Authorization)
+                    allowHeader(io.ktor.http.HttpHeaders.ContentType)
+                    allowHeader("pwd")
+                    anyHost() // Allow Web Console origin
+                }
+
                 routing {
                     
                     fun io.ktor.server.application.ApplicationCall.hasValidAuth(): Boolean {
@@ -136,23 +151,44 @@ class ServerService : Service() {
                         get("/storage") {
                             if (!call.hasValidAuth()) return@get call.respond(HttpStatusCode.Unauthorized)
                             try {
+                                var availableBytes = 0L
+                                var capacityBytes = 0L
+                                
+                                // Attempt OTG safe resolution via Android Provider
                                 val docId = android.provider.DocumentsContract.getTreeDocumentId(rootUri)
                                 val rootId = docId?.substringBefore(":") ?: "primary"
                                 val rootsUri = android.provider.DocumentsContract.buildRootUri(rootUri.authority!!, rootId)
                                 
-                                var availableBytes = 0L
-                                var capacityBytes = 0L
-                                contentResolver.query(
-                                    rootsUri,
-                                    arrayOf(
-                                        android.provider.DocumentsContract.Root.COLUMN_AVAILABLE_BYTES,
-                                        android.provider.DocumentsContract.Root.COLUMN_CAPACITY_BYTES
-                                    ),
-                                    null, null, null
-                                )?.use { cursor ->
-                                    if (cursor.moveToFirst()) {
-                                        availableBytes = cursor.getLong(0)
-                                        capacityBytes = cursor.getLong(1)
+                                try {
+                                    contentResolver.query(
+                                        rootsUri,
+                                        arrayOf(
+                                            android.provider.DocumentsContract.Root.COLUMN_AVAILABLE_BYTES,
+                                            android.provider.DocumentsContract.Root.COLUMN_CAPACITY_BYTES
+                                        ),
+                                        null, null, null
+                                    )?.use { cursor ->
+                                        if (cursor.moveToFirst()) {
+                                            availableBytes = cursor.getLong(0)
+                                            capacityBytes = cursor.getLong(1)
+                                        }
+                                    }
+                                } catch (se: SecurityException) {
+                                    // SecurityException thrown for generic External USB OTG paths on Android 11+
+                                }
+
+                                // Fallback Strategy for pure generic URIs using Java NIO
+                                if (capacityBytes <= 0L) {
+                                    try {
+                                        val segments = docId?.split(":")
+                                        if (segments != null && segments.size >= 1) {
+                                            val realPath = "/storage/${segments[0]}"
+                                            val stat = android.os.StatFs(realPath)
+                                            availableBytes = stat.availableBlocksLong * stat.blockSizeLong
+                                            capacityBytes = stat.blockCountLong * stat.blockSizeLong
+                                        }
+                                    } catch (e: Exception) {
+                                        // Ignore fallback parse error
                                     }
                                 }
                                 

@@ -276,15 +276,17 @@ export function WebConsole() {
       if (xhr.status === 200) {
         toast.success("Upload complete!");
         loadFiles(currentPath);
+      } else if (xhr.status === 500 && xhr.responseText.includes("Storage not writable")) {
+        toast.error("Upload Failed: Write Permission Denied. Please ensure valid external storage limits are mounted via the main Android App.");
       } else {
-        toast.error("Upload failed: " + xhr.responseText);
+        toast.error("Upload failed: " + (xhr.responseText || "Server error"));
       }
       if (fileInputRef.current) fileInputRef.current.value = "";
     };
 
     xhr.onerror = () => {
       setIsUploading(false);
-      toast.error("Upload network error");
+      toast.error("Upload Failed: Connection to Node severed.");
     };
 
     xhr.send(formData);
@@ -616,7 +618,13 @@ export function WebConsole() {
             )}
 
             <ScrollArea className="flex-1 w-full h-[0px]">
-              {filteredAndSortedFiles.length === 0 && !isRefreshing ? (
+              {isRefreshing && files.length === 0 ? (
+                <div className="flex flex-col gap-3 p-6">
+                   {[1,2,3,4,5].map(i => (
+                     <div key={i} className="w-full h-14 bg-[#1F2937]/50 rounded-lg animate-pulse" />
+                   ))}
+                </div>
+              ) : filteredAndSortedFiles.length === 0 && !isRefreshing ? (
                  <div className="flex flex-col items-center justify-center p-20 text-[#4B5563]">
                     <div className="w-24 h-24 mb-6 opacity-20"><Cloud className="w-full h-full"/></div>
                     <h3 className="text-xl font-bold text-[#E5E7EB]">{searchQuery ? "No matches found" : "Nothing here yet"}</h3>
