@@ -27,16 +27,50 @@ interface FileDetailsProps {
 }
 
 export function FileDetails({ file, onClose, onDownload, onShare, onDelete }: FileDetailsProps) {
-  const getFileIcon = (file: any) => {
+  const getFileIconLarge = (file: any) => {
     const ext = file.name.split('.').pop()?.toLowerCase();
     if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)) 
-      return <ImageIcon className="w-12 h-12 text-[#A855F7]" />;
-    if (['mp4', 'mov', 'avi', 'mkv'].includes(ext)) 
-      return <Film className="w-12 h-12 text-orange-400" />;
+      return <ImageIcon className="w-16 h-16 text-[#A855F7]" />;
+    if (['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(ext)) 
+      return <Film className="w-16 h-16 text-orange-400" />;
     if (['mp3', 'wav', 'flac'].includes(ext))
-      return <Music className="w-12 h-12 text-pink-400" />;
+      return <Music className="w-16 h-16 text-pink-400" />;
     
-    return <FileText className="w-12 h-12 text-[#9CA3AF]" />;
+    return <FileText className="w-16 h-16 text-[#9CA3AF]" />;
+  };
+
+  const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (file.rawFile) {
+      const url = URL.createObjectURL(file.rawFile);
+      setPreviewUrl(url);
+      return () => URL.revokeObjectURL(url);
+    } else {
+      // Assuming a remote endpoint for non-local files for demo
+      setPreviewUrl(`http://localhost:8080/api/files/${encodeURIComponent(file.name)}`);
+    }
+  }, [file]);
+
+  const renderPreview = () => {
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    
+    if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)) {
+      return <img src={previewUrl || ''} alt={file.name} className="w-full h-full object-contain" />;
+    }
+    if (['mp4', 'mov', 'webm'].includes(ext)) {
+      return <video src={previewUrl || ''} controls className="w-full h-full object-contain" />;
+    }
+    if (ext === 'pdf') {
+      return <iframe src={previewUrl || ''} className="w-full h-full bg-white" />;
+    }
+
+    return (
+      <div className="flex flex-col items-center justify-center w-full h-48 text-[#9CA3AF]">
+         {getFileIconLarge(file)}
+         <span className="text-xs font-bold mt-4 text-center tracking-widest uppercase">Preview Unavailable</span>
+      </div>
+    );
   };
 
   return (
@@ -52,13 +86,13 @@ export function FileDetails({ file, onClose, onDownload, onShare, onDelete }: Fi
       <Card className="w-full max-w-lg bg-[#111827] border-[#374151] rounded-t-[2.5rem] p-8 shadow-2xl relative z-10 max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-start mb-8">
           <div className="w-12 h-1.5 bg-[#1F2937] rounded-full absolute top-4 left-1/2 -translate-x-1/2" />
-          <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-2xl bg-[#0B1220] border border-[#374151] flex items-center justify-center">
-              {getFileIcon(file)}
+          <div className="flex items-center gap-4 min-w-0 pr-4">
+            <div className="w-12 h-12 rounded-xl bg-[#0B1220] border border-[#374151] flex items-center justify-center shrink-0">
+              <FileText className="w-6 h-6 text-[#9CA3AF]" />
             </div>
-            <div>
-              <h2 className="text-xl font-bold truncate max-w-[200px]">{file.name}</h2>
-              <p className="text-xs text-[#9CA3AF] uppercase tracking-widest font-mono mt-1">
+            <div className="min-w-0 flex-1">
+              <h2 className="text-xl font-bold truncate">{file.name}</h2>
+              <p className="text-xs text-[#9CA3AF] uppercase tracking-widest font-mono mt-1 truncate">
                 {file.size} • {file.type}
               </p>
             </div>
@@ -67,11 +101,18 @@ export function FileDetails({ file, onClose, onDownload, onShare, onDelete }: Fi
             variant="ghost" 
             size="icon" 
             onClick={onClose}
-            className="rounded-full bg-[#1F2937] hover:bg-[#374151]"
+            className="rounded-full bg-[#1F2937] hover:bg-[#374151] shrink-0"
           >
-            <X className="w-5 h-5 text-[#9CA3AF]" />
+            <X className="w-5 h-5 text-[#E5E7EB]" />
           </Button>
         </div>
+
+        {/* Media Preview Container */}
+        {file.type !== "Folder" && (
+          <div className="w-full mb-6 bg-[#0B1220] rounded-[1.5rem] border border-[#374151] overflow-hidden flex items-center justify-center min-h-[220px] relative mt-2 group">
+             {renderPreview()}
+          </div>
+        )}
 
         <div className="space-y-6">
           <div className="grid grid-cols-2 gap-4">

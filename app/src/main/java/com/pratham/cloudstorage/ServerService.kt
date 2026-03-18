@@ -169,32 +169,103 @@ class ServerService : Service() {
 
                         get("/files") {
                             if (!call.hasValidAuth()) return@get call.respond(HttpStatusCode.Unauthorized, "Unauthorized")
-                            val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
-                            if (root == null || !root.canRead()) return@get call.respond(HttpStatusCode.NotFound, "Directory not accessible")
-                            
-                            val path = call.request.queryParameters["path"]
-                            val targetDir = resolveSafePath(root, path)
-                            if (targetDir == null || !targetDir.isDirectory) return@get call.respond(HttpStatusCode.NotFound, "Invalid path")
-
-                            // Limit and Offset
                             val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 1000
                             val offset = call.request.queryParameters["offset"]?.toIntOrNull() ?: 0
+                            val path = call.request.queryParameters["path"]
 
-                            val files = targetDir.listFiles().filter { it.name?.startsWith(".Trash") != true }.drop(offset).take(limit).map { file ->
-                                """{"id":"${file.uri}","name":"${file.name}","isDirectory":${file.isDirectory},"size":${file.length()},"lastModified":${file.lastModified()}}"""
+                            val targetDocId = resolveSafeDocIdFast(rootUri, path)
+                            if (targetDocId == null) {
+                                call.respond(HttpStatusCode.NotFound, "Invalid path")
+                                return@get
                             }
-                            call.respondText(files.joinToString(prefix = "[", postfix = "]"), ContentType.Application.Json)
+
+                            val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(rootUri, targetDocId)
+
+                            val jsonList = mutableListOf<String>()
+                            var currentIndex = 0
+
+                            contentResolver.query(
+                                childrenUri,
+                                arrayOf(
+                                    android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                                    android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                                    android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
+                                    android.provider.DocumentsContract.Document.COLUMN_SIZE,
+                                    android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED
+                                ),
+                                null, null, null
+                            )?.use { cursor ->
+                                val idIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                                val nameIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                                val mimeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE)
+                                val sizeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_SIZE)
+                                val modIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+
+                                while (cursor.moveToNext()) {
+                                    val name = if (nameIdx != -1) cursor.getString(nameIdx) else continue
+                                    if (name?.startsWith(".Trash") == true) continue
+
+                                    if (currentIndex < offset) {
+                                        currentIndex++
+                                        continue
+                                    }
+                                    if (jsonList.size >= limit) break
+
+                                    val id = if (idIdx != -1) cursor.getString(idIdx) else ""
+                                    val uri = android.provider.DocumentsContract.buildDocumentUriUsingTree(rootUri, id)
+                                    val mime = if (mimeIdx != -1) cursor.getString(mimeIdx) else ""
+                                    val isDirectory = mime == android.provider.DocumentsContract.Document.MIME_TYPE_DIR
+                                    val size = if (sizeIdx != -1) cursor.getLong(sizeIdx) else 0L
+                                    val mod = if (modIdx != -1) cursor.getLong(modIdx) else 0L
+
+                                    jsonList.add("""{"id":"${uri}","name":"${name}","isDirectory":${isDirectory},"size":${size},"lastModified":${mod}}""")
+                                    currentIndex++
+                                }
+                            }
+                            call.respondText(jsonList.joinToString(prefix = "[", postfix = "]"), ContentType.Application.Json)
                         }
 
                         get("/trash") {
                             if (!call.hasValidAuth()) return@get call.respond(HttpStatusCode.Unauthorized, "Unauthorized")
-                            val root = DocumentFile.fromTreeUri(this@ServerService, rootUri) ?: return@get call.respond(HttpStatusCode.NotFound)
-                            val trashDir = root.findFile(".Trash")
-                            if (trashDir == null) return@get call.respondText("[]", ContentType.Application.Json)
-                            val files = trashDir.listFiles().map { file ->
-                                """{"id":"${file.uri}","name":"${file.name}","isDirectory":${file.isDirectory},"size":${file.length()},"lastModified":${file.lastModified()}}"""
+                            val trashDocId = resolveSafeDocIdFast(rootUri, ".Trash")
+                            if (trashDocId == null) {
+                                call.respondText("[]", ContentType.Application.Json)
+                                return@get
                             }
-                            call.respondText(files.joinToString(prefix = "[", postfix = "]"), ContentType.Application.Json)
+
+                            val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(rootUri, trashDocId)
+                            val jsonList = mutableListOf<String>()
+
+                            contentResolver.query(
+                                childrenUri,
+                                arrayOf(
+                                    android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                                    android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                                    android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
+                                    android.provider.DocumentsContract.Document.COLUMN_SIZE,
+                                    android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED
+                                ),
+                                null, null, null
+                            )?.use { cursor ->
+                                val idIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                                val nameIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                                val mimeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE)
+                                val sizeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_SIZE)
+                                val modIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+
+                                while (cursor.moveToNext()) {
+                                    val name = if (nameIdx != -1) cursor.getString(nameIdx) else continue
+                                    val id = if (idIdx != -1) cursor.getString(idIdx) else ""
+                                    val uri = android.provider.DocumentsContract.buildDocumentUriUsingTree(rootUri, id)
+                                    val mime = if (mimeIdx != -1) cursor.getString(mimeIdx) else ""
+                                    val isDirectory = mime == android.provider.DocumentsContract.Document.MIME_TYPE_DIR
+                                    val size = if (sizeIdx != -1) cursor.getLong(sizeIdx) else 0L
+                                    val mod = if (modIdx != -1) cursor.getLong(modIdx) else 0L
+
+                                    jsonList.add("""{"id":"${uri}","name":"${name}","isDirectory":${isDirectory},"size":${size},"lastModified":${mod}}""")
+                                }
+                            }
+                            call.respondText(jsonList.joinToString(prefix = "[", postfix = "]"), ContentType.Application.Json)
                         }
 
                         post("/folder") {
@@ -507,60 +578,98 @@ class ServerService : Service() {
     }
 
     private suspend fun io.ktor.server.application.ApplicationCall.handleStreamingUpload(targetDir: DocumentFile) {
-        val multipart = receiveMultipart()
+        try {
+            val multipart = receiveMultipart()
 
-        if (!targetDir.canWrite()) {
-            respond(HttpStatusCode.InternalServerError, "Storage not writable")
-            return
-        }
+            if (!targetDir.canWrite()) {
+                respond(HttpStatusCode.InternalServerError, "Storage not writable")
+                return
+            }
 
-        multipart.forEachPart { part: PartData ->
-            if (part is PartData.FileItem) {
-                val fileName = part.originalFileName ?: "uploaded_file"
-                targetDir.findFile(fileName)?.delete()
+            multipart.forEachPart { part: PartData ->
+                if (part is PartData.FileItem) {
+                    val fileName = part.originalFileName ?: "uploaded_file"
+                    targetDir.findFile(fileName)?.delete()
 
-                val newFile = targetDir.createFile(
-                    part.contentType?.toString() ?: "application/octet-stream",
-                    fileName
-                )
+                    var mime = part.contentType?.toString() ?: "application/octet-stream"
+                    // Android SAF createFile fails if mime type has parameters like "video/mp4; codecs=..."
+                    mime = mime.substringBefore(";")
 
-                if (newFile != null) {
-                    contentResolver.openOutputStream(newFile.uri)?.use { output ->
+                    val newFile = targetDir.createFile(mime, fileName)
 
-                        val input = part.provider()
-                        try {
-                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                val buffer = ByteArray(64 * 1024)
-                                while (!input.endOfInput) {
-                                    val count = input.readAvailable(buffer)
-                                    if (count > 0) {
-                                        output.write(buffer, 0, count)
+                    if (newFile != null) {
+                        contentResolver.openOutputStream(newFile.uri)?.use { output ->
+                            val input = part.provider()
+                            try {
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    val buffer = ByteArray(64 * 1024)
+                                    while (!input.endOfInput) {
+                                        val count = input.readAvailable(buffer)
+                                        if (count > 0) {
+                                            output.write(buffer, 0, count)
+                                        }
                                     }
                                 }
+                            } finally {
+                                input.close()
                             }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        } finally {
-                            input.close()
                         }
+                    } else {
+                        throw Exception("Failed to create file: $fileName")
                     }
                 }
+                part.dispose()
             }
-            part.dispose()
+            respond(HttpStatusCode.OK)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            respond(HttpStatusCode.InternalServerError, "Upload error: ${e.message}")
         }
-        respond(HttpStatusCode.OK)
+    }
+
+    private fun resolveSafeDocIdFast(rootUri: Uri, path: String?): String? {
+        var currentDocId = android.provider.DocumentsContract.getTreeDocumentId(rootUri) ?: return null
+        if (path.isNullOrBlank() || path == "/") return currentDocId
+        val segments = path.split("/").filter { it.isNotBlank() }
+        
+        for (segment in segments) {
+            if (segment == ".." || segment == ".") return null
+            val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(rootUri, currentDocId)
+            val foundId = contentResolver.query(
+                childrenUri,
+                arrayOf(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID, android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                null, null, null
+            )?.use { cursor ->
+                val idIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                var id: String? = null
+                while (cursor.moveToNext()) {
+                    if (cursor.getString(nameIdx) == segment) {
+                        id = cursor.getString(idIdx)
+                        break
+                    }
+                }
+                id
+            }
+            if (foundId == null) return null
+            currentDocId = foundId
+        }
+        return currentDocId
     }
 
     private fun resolveSafePath(root: DocumentFile?, path: String?): DocumentFile? {
         if (root == null) return null
-        if (path.isNullOrBlank() || path == "/") return root
-        var current = root
-        val segments = path.split("/").filter { it.isNotBlank() }
-        for (segment in segments) {
-            if (segment == ".." || segment == ".") return null
-            current = current?.findFile(segment) ?: return null
+        val docId = resolveSafeDocIdFast(root.uri, path) ?: return null
+        val uri = android.provider.DocumentsContract.buildDocumentUriUsingTree(root.uri, docId)
+        val file = DocumentFile.fromSingleUri(this@ServerService, uri)
+        if (file?.isFile == false && file.isDirectory == false) {
+           if (docId == android.provider.DocumentsContract.getTreeDocumentId(root.uri)) {
+               return root
+           }
+           val treeUriFallback = android.provider.DocumentsContract.buildTreeDocumentUri(root.uri.authority, docId)
+           return DocumentFile.fromTreeUri(this@ServerService, treeUriFallback) ?: file
         }
-        return current
+        return file
     }
 }
 

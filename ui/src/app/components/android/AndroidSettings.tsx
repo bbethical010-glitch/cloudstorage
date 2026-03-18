@@ -15,7 +15,8 @@ import {
   FolderOpen,
   Wifi,
   Save,
-  X
+  X,
+  Bell
 } from "lucide-react";
 import { Card } from "../ui/card";
 import { Button } from "../ui/button";
@@ -46,6 +47,33 @@ export function AndroidSettings() {
   const [editingRelay, setEditingRelay] = useState(false);
   const [relayInput, setRelayInput] = useState(appState?.relayBaseUrl || "");
 
+  const [settings, setSettings] = useState(() => {
+    const saved = localStorage.getItem('appSettings');
+    return saved ? JSON.parse(saved) : {
+      theme: 'Dark',
+      language: 'English',
+      bgMode: 'Optimized',
+      notifications: 'All Alerts'
+    };
+  });
+
+  useEffect(() => {
+    localStorage.setItem('appSettings', JSON.stringify(settings));
+    if (settings.theme === 'Light') {
+      document.documentElement.classList.remove('dark');
+    } else {
+      document.documentElement.classList.add('dark');
+    }
+  }, [settings]);
+
+  const toggleSetting = (key: keyof typeof settings, options: string[]) => {
+    setSettings((prev: any) => {
+      const idx = options.indexOf(prev[key]);
+      const nextIdx = (idx + 1) % options.length;
+      return { ...prev, [key]: options[nextIdx] };
+    });
+  };
+
   useEffect(() => {
     if (!editingRelay) {
       setRelayInput(appState?.relayBaseUrl || "");
@@ -66,8 +94,10 @@ export function AndroidSettings() {
     {
       title: "General",
       items: [
-        { icon: Monitor, label: "App Theme", value: "Dark" },
-        { icon: Globe, label: "Language", value: "English" },
+        { icon: Monitor, label: "App Theme", value: settings.theme, onClick: () => toggleSetting('theme', ['Dark', 'Light']) },
+        { icon: Globe, label: "Language", value: settings.language, onClick: () => toggleSetting('language', ['English', 'Spanish', 'French']) },
+        { icon: ActivityIcon, label: "Background Service Mode", value: settings.bgMode, onClick: () => toggleSetting('bgMode', ['Optimized', 'Unrestricted']) },
+        { icon: Bell, label: "Notification Preferences", value: settings.notifications, onClick: () => toggleSetting('notifications', ['All Alerts', 'None']) },
       ]
     },
     {
@@ -79,12 +109,14 @@ export function AndroidSettings() {
           value: appState?.folderName || "Not selected",
           onClick: () => androidBridge.selectFolder()
         },
-        { icon: Clock, label: "Access Logs", path: "/activity" },
+        { icon: Shield, label: "Storage Permissions", value: "Granted" },
+        { icon: Clock, label: "Sync Logs", value: "2 days ago" },
       ]
     },
     {
       title: "Security",
       items: [
+        { icon: Shield, label: "Security Settings", value: "Standard" },
         { icon: Shield, label: "Node Visibility", value: "Encrypted" },
         { icon: Share2, label: "Invite Friends", onClick: () => androidBridge.shareInvite() },
       ]
@@ -171,6 +203,41 @@ export function AndroidSettings() {
           </Card>
         </section>
 
+        {/* Node Health Indicator */}
+        <section className="space-y-3">
+          <h3 className="text-xs font-bold text-[#9CA3AF] uppercase tracking-widest px-1">Node Health</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <Card className="bg-[#111827] border-[#374151] p-4 flex flex-col gap-2">
+              <div className="flex justify-between items-center">
+                <span className="text-xs text-[#9CA3AF] font-medium">CPU Usage</span>
+                <ActivityIcon className="w-4 h-4 text-[#2563EB]" />
+              </div>
+              <span className="text-xl font-bold text-[#E5E7EB]">{appState?.health?.cpu || "0%"}</span>
+            </Card>
+            <Card className="bg-[#111827] border-[#374151] p-4 flex flex-col gap-2">
+              <div className="flex justify-between items-center">
+                <span className="text-xs text-[#9CA3AF] font-medium">Memory</span>
+                <HardDrive className="w-4 h-4 text-[#10B981]" />
+              </div>
+              <span className="text-xl font-bold text-[#E5E7EB]">{appState?.health?.memory || "0 MB"}</span>
+            </Card>
+            <Card className="bg-[#111827] border-[#374151] p-4 flex flex-col gap-2">
+              <div className="flex justify-between items-center">
+                <span className="text-xs text-[#9CA3AF] font-medium">Network Ping</span>
+                <Wifi className="w-4 h-4 text-[#A855F7]" />
+              </div>
+              <span className="text-xl font-bold text-[#E5E7EB]">{appState?.health?.ping || "0 ms"}</span>
+            </Card>
+            <Card className="bg-[#111827] border-[#374151] p-4 flex flex-col gap-2">
+              <div className="flex justify-between items-center">
+                <span className="text-xs text-[#9CA3AF] font-medium">Storage IO</span>
+                <Save className="w-4 h-4 text-[#F59E0B]" />
+              </div>
+              <span className="text-xl font-bold text-[#E5E7EB]">{appState?.health?.io || "Idle"}</span>
+            </Card>
+          </div>
+        </section>
+
         {sections.map((section: SettingsSection, idx) => (
           <section key={idx} className="space-y-3">
             <h3 className="text-xs font-bold text-[#9CA3AF] uppercase tracking-widest px-1">{section.title}</h3>
@@ -213,9 +280,6 @@ export function AndroidSettings() {
         </Link>
         <Link to="/browser" className="p-4 text-[#9CA3AF] hover:text-[#E5E7EB] flex flex-col items-center gap-1">
           <FolderOpen className="w-6 h-6" />
-        </Link>
-        <Link to="/activity" className="p-4 text-[#9CA3AF] hover:text-[#E5E7EB] flex flex-col items-center gap-1">
-          <Clock className="w-6 h-6" />
         </Link>
       </div>
     </div>

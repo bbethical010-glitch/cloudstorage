@@ -9,6 +9,12 @@ export interface AppState {
   storageUsed: number;
   storageTotal: number;
   usagePercent: number;
+  health?: {
+    cpu: string;
+    memory: string;
+    ping: string;
+    io: string;
+  };
 }
 
 declare global {
@@ -20,6 +26,7 @@ declare global {
       shareInvite(): void;
       copyToClipboard(text: string, toast: string): void;
       updateRelayBaseUrl(url: string): void;
+      scanDocument(): void;
     };
     updateWebState?: (stateJson: string) => void;
   }
@@ -81,6 +88,12 @@ export const androidBridge = {
       window.Android.updateRelayBaseUrl(url);
     } else {
       (window as any).Capacitor?.Plugins?.StoragePlugin?.updateRelayBaseUrl({ url });
+    }
+  },
+
+  scanDocument: () => {
+    if (window.Android?.scanDocument) {
+      window.Android.scanDocument();
     }
   },
   

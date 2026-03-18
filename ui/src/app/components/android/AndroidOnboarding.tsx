@@ -1,37 +1,36 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Globe, Usb, PlayCircle, ShieldCheck, ChevronRight } from "lucide-react";
+import { Globe, Usb, PlayCircle, Share2, ChevronRight } from "lucide-react";
 import { Button } from "../ui/button";
-import { useNavigate } from "react-router";
 
 const onboardingSteps = [
   {
-    title: "Your Storage, Anywhere",
-    description: "Access files from your external storage wherever you are.",
-    icon: Globe,
+    title: "Connect Storage",
+    description: "Plug in your USB drive, SD card, or select an internal folder to host.",
+    icon: Usb,
     color: "text-[#2563EB]",
     bgColor: "bg-blue-500/10",
   },
   {
-    title: "Connect Your Drive",
-    description: "Plug in your USB drive or memory card to your phone.",
-    icon: Usb,
+    title: "Start Node",
+    description: "Turn your device into a secure personal cloud server with one tap.",
+    icon: PlayCircle,
+    color: "text-[#10B981]",
+    bgColor: "bg-green-500/10",
+  },
+  {
+    title: "Remote Access",
+    description: "Access your files securely from any web browser or device.",
+    icon: Globe,
     color: "text-[#A855F7]",
     bgColor: "bg-purple-500/10",
   },
   {
-    title: "Start Your Storage",
-    description: "With one tap your phone prepares the storage for remote access.",
-    icon: PlayCircle,
-    color: "text-[#22C55E]",
-    bgColor: "bg-green-500/10",
-  },
-  {
-    title: "Access From Any Device",
-    description: "Open your personal storage link from any browser.",
-    icon: ShieldCheck,
-    color: "text-[#2563EB]",
-    bgColor: "bg-blue-500/10",
+    title: "Share Files",
+    description: "Generate precise, secure links to share photos and documents with friends.",
+    icon: Share2,
+    color: "text-[#F59E0B]",
+    bgColor: "bg-orange-500/10",
   }
 ];
 
@@ -41,14 +40,13 @@ interface AndroidOnboardingProps {
 
 export function AndroidOnboarding({ onComplete }: AndroidOnboardingProps) {
   const [currentStep, setCurrentStep] = useState(0);
-  const navigate = useNavigate();
 
   const handleComplete = () => {
     localStorage.setItem("hasSeenTutorial", "true");
     if (onComplete) {
       onComplete();
     } else {
-      navigate(window.Android ? "/" : "/console");
+      window.location.hash = window.Android ? "#/" : "#/console";
     }
   };
 

@@ -28,7 +28,7 @@ export function LoadingScreen({ onComplete }: { onComplete: () => void }) {
       {/* Network Diagram Animation */}
       <div className="relative w-80 h-64 mb-12">
         {/* Connection Lines */}
-        <svg className="absolute inset-0 w-full h-full">
+        <svg className="absolute inset-0 w-full h-full" viewBox="0 0 320 256" preserveAspectRatio="xMidYMid meet">
           <motion.path
             d="M 40 160 L 160 160 L 280 160"
             stroke="#2563EB"

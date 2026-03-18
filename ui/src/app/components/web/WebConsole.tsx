@@ -77,6 +77,7 @@ export function WebConsole() {
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [isNodeOffline, setIsNodeOffline] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -128,9 +129,26 @@ export function WebConsole() {
     loadStorageStats();
   }, [currentPath, activeTab]);
 
+  useEffect(() => {
+    let interval: any;
+    const checkStatus = async () => {
+      try {
+        const res = await fetch(`${getBaseUrl()}/api/status`);
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        setIsNodeOffline(data.status === "offline");
+      } catch {
+        setIsNodeOffline(true);
+      }
+    };
+    checkStatus();
+    interval = setInterval(checkStatus, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
   const loadStorageStats = async () => {
     try {
-      const res = await fetch(`${getBaseUrl()}/api/storage`, { headers: getHeaders() });
+      const res = await fetch(`${getBaseUrl()}/api/storage`, { headers: getHeaders(), cache: "no-store" });
       if (res.ok) setStorageStats(await res.json());
     } catch {}
   };
@@ -160,8 +178,11 @@ export function WebConsole() {
     setSelectedFile(null);
     clearSelection();
     try {
-      const endpoint = activeTab === "Trash" ? "/api/trash" : `/api/files?path=${encodeURIComponent(path)}`;
-      const res = await fetch(`${getBaseUrl()}${endpoint}`, { headers: getHeaders() });
+      const timestamp = Date.now();
+      const endpoint = activeTab === "Trash" ? `/api/trash?t=${timestamp}` : `/api/files?path=${encodeURIComponent(path)}&t=${timestamp}`;
+      const res = await fetch(`${getBaseUrl()}${endpoint}`, { 
+        headers: { ...getHeaders(), 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' } 
+      });
       if (res.status === 401) {
         toast.error("Unauthorized: Please provide a valid ?pwd= password.");
         setFiles([]);
@@ -174,6 +195,7 @@ export function WebConsole() {
       toast.error(e.message || "Failed to load directory");
     } finally {
       setIsRefreshing(false);
+      loadStorageStats();
     }
   };
 
@@ -390,6 +412,16 @@ export function WebConsole() {
     segments.pop();
     setCurrentPath(segments.join('/'));
   };
+
+  if (isNodeOffline) {
+    return (
+      <div className="h-screen bg-[#0B1220] flex flex-col items-center justify-center text-center p-6 text-[#E5E7EB]">
+         <Cloud className="w-24 h-24 mb-6 opacity-20 text-red-500 animate-pulse" />
+         <h1 className="text-4xl font-bold mb-4">Node is offline</h1>
+         <p className="text-lg text-[#9CA3AF]">Start the node from your device to access files.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen bg-[#0B1220] text-[#E5E7EB] flex flex-col overflow-hidden font-sans selection:bg-[#2563EB]/30">
@@ -713,17 +745,21 @@ export function WebConsole() {
                   <div className="absolute inset-0 bg-[#2563EB]/5 opacity-0 group-hover:opacity-100 transition-opacity" />
                   {(() => {
                     const ext = selectedFile.name.split('.').pop()?.toLowerCase() || '';
-                    const url = `${getBaseUrl()}/api/download?path=${encodeURIComponent(currentPath)}&file=${encodeURIComponent(selectedFile.name)}`;
+                    const pwd = new URLSearchParams(window.location.hash.split('?')[1]).get('pwd') || '';
+                    const url = `${getBaseUrl()}/api/download?path=${encodeURIComponent(currentPath)}&file=${encodeURIComponent(selectedFile.name)}&pwd=${encodeURIComponent(pwd)}`;
                     if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
-                      return <img src={url} className="object-cover w-full h-full" alt="Preview" />;
+                      return <img src={url} className="object-contain w-full h-full" alt="Preview" />;
                     }
                     if (['mp4', 'webm', 'mov', 'avi'].includes(ext)) {
                       return <video src={url} controls className="object-contain w-full h-full bg-black/50" />;
                     }
+                    if (ext === 'pdf') {
+                      return <iframe src={url} className="w-full h-full bg-white rounded-2xl" title="PDF Preview" />;
+                    }
                     return getFileIcon(selectedFile.name, selectedFile.isDirectory, "w-20 h-20 transition-transform group-hover:scale-110 duration-500");
                   })()}
                   
-                  <div className="absolute bottom-4 left-4 right-4">
+                  <div className="absolute bottom-4 left-4 right-4 pointer-events-none">
                      <div className="bg-[#0B1220]/80 backdrop-blur-md p-3 rounded-2xl border border-[#374151]/30 opacity-0 group-hover:opacity-100 translate-y-4 group-hover:translate-y-0 transition-all">
                         <p className="text-[10px] text-center font-bold text-[#2563EB] uppercase tracking-widest">
                             {selectedFile.isDirectory ? "Folder" : "File"}
