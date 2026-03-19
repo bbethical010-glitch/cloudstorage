@@ -462,46 +462,61 @@ export function WebConsole() {
     setIsUploading(true);
     setUploadProgress(0);
 
-    const formData = new FormData();
+    let totalLoaded = 0;
+    const totalSize = Array.from(fileList).reduce((acc, file) => acc + file.size, 0);
+
     for (let i = 0; i < fileList.length; i++) {
-        formData.append("file", fileList[i]);
-    }
+      const file = fileList[i];
+      try {
+        await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", `${getBaseUrl()}/api/upload?path=${encodeURIComponent(currentPath)}&filename=${encodeURIComponent(file.name)}`);
+          
+          const headers = getHeaders();
+          if (headers.Authorization) {
+            xhr.setRequestHeader('Authorization', headers.Authorization);
+          }
+          xhr.setRequestHeader("Content-Type", "application/octet-stream");
 
-    const file = fileList[0];
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${getBaseUrl()}/api/upload?path=${encodeURIComponent(currentPath)}&name=${encodeURIComponent(file.name)}`);
+          let lastLoaded = 0;
+          xhr.upload.addEventListener("progress", (event) => {
+            if (event.lengthComputable) {
+              const delta = event.loaded - lastLoaded;
+              totalLoaded += delta;
+              lastLoaded = event.loaded;
+              setUploadProgress(Math.round((totalLoaded / totalSize) * 100));
+            }
+          });
+
+          xhr.onload = () => {
+            if (xhr.status === 200) {
+              resolve(null);
+            } else if (xhr.status === 500 && xhr.responseText.includes("Storage not writable")) {
+              reject(new Error("Write Permission Denied"));
+            } else {
+              reject(new Error(xhr.responseText || "Server error"));
+            }
+          };
+
+          xhr.onerror = () => {
+            reject(new Error("Network connection severed."));
+          };
+
+          xhr.send(file);
+        });
+      } catch (err: any) {
+        setIsUploading(false);
+        toast.error(`Upload failed for ${file.name}: ${err.message}`);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+        return;
+      }
+    }
     
-    const headers = getHeaders();
-    if (headers.Authorization) {
-        xhr.setRequestHeader('Authorization', headers.Authorization);
-    }
-
-    xhr.upload.addEventListener("progress", (event) => {
-      if (event.lengthComputable) {
-        const percent = Math.round((event.loaded / event.total) * 100);
-        setUploadProgress(percent);
-      }
-    });
-
-    xhr.onload = () => {
-      setIsUploading(false);
-      if (xhr.status === 200) {
-        toast.success("Upload complete!");
-        loadFiles(currentPath);
-      } else if (xhr.status === 500 && xhr.responseText.includes("Storage not writable")) {
-        toast.error("Upload Failed: Write Permission Denied. Please ensure valid external storage limits are mounted via the main Android App.");
-      } else {
-        toast.error("Upload failed: " + (xhr.responseText || "Server error"));
-      }
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    };
-
-    xhr.onerror = () => {
-      setIsUploading(false);
-      toast.error("Upload Failed: Connection to Node severed.");
-    };
-
-    xhr.send(file);
+    setIsUploading(false);
+    setUploadProgress(100);
+    toast.success("Upload complete!");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    loadFiles(currentPath);
   };
 
   const handleDownload = (file: FileNode) => {
