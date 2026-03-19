@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
 import android.widget.Toast
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -375,28 +376,51 @@ class MainActivity : ComponentActivity() {
                 capacityBytes = totalBlocks * blockSize
                 availableBytes = availableBlocks * blockSize
             } else {
+                val docId = android.provider.DocumentsContract.getTreeDocumentId(uri)
+                val uuidStr = docId?.substringBefore(":") ?: "primary"
+                
                 try {
-                    val rootId = android.provider.DocumentsContract.getTreeDocumentId(uri).split(":")[0]
-                    contentResolver.query(
-                        android.provider.DocumentsContract.buildRootUri(uri.authority, rootId),
-                        arrayOf(
-                            android.provider.DocumentsContract.Root.COLUMN_AVAILABLE_BYTES,
-                            android.provider.DocumentsContract.Root.COLUMN_CAPACITY_BYTES
-                        ),
-                        null, null, null
-                    )?.use { cursor ->
-                        if (cursor.moveToFirst()) {
-                            availableBytes = cursor.getLong(0)
-                            capacityBytes = cursor.getLong(1)
-                        }
+                    val statsManager = getSystemService(Context.STORAGE_STATS_SERVICE) as android.app.usage.StorageStatsManager
+                    val uuidObj = if (uuidStr.equals("primary", ignoreCase = true)) {
+                        android.os.storage.StorageManager.UUID_DEFAULT
+                    } else {
+                        java.util.UUID.fromString(uuidStr)
                     }
+                    capacityBytes = statsManager.getTotalBytes(uuidObj)
+                    availableBytes = statsManager.getFreeBytes(uuidObj)
                 } catch (e: Exception) {
-                    // Ignore SAF query fail
+                    try {
+                        val storageManager = getSystemService(Context.STORAGE_SERVICE) as android.os.storage.StorageManager
+                        var targetDir: java.io.File? = null
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                            for (volume in storageManager.storageVolumes) {
+                                val volUuid = volume.uuid
+                                if (volUuid != null && volUuid.equals(uuidStr, ignoreCase = true)) {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                        targetDir = volume.directory
+                                        break
+                                    }
+                                } else if (volUuid == null && uuidStr.equals("primary", ignoreCase = true)) {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                        targetDir = volume.directory
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                        if (targetDir != null) {
+                            val stat = android.os.StatFs(targetDir.absolutePath)
+                            availableBytes = stat.availableBlocksLong * stat.blockSizeLong
+                            capacityBytes = stat.blockCountLong * stat.blockSizeLong
+                        }
+                    } catch (fallbackEx: Exception) {
+                        // Total failure
+                    }
                 }
             }
             
             if (capacityBytes <= 0L) {
-                // Fallback to internal storage stats for visual consistency if SAF stats fail to resolve
+                // Absolute fallback to internal storage stats if SAF & UUID resolution fails
                 val internalStats = android.os.StatFs(android.os.Environment.getDataDirectory().path)
                 capacityBytes = internalStats.blockCountLong * internalStats.blockSizeLong
                 availableBytes = internalStats.availableBlocksLong * internalStats.blockSizeLong
@@ -404,7 +428,7 @@ class MainActivity : ComponentActivity() {
             
             val used = capacityBytes - availableBytes
             val percent = if (capacityBytes > 0L) ((used.toDouble() / capacityBytes.toDouble()) * 100).toInt() else 0
-            android.util.Log.e("STORAGE_DEBUG", "Resolved Storage: Total=$capacityBytes Free=$availableBytes Used=$used Pct=$percent")
+            android.util.Log.e("STORAGE_DEBUG", "Resolved Native UI Storage: Total=$capacityBytes Free=$availableBytes Used=$used Pct=$percent")
             Triple(used, capacityBytes, percent)
         } catch (e: Exception) {
             Triple(0L, 0L, 0)

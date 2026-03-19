@@ -154,51 +154,63 @@ class ServerService : Service() {
                                 var availableBytes = 0L
                                 var capacityBytes = 0L
                                 
-                                // Attempt OTG safe resolution via Android Provider
                                 val docId = android.provider.DocumentsContract.getTreeDocumentId(rootUri)
-                                val rootId = docId?.substringBefore(":") ?: "primary"
-                                val rootsUri = android.provider.DocumentsContract.buildRootUri(rootUri.authority!!, rootId)
+                                val uuidStr = docId?.substringBefore(":") ?: "primary"
                                 
                                 try {
-                                    contentResolver.query(
-                                        rootsUri,
-                                        arrayOf(
-                                            android.provider.DocumentsContract.Root.COLUMN_AVAILABLE_BYTES,
-                                            android.provider.DocumentsContract.Root.COLUMN_CAPACITY_BYTES
-                                        ),
-                                        null, null, null
-                                    )?.use { cursor ->
-                                        if (cursor.moveToFirst()) {
-                                            availableBytes = cursor.getLong(0)
-                                            capacityBytes = cursor.getLong(1)
-                                        }
+                                    val statsManager = getSystemService(Context.STORAGE_STATS_SERVICE) as android.app.usage.StorageStatsManager
+                                    val uuid = if (uuidStr.equals("primary", ignoreCase = true)) {
+                                        android.os.storage.StorageManager.UUID_DEFAULT
+                                    } else {
+                                        java.util.UUID.fromString(uuidStr)
                                     }
-                                } catch (se: SecurityException) {
-                                    // SecurityException thrown for generic External USB OTG paths on Android 11+
-                                }
-
-                                // Fallback Strategy for pure generic URIs using Java NIO
-                                if (capacityBytes <= 0L) {
+                                    
+                                    capacityBytes = statsManager.getTotalBytes(uuid)
+                                    availableBytes = statsManager.getFreeBytes(uuid)
+                                    android.util.Log.d("STORAGE_DEBUG", "StorageStatsManager success for UUID: $uuidStr ($capacityBytes total)")
+                                } catch (e: Exception) {
+                                    android.util.Log.e("STORAGE_DEBUG", "StorageStatsManager failed: ${e.message}, falling back to StorageVolume API")
                                     try {
-                                        val segments = docId?.split(":")
-                                        if (segments != null && segments.size >= 1) {
-                                            val realPath = "/storage/${segments[0]}"
-                                            val stat = android.os.StatFs(realPath)
+                                        val storageManager = getSystemService(Context.STORAGE_SERVICE) as android.os.storage.StorageManager
+                                        
+                                        var targetDir: java.io.File? = null
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                                            for (volume in storageManager.storageVolumes) {
+                                                val volUuid = volume.uuid
+                                                if (volUuid != null && volUuid.equals(uuidStr, ignoreCase = true)) {
+                                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                                        targetDir = volume.directory
+                                                        break
+                                                    }
+                                                } else if (volUuid == null && uuidStr.equals("primary", ignoreCase = true)) {
+                                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                                        targetDir = volume.directory
+                                                        break
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        if (targetDir != null) {
+                                            val stat = android.os.StatFs(targetDir.absolutePath)
                                             availableBytes = stat.availableBlocksLong * stat.blockSizeLong
                                             capacityBytes = stat.blockCountLong * stat.blockSizeLong
+                                            android.util.Log.d("STORAGE_DEBUG", "StorageVolume StatFs fallback success for path: ${targetDir.absolutePath}")
+                                        } else {
+                                             android.util.Log.e("STORAGE_DEBUG", "No matching StorageVolume found for UUID: $uuidStr")
                                         }
-                                    } catch (e: Exception) {
-                                        // Ignore fallback parse error
+                                    } catch (fallbackEx: Exception) {
+                                        android.util.Log.e("STORAGE_DEBUG", "Total failure resolving capacity: ${fallbackEx.message}")
                                     }
                                 }
-                                
+
                                 val usedBytes = if (capacityBytes > 0) capacityBytes - availableBytes else 0L
                                 call.respondText(
                                     """{"total":$capacityBytes,"free":$availableBytes,"used":$usedBytes}""",
                                     ContentType.Application.Json
                                 )
                             } catch (e: Exception) {
-                                e.printStackTrace()
+                                android.util.Log.e("STORAGE_DEBUG", "Absolute api/storage endpoint failure", e)
                                 call.respondText("""{"total":0,"free":0,"used":0}""", ContentType.Application.Json)
                             }
                         }
@@ -512,10 +524,15 @@ class ServerService : Service() {
 
                         post("/upload") {
                             if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
-                            val path = call.request.queryParameters["path"]
-                            val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
-                            val targetDir = resolveSafePath(root, path) ?: return@post call.respond(HttpStatusCode.NotFound)
-                            call.handleStreamingUpload(targetDir)
+                            try {
+                                val path = call.request.queryParameters["path"]
+                                val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
+                                val targetDir = resolveSafePath(root, path) ?: return@post call.respond(HttpStatusCode.NotFound)
+                                call.handleStreamingUpload(targetDir)
+                                call.respond(HttpStatusCode.OK)
+                            } catch (e: Exception) {
+                                call.respond(HttpStatusCode.InternalServerError, "Upload failed: ${e.message}")
+                            }
                         }
                     }
 
