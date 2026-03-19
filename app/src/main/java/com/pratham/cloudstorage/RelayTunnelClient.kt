@@ -51,6 +51,8 @@ class RelayTunnelClient(
     private var currentStreamingRequestId: String? = null
     private var currentUploadStream: OutputStream? = null
 
+    private var currentStreamIncoming: kotlinx.coroutines.channels.Channel<ByteArray>? = null
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val relayWebSocketUrl = relayBaseUrl.toWebSocketUrl(shareCode.uppercase().trim())
 
@@ -100,6 +102,17 @@ class RelayTunnelClient(
                                                         val response = handleUploadEnd(envelope)
                                                         outgoing.send(Frame.Text(relayGson.toJson(response)))
                                                     }
+                                                    "upload_start_stream" -> {
+                                                        currentStreamIncoming = kotlinx.coroutines.channels.Channel(kotlinx.coroutines.channels.Channel.UNLIMITED)
+                                                        scope.launch {
+                                                            val response = forwardToLocalNodeStreaming(envelope, currentStreamIncoming!!)
+                                                            outgoing.send(Frame.Text(relayGson.toJson(response)))
+                                                            currentStreamIncoming = null
+                                                        }
+                                                    }
+                                                    "upload_end_stream" -> {
+                                                        currentStreamIncoming?.close()
+                                                    }
                                                     else -> {
                                                         val response = forwardToLocalNode(envelope)
                                                         outgoing.send(Frame.Text(relayGson.toJson(response)))
@@ -113,9 +126,7 @@ class RelayTunnelClient(
                                 is Frame.Binary -> {
                                     val bytes = frame.data
                                     if (bytes.isNotEmpty()) {
-                                        currentUploadStream?.let { out ->
-                                            out.write(bytes)
-                                        }
+                                        currentStreamIncoming?.trySend(bytes)
                                     }
                                 }
                                 else -> {}
@@ -141,6 +152,57 @@ class RelayTunnelClient(
         scope.cancel()
         relayClient.close()
         localNodeClient.close()
+    }
+
+    private suspend fun forwardToLocalNodeStreaming(
+        request: RelayEnvelope,
+        incomingBytes: kotlinx.coroutines.channels.ReceiveChannel<ByteArray>
+    ): RelayEnvelope {
+        val targetPath = request.path?.takeIf { it.isNotBlank() } ?: "/"
+        val querySuffix = request.query?.takeIf { it.isNotBlank() }?.let { "?$it" }.orEmpty()
+        val targetUrl = "http://127.0.0.1:$DEFAULT_PORT$targetPath$querySuffix"
+
+        return try {
+            val statement = localNodeClient.prepareRequest(targetUrl) {
+                this.method = HttpMethod.parse(request.method ?: HttpMethod.Get.value)
+                request.headers.orEmpty().forEach { (key, value) ->
+                    if (!isHopByHopHeader(key) && !key.equals(HttpHeaders.Host, ignoreCase = true)) {
+                        header(key, value)
+                    }
+                }
+
+                setBody(object : io.ktor.http.content.OutgoingContent.WriteChannelContent() {
+                    override suspend fun writeTo(channel: io.ktor.utils.io.ByteWriteChannel) {
+                        for (chunk in incomingBytes) {
+                            channel.writeFully(java.nio.ByteBuffer.wrap(chunk))
+                        }
+                    }
+                })
+            }.execute()
+
+            val responseBody = statement.bodyAsChannel().readRemaining().readBytes()
+            RelayEnvelope(
+                type = "response",
+                requestId = request.requestId,
+                status = statement.status.value,
+                headers = statement.headers.flattenEntries()
+                    .filterNot { (key, _) ->
+                        isHopByHopHeader(key) || key.equals(HttpHeaders.ContentLength, ignoreCase = true)
+                    }
+                    .associate { (key, value) -> key to value },
+                bodyBase64 = responseBody.encodeBase64()
+            )
+        } catch (error: Exception) {
+            Log.e(TAG, "Local node stream proxy failed: ${error.message}", error)
+            RelayEnvelope(
+                type = "response",
+                requestId = request.requestId,
+                status = 502,
+                headers = mapOf(HttpHeaders.ContentType to "text/plain; charset=utf-8"),
+                bodyBase64 = "Relay tunnel could not pipe local stream data.".encodeToByteArray().encodeBase64(),
+                error = error.message
+            )
+        }
     }
 
     private suspend fun forwardToLocalNode(request: RelayEnvelope): RelayEnvelope {
@@ -246,8 +308,12 @@ class RelayTunnelClient(
         try {
             currentUploadStream?.close()
         } catch (_: Exception) {}
+        try {
+            currentStreamIncoming?.close()
+        } catch (_: Exception) {}
         currentUploadStream = null
         currentStreamingRequestId = null
+        currentStreamIncoming = null
     }
 
     companion object {
