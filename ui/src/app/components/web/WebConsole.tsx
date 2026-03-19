@@ -467,8 +467,9 @@ export function WebConsole() {
         formData.append("file", fileList[i]);
     }
 
+    const file = fileList[0];
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${getBaseUrl()}/api/upload?path=${encodeURIComponent(currentPath)}`);
+    xhr.open("POST", `${getBaseUrl()}/api/upload?path=${encodeURIComponent(currentPath)}&name=${encodeURIComponent(file.name)}`);
     
     const headers = getHeaders();
     if (headers.Authorization) {
@@ -500,7 +501,7 @@ export function WebConsole() {
       toast.error("Upload Failed: Connection to Node severed.");
     };
 
-    xhr.send(formData);
+    xhr.send(file);
   };
 
   const handleDownload = (file: FileNode) => {

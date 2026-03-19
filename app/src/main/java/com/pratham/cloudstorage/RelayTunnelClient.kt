@@ -16,6 +16,7 @@ import io.ktor.http.HttpMethod
 import io.ktor.util.flattenEntries
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
+import io.ktor.websocket.readBytes
 import io.ktor.utils.io.core.readBytes
 import io.ktor.utils.io.readRemaining
 import android.content.Context
@@ -50,8 +51,6 @@ class RelayTunnelClient(
 ) {
     private var currentStreamingRequestId: String? = null
     private var currentUploadStream: OutputStream? = null
-
-    private var currentStreamIncoming: kotlinx.coroutines.channels.Channel<ByteArray>? = null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val relayWebSocketUrl = relayBaseUrl.toWebSocketUrl(shareCode.uppercase().trim())
@@ -103,15 +102,24 @@ class RelayTunnelClient(
                                                         outgoing.send(Frame.Text(relayGson.toJson(response)))
                                                     }
                                                     "upload_start_stream" -> {
-                                                        currentStreamIncoming = kotlinx.coroutines.channels.Channel(kotlinx.coroutines.channels.Channel.UNLIMITED)
-                                                        scope.launch {
-                                                            val response = forwardToLocalNodeStreaming(envelope, currentStreamIncoming!!)
-                                                            outgoing.send(Frame.Text(relayGson.toJson(response)))
-                                                            currentStreamIncoming = null
+                                                        val pathStr = envelope.query?.let { q -> Regex("path=([^&]*)").find(q)?.groupValues?.get(1) }
+                                                            ?.let { java.net.URLDecoder.decode(it, "UTF-8") } ?: ""
+                                                        val nameStr = envelope.query?.let { q -> Regex("name=([^&]*)").find(q)?.groupValues?.get(1) }
+                                                            ?.let { java.net.URLDecoder.decode(it, "UTF-8") } ?: "uploaded_file"
+
+                                                        cleanupStreaming()
+                                                        val file = ensureDirectoriesAndCreateFile(rootUri, pathStr, nameStr)
+                                                        if (file != null) {
+                                                            currentUploadStream = context.contentResolver.openOutputStream(file.uri)
+                                                            currentStreamingRequestId = envelope.requestId
+                                                        } else {
+                                                            val errResponse = RelayEnvelope(type = "response", requestId = envelope.requestId, status = 500, error = "Failed to create directory path natively on Android.")
+                                                            outgoing.send(Frame.Text(relayGson.toJson(errResponse)))
                                                         }
                                                     }
                                                     "upload_end_stream" -> {
-                                                        currentStreamIncoming?.close()
+                                                        val response = handleUploadEnd(envelope)
+                                                        outgoing.send(Frame.Text(relayGson.toJson(response)))
                                                     }
                                                     else -> {
                                                         val response = forwardToLocalNode(envelope)
@@ -124,9 +132,15 @@ class RelayTunnelClient(
                                     }
                                 }
                                 is Frame.Binary -> {
-                                    val bytes = frame.data
-                                    if (bytes.isNotEmpty()) {
-                                        currentStreamIncoming?.trySend(bytes)
+                                    try {
+                                        val bytes = frame.readBytes()
+                                        if (bytes.isNotEmpty()) {
+                                            currentUploadStream?.let { out ->
+                                                out.write(bytes)
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.e("TUNNEL_DEBUG", "Failed to write binary chunk to external storage", e)
                                     }
                                 }
                                 else -> {}
@@ -152,57 +166,6 @@ class RelayTunnelClient(
         scope.cancel()
         relayClient.close()
         localNodeClient.close()
-    }
-
-    private suspend fun forwardToLocalNodeStreaming(
-        request: RelayEnvelope,
-        incomingBytes: kotlinx.coroutines.channels.ReceiveChannel<ByteArray>
-    ): RelayEnvelope {
-        val targetPath = request.path?.takeIf { it.isNotBlank() } ?: "/"
-        val querySuffix = request.query?.takeIf { it.isNotBlank() }?.let { "?$it" }.orEmpty()
-        val targetUrl = "http://127.0.0.1:$DEFAULT_PORT$targetPath$querySuffix"
-
-        return try {
-            val statement = localNodeClient.prepareRequest(targetUrl) {
-                this.method = HttpMethod.parse(request.method ?: HttpMethod.Get.value)
-                request.headers.orEmpty().forEach { (key, value) ->
-                    if (!isHopByHopHeader(key) && !key.equals(HttpHeaders.Host, ignoreCase = true)) {
-                        header(key, value)
-                    }
-                }
-
-                setBody(object : io.ktor.http.content.OutgoingContent.WriteChannelContent() {
-                    override suspend fun writeTo(channel: io.ktor.utils.io.ByteWriteChannel) {
-                        for (chunk in incomingBytes) {
-                            channel.writeFully(java.nio.ByteBuffer.wrap(chunk))
-                        }
-                    }
-                })
-            }.execute()
-
-            val responseBody = statement.bodyAsChannel().readRemaining().readBytes()
-            RelayEnvelope(
-                type = "response",
-                requestId = request.requestId,
-                status = statement.status.value,
-                headers = statement.headers.flattenEntries()
-                    .filterNot { (key, _) ->
-                        isHopByHopHeader(key) || key.equals(HttpHeaders.ContentLength, ignoreCase = true)
-                    }
-                    .associate { (key, value) -> key to value },
-                bodyBase64 = responseBody.encodeBase64()
-            )
-        } catch (error: Exception) {
-            Log.e(TAG, "Local node stream proxy failed: ${error.message}", error)
-            RelayEnvelope(
-                type = "response",
-                requestId = request.requestId,
-                status = 502,
-                headers = mapOf(HttpHeaders.ContentType to "text/plain; charset=utf-8"),
-                bodyBase64 = "Relay tunnel could not pipe local stream data.".encodeToByteArray().encodeBase64(),
-                error = error.message
-            )
-        }
     }
 
     private suspend fun forwardToLocalNode(request: RelayEnvelope): RelayEnvelope {
@@ -249,6 +212,24 @@ class RelayTunnelClient(
                 error = error.message
             )
         }
+    }
+
+    private fun ensureDirectoriesAndCreateFile(rootUri: Uri, path: String, filename: String): DocumentFile? {
+        var currentDir = DocumentFile.fromTreeUri(context, rootUri) ?: return null
+        if (path.isNotBlank() && path != "/") {
+            val segments = path.split("/").filter { it.isNotBlank() }
+            for (segment in segments) {
+                if (segment == ".." || segment == ".") continue
+                var nextDir = currentDir.findFile(segment)
+                if (nextDir == null) {
+                    nextDir = currentDir.createDirectory(segment)
+                }
+                if (nextDir == null) return null
+                currentDir = nextDir
+            }
+        }
+        currentDir.findFile(filename)?.delete()
+        return currentDir.createFile("application/octet-stream", filename)
     }
 
     private fun handleUploadStart(request: RelayEnvelope) {
@@ -308,12 +289,8 @@ class RelayTunnelClient(
         try {
             currentUploadStream?.close()
         } catch (_: Exception) {}
-        try {
-            currentStreamIncoming?.close()
-        } catch (_: Exception) {}
         currentUploadStream = null
         currentStreamingRequestId = null
-        currentStreamIncoming = null
     }
 
     companion object {
