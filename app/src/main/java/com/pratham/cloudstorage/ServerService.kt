@@ -788,15 +788,10 @@ class ServerService : Service() {
     private fun resolveSafePath(root: DocumentFile?, path: String?): DocumentFile? {
         if (root == null) return null
         if (path.isNullOrBlank() || path == "/") return root
-        val segments = path.split("/").filter { it.isNotBlank() }
         
-        var current = root
-        for (segment in segments) {
-            if (segment == "." || segment == "..") return null
-            current = current?.findFile(segment)
-            if (current == null) return null
-        }
-        return current
+        val docId = resolveSafeDocIdFast(root.uri, path) ?: return null
+        val targetUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(root.uri, docId)
+        return DocumentFile.fromTreeUri(this@ServerService, targetUri)
     }
 }
 
