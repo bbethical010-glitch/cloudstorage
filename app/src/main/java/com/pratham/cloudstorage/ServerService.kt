@@ -681,16 +681,52 @@ class ServerService : Service() {
             multipart.forEachPart { part: PartData ->
                 if (part is PartData.FileItem) {
                     val fileName = part.originalFileName ?: "uploaded_file"
-                    targetDir.findFile(fileName)?.delete()
-
                     var mime = part.contentType?.toString() ?: "application/octet-stream"
-                    // Android SAF createFile fails if mime type has parameters like "video/mp4; codecs=..."
                     mime = mime.substringBefore(";")
 
-                    val newFile = targetDir.createFile(mime, fileName)
+                    // NATIVELY QUERY AND DELETE EXISTING TO PREVENT ANDROIDX WRAPPER CRASHES
+                    try {
+                        val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
+                            targetDir.uri,
+                            android.provider.DocumentsContract.getDocumentId(targetDir.uri)
+                        )
+                        var existingUri: Uri? = null
+                        contentResolver.query(
+                            childrenUri,
+                            arrayOf(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID, android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                            null, null, null
+                        )?.use { cursor ->
+                            val idIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                            val nameIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                            while (cursor.moveToNext()) {
+                                if (cursor.getString(nameIdx) == fileName) {
+                                    val docId = cursor.getString(idIdx)
+                                    existingUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(targetDir.uri, docId)
+                                    break
+                                }
+                            }
+                        }
+                        if (existingUri != null) {
+                            android.provider.DocumentsContract.deleteDocument(contentResolver, existingUri!!)
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
 
-                    if (newFile != null) {
-                        contentResolver.openOutputStream(newFile.uri)?.use { output ->
+                    val newFileUri = try {
+                        android.provider.DocumentsContract.createDocument(
+                            contentResolver,
+                            targetDir.uri,
+                            mime,
+                            fileName
+                        )
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        null
+                    }
+
+                    if (newFileUri != null) {
+                        contentResolver.openOutputStream(newFileUri)?.use { output ->
                             val input = part.provider()
                             try {
                                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
