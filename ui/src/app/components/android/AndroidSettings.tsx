@@ -62,8 +62,10 @@ export function AndroidSettings() {
     localStorage.setItem('appSettings', JSON.stringify(settings));
     if (settings.theme === 'Light') {
       document.documentElement.classList.remove('dark');
+      document.documentElement.classList.add('light');
     } else {
       document.documentElement.classList.add('dark');
+      document.documentElement.classList.remove('light');
     }
   }, [settings]);
 
@@ -96,7 +98,6 @@ export function AndroidSettings() {
       title: "General",
       items: [
         { icon: Monitor, label: "App Theme", value: settings.theme, onClick: () => toggleSetting('theme', ['Dark', 'Light']) },
-        { icon: Globe, label: "Language", value: settings.language, onClick: () => toggleSetting('language', ['English', 'Spanish', 'French']) },
         { icon: ActivityIcon, label: "Background Service Mode", value: settings.bgMode, onClick: () => toggleSetting('bgMode', ['Optimized', 'Unrestricted']) },
         { icon: Bell, label: "Notification Preferences", value: settings.notifications, onClick: () => toggleSetting('notifications', ['All Alerts', 'None']) },
       ]
@@ -111,15 +112,21 @@ export function AndroidSettings() {
           onClick: () => androidBridge.selectFolder()
         },
         { icon: Shield, label: "Storage Permissions", value: "Granted" },
-        { icon: Clock, label: "Sync Logs", value: "2 days ago" },
+        { icon: Clock, label: "Sync Logs", value: appState?.node?.health?.io === 'Active' ? 'Syncing...' : 'Up to date' },
       ]
     },
     {
       title: "Security",
       items: [
-        { icon: Shield, label: "Security Settings", value: "Standard" },
-        { icon: Shield, label: "Node Visibility", value: "Encrypted" },
-        { icon: Share2, label: "Invite Friends", onClick: () => androidBridge.shareInvite() },
+        { icon: Shield, label: "Security Settings", value: "Standard", onClick: () => toast.info("Advanced Security modules are under construction") },
+        { icon: Shield, label: "Node Visibility", value: "Encrypted", onClick: () => toast.info("Custom Node Visibility is under construction") },
+        { icon: Share2, label: "Invite Friends", onClick: () => {
+             if(appState?.node?.tunnelStatus !== 'Connected') {
+                toast.error("Tunnel Offline. Access invitations disabled.");
+                return;
+             }
+             androidBridge.shareInvite();
+        }},
       ]
     }
   ];
@@ -274,15 +281,7 @@ export function AndroidSettings() {
         </Button>
       </div>
 
-      {/* Bottom Nav */}
-      <div className="fixed bottom-6 left-6 right-6 h-20 bg-[#111827]/80 backdrop-blur-xl border border-[#374151] rounded-[2.5rem] flex items-center justify-around shadow-2xl z-50">
-        <Link to="/" className="p-4 text-[#9CA3AF] hover:text-[#E5E7EB] flex flex-col items-center gap-1">
-          <ActivityIcon className="w-6 h-6" />
-        </Link>
-        <Link to="/browser" className="p-4 text-[#9CA3AF] hover:text-[#E5E7EB] flex flex-col items-center gap-1">
-          <FolderOpen className="w-6 h-6" />
-        </Link>
-      </div>
+      <div className="w-full flex justify-center pb-8 pt-8 opacity-50"><span className="text-[10px] text-[#4B5563] font-mono uppercase tracking-widest">Easy Storage Cloud v1.0.0</span></div>
     </div>
   );
 }

@@ -141,6 +141,11 @@ export function AndroidBrowser() {
         clearInterval(interval);
         setUploadProgress(null);
         toast.success(`Complete: ${file.name}`);
+        
+        const appSet = JSON.parse(localStorage.getItem('appSettings') || '{}');
+        if (appSet.notifications !== 'None') {
+           androidBridge.showNotification("Upload Complete", file.name);
+        }
       } else {
         setUploadProgress(prev => prev ? { ...prev, progress: Math.min(prog, 100) } : null);
       }
@@ -173,17 +178,27 @@ export function AndroidBrowser() {
       const parentUrl = appState?.node?.relayBaseUrl || "http://localhost:8080";
       const actualPath = currentPath === "/" ? "" : currentPath;
       
+      const formData = new URLSearchParams();
+      formData.append("name", name);
+      formData.append("path", actualPath);
+      
       const res = await fetch(`${parentUrl}/api/folder`, {
         method: "POST",
         headers: { 
-          "Content-Type": "application/json",
+          "Content-Type": "application/x-www-form-urlencoded",
           "Authorization": `Bearer ${appState?.node?.shareCode}`
         },
-        body: JSON.stringify({ name, path: actualPath })
+        body: formData.toString()
       });
       
       if (!res.ok) throw new Error("Failed to create folder");
       toast.success("Folder created");
+      
+      const appSet = JSON.parse(localStorage.getItem('appSettings') || '{}');
+      if (appSet.notifications !== 'None') {
+         androidBridge.showNotification("Folder Created", name);
+      }
+      
       fetchFiles(currentPath);
     } catch (err: any) {
       toast.error(err.message || "Failed to create folder");
@@ -427,15 +442,7 @@ export function AndroidBrowser() {
         )}
       </AnimatePresence>
 
-      {/* Bottom Nav */}
-      <div className="fixed bottom-6 left-6 right-6 h-20 bg-[#111827]/90 backdrop-blur-2xl border border-[#374151] rounded-[2.5rem] flex items-center justify-around shadow-2xl z-50">
-        <Link to="/" className="p-4 text-[#9CA3AF] hover:text-[#2563EB] transition-colors">
-          <Activity className="w-6 h-6" />
-        </Link>
-        <Link to="/browser" className="p-4 text-[#2563EB] flex flex-col items-center gap-1">
-          <FolderOpen className="w-6 h-6" />
-        </Link>
-      </div>
+      {/* Bottom Removed for Full Scroll */}
 
       {/* File Details Overlay */}
       <AnimatePresence>

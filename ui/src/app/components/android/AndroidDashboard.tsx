@@ -37,6 +37,11 @@ export function AndroidDashboard() {
     }
     androidBridge.toggleNode();
     toast.info(isOnline ? "Shutting down engine..." : "Launching engine...");
+    
+    const appSet = JSON.parse(localStorage.getItem('appSettings') || '{}');
+    if (appSet.notifications !== 'None') {
+       androidBridge.showNotification("Node Engine", isOnline ? "Node Stopped natively" : "Node Started independently");
+    }
   };
 
   const shareCode = appState?.node?.shareCode || "----";
@@ -68,12 +73,19 @@ export function AndroidDashboard() {
 
           <div className="mt-8 grid grid-cols-2 gap-4 w-full">
             <Button 
-              onClick={() => androidBridge.shareInvite()} 
+              onClick={() => {
+                 if(appState?.node?.tunnelStatus !== 'Connected') {
+                    toast.error("Waiting for Cloud Tunnel connection...");
+                    return;
+                 }
+                 androidBridge.shareInvite();
+              }} 
+              disabled={appState?.node?.tunnelStatus !== 'Connected'}
               variant="outline"
-              className="w-full bg-[#1F2937]/50 hover:bg-[#1F2937] border-transparent rounded-2xl h-12 text-[13px] font-medium flex gap-2 text-[#9CA3AF] justify-start px-4 transition-colors truncate"
+              className={`w-full border-transparent rounded-2xl h-12 text-[13px] font-medium flex gap-2 justify-start px-4 transition-colors truncate ${appState?.node?.tunnelStatus === 'Connected' ? 'bg-[#1F2937]/80 hover:bg-[#1F2937] text-white' : 'bg-[#111827] opacity-60 text-[#6B7280]'}`}
             >
-              <Share2 className="w-4 h-4 text-[#A855F7] shrink-0" />
-              <span className="truncate">{appState?.node?.tunnelStatus === 'Connected' ? 'Share Tunnel' : 'Waiting for tunnel...'}</span>
+              <Share2 className={`w-4 h-4 shrink-0 ${appState?.node?.tunnelStatus === 'Connected' ? 'text-[#A855F7]' : 'text-[#4B5563]'}`} />
+              <span className="truncate">{appState?.node?.tunnelStatus === 'Connected' ? 'Share Tunnel Access' : 'Cloud Offline'}</span>
             </Button>
             <Button 
               onClick={() => androidBridge.copyToClipboard(shareCode, "ID Copied")} 
@@ -176,19 +188,7 @@ export function AndroidDashboard() {
         </div>
       </div>
 
-      {/* Bottom Navigation */}
-      <div className="fixed bottom-6 left-6 right-6">
-        <Card className="bg-[#111827]/90 backdrop-blur-md border-[#1F2937] rounded-full p-2 flex justify-around items-center">
-          <Link to="/dashboard" className="flex-1 flex justify-center py-2">
-            <svg className="w-6 h-6 text-[#2563EB]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
-            </svg>
-          </Link>
-          <Link to="/browser" className="flex-1 flex justify-center py-2 text-[#6B7280] hover:text-[#9CA3AF] transition-colors">
-            <FolderOpen className="w-6 h-6" />
-          </Link>
-        </Card>
-      </div>
+      {/* Bottom Removed for Full Scroll */}
     </div>
   );
 }

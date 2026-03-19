@@ -121,6 +121,19 @@
   --color-sidebar-ring: var(--sidebar-ring);
 }
 
+/* Mathematical Light Theme Hack */
+html.light {
+  filter: invert(1) hue-rotate(180deg);
+  background-color: white !important;
+}
+
+html.light img, 
+html.light video,
+html.light iframe,
+html.light svg {
+  filter: invert(1) hue-rotate(180deg);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

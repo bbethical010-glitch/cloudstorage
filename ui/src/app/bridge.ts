@@ -51,6 +51,7 @@ declare global {
       copyToClipboard(text: string, toast: string): void;
       updateRelayBaseUrl(url: string): void;
       scanDocument(): void;
+      showNotification(title: string, message: string): void;
     };
     updateWebState?: (stateJson: string) => void;
   }
@@ -92,6 +93,10 @@ export const androidBridge = {
     if (window.Android?.scanDocument) window.Android.scanDocument();
   },
   
+  showNotification: (title: string, message: string) => {
+    if (window.Android?.showNotification) window.Android.showNotification(title, message);
+  },
+
   isAvailable: () => {
     return Capacitor.isNativePlatform();
   }

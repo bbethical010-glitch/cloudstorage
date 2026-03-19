@@ -24,6 +24,7 @@ import io.ktor.server.response.respond
 import io.ktor.server.response.respondOutputStream
 import io.ktor.server.response.respondRedirect
 import io.ktor.server.response.respondText
+import io.ktor.server.response.header
 import io.ktor.server.application.install
 import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.http.HttpMethod
@@ -125,7 +126,12 @@ class ServerService : Service() {
                     allowMethod(HttpMethod.Post)
                     allowHeader(io.ktor.http.HttpHeaders.Authorization)
                     allowHeader(io.ktor.http.HttpHeaders.ContentType)
+                    allowHeader(io.ktor.http.HttpHeaders.Range)
+                    allowHeader(io.ktor.http.HttpHeaders.AcceptRanges)
                     allowHeader("pwd")
+                    exposeHeader(io.ktor.http.HttpHeaders.ContentLength)
+                    exposeHeader(io.ktor.http.HttpHeaders.ContentRange)
+                    exposeHeader(io.ktor.http.HttpHeaders.AcceptRanges)
                     anyHost() // Allow Web Console origin
                 }
 
@@ -431,12 +437,46 @@ class ServerService : Service() {
 
                             if (targetFile != null && targetFile.canRead() && !targetFile.isDirectory) {
                                 val mimeType = contentResolver.getType(targetFile.uri) ?: "application/octet-stream"
-                                call.respondOutputStream(
-                                    contentType = ContentType.parse(mimeType),
-                                    status = HttpStatusCode.OK
-                                ) {
-                                    contentResolver.openInputStream(targetFile.uri)?.use { input ->
-                                        input.copyTo(this)
+                                val fileLength = targetFile.length()
+
+                                val rangeHeader = call.request.headers[io.ktor.http.HttpHeaders.Range]
+                                if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+                                    val rangeTrimmed = rangeHeader.removePrefix("bytes=")
+                                    val parts = rangeTrimmed.split("-")
+                                    val start = parts.getOrNull(0)?.toLongOrNull() ?: 0L
+                                    val endStr = parts.getOrNull(1)
+                                    val end = if (!endStr.isNullOrEmpty()) endStr.toLong() else (fileLength - 1)
+                                    val contentLength = end - start + 1
+
+                                    call.response.header(io.ktor.http.HttpHeaders.ContentRange, "bytes $start-$end/$fileLength")
+                                    call.response.header(io.ktor.http.HttpHeaders.AcceptRanges, "bytes")
+                                    call.response.header(io.ktor.http.HttpHeaders.ContentLength, contentLength.toString())
+
+                                    call.respondOutputStream(
+                                        contentType = ContentType.parse(mimeType),
+                                        status = HttpStatusCode.PartialContent
+                                    ) {
+                                        contentResolver.openInputStream(targetFile.uri)?.use { input ->
+                                            if (start > 0) input.skip(start)
+                                            val buffer = ByteArray(8192)
+                                            var bytesRead: Int = 0
+                                            var bytesToRead = contentLength
+                                            while (bytesToRead > 0 && input.read(buffer, 0, minOf(buffer.size.toLong(), bytesToRead).toInt()).also { bytesRead = it } != -1) {
+                                                this.write(buffer, 0, bytesRead)
+                                                bytesToRead -= bytesRead
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    call.response.header(io.ktor.http.HttpHeaders.AcceptRanges, "bytes")
+                                    call.response.header(io.ktor.http.HttpHeaders.ContentLength, fileLength.toString())
+                                    call.respondOutputStream(
+                                        contentType = ContentType.parse(mimeType),
+                                        status = HttpStatusCode.OK
+                                    ) {
+                                        contentResolver.openInputStream(targetFile.uri)?.use { input ->
+                                            input.copyTo(this)
+                                        }
                                     }
                                 }
                             } else {
@@ -529,9 +569,8 @@ class ServerService : Service() {
                                 val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
                                 val targetDir = resolveSafePath(root, path) ?: return@post call.respond(HttpStatusCode.NotFound)
                                 call.handleStreamingUpload(targetDir)
-                                call.respond(HttpStatusCode.OK)
                             } catch (e: Exception) {
-                                call.respond(HttpStatusCode.InternalServerError, "Upload failed: ${e.message}")
+                                call.respond(HttpStatusCode.InternalServerError, "Upload outer failed: ${e.stackTraceToString()}")
                             }
                         }
                     }
@@ -676,7 +715,7 @@ class ServerService : Service() {
             respond(HttpStatusCode.OK)
         } catch (e: Exception) {
             e.printStackTrace()
-            respond(HttpStatusCode.InternalServerError, "Upload error: ${e.message}")
+            respond(HttpStatusCode.InternalServerError, "Upload inner error: ${e.stackTraceToString()}")
         }
     }
 
@@ -712,17 +751,16 @@ class ServerService : Service() {
 
     private fun resolveSafePath(root: DocumentFile?, path: String?): DocumentFile? {
         if (root == null) return null
-        val docId = resolveSafeDocIdFast(root.uri, path) ?: return null
-        val uri = android.provider.DocumentsContract.buildDocumentUriUsingTree(root.uri, docId)
-        val file = DocumentFile.fromSingleUri(this@ServerService, uri)
-        if (file?.isFile == false && file.isDirectory == false) {
-           if (docId == android.provider.DocumentsContract.getTreeDocumentId(root.uri)) {
-               return root
-           }
-           val treeUriFallback = android.provider.DocumentsContract.buildTreeDocumentUri(root.uri.authority, docId)
-           return DocumentFile.fromTreeUri(this@ServerService, treeUriFallback) ?: file
+        if (path.isNullOrBlank() || path == "/") return root
+        val segments = path.split("/").filter { it.isNotBlank() }
+        
+        var current = root
+        for (segment in segments) {
+            if (segment == "." || segment == "..") return null
+            current = current?.findFile(segment)
+            if (current == null) return null
         }
-        return file
+        return current
     }
 }
 

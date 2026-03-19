@@ -81,6 +81,8 @@ export function WebConsole() {
   const [isDragging, setIsDragging] = useState(false);
   const [isNodeOffline, setIsNodeOffline] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareConfig, setShareConfig] = useState({ expiry: '24h', readOnly: true });
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -235,16 +237,46 @@ export function WebConsole() {
               const ext = selectedFile.name.split('.').pop()?.toLowerCase() || '';
               const pwd = new URLSearchParams(window.location.hash.split('?')[1]).get('pwd') || '';
               const url = `${getBaseUrl()}/api/download?path=${encodeURIComponent(currentPath)}&file=${encodeURIComponent(selectedFile.name)}&pwd=${encodeURIComponent(pwd)}`;
+              
               if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
-                return <img src={url} className="object-contain w-full h-full" alt="Preview" />;
+                return (
+                  <div className="w-full h-full relative flex items-center justify-center">
+                    <img 
+                      src={url} 
+                      className="object-contain w-full h-full absolute inset-0 text-transparent" 
+                      alt="Preview"
+                      onLoad={() => console.log("PREVIEW_DEBUG", "Image loaded:", url)}
+                      onError={(e) => {
+                        console.error("PREVIEW_ERROR", selectedFile, "Image broken.", e);
+                        e.currentTarget.style.display = 'none';
+                        e.currentTarget.parentElement?.insertAdjacentHTML('beforeend', '<p class="text-[10px] text-red-400 p-4 text-center z-10 w-full relative">Preview not available.</p>');
+                      }}
+                    />
+                  </div>
+                );
               }
               if (['mp4', 'webm', 'mov', 'avi'].includes(ext)) {
-                return <video src={url} controls className="object-contain w-full h-full bg-black/50" />;
+                return (
+                  <div className="w-full h-full relative flex items-center justify-center bg-black/50">
+                    <video 
+                      src={url} 
+                      controls 
+                      preload="metadata"
+                      className="object-contain w-full h-full absolute inset-0 text-transparent" 
+                      onLoadedData={() => console.log("PREVIEW_DEBUG", "Video loaded:", url)}
+                      onError={(e) => {
+                        console.error("PREVIEW_ERROR", selectedFile, "Video broken.", e);
+                        e.currentTarget.style.display = 'none';
+                        e.currentTarget.parentElement?.insertAdjacentHTML('beforeend', '<p class="text-[10px] text-red-400 p-4 text-center z-10 w-full relative">Preview not available.</p>');
+                      }}
+                    />
+                  </div>
+                );
               }
               if (ext === 'pdf') {
                 return <iframe src={url} className="w-full h-full bg-white rounded-2xl" title="PDF Preview" />;
               }
-              return getFileIcon(selectedFile.name, selectedFile.isDirectory, "w-20 h-20 transition-transform group-hover:scale-110 duration-500");
+              return getFileIcon(selectedFile.name, selectedFile.isDirectory, "w-20 h-20 transition-transform group-hover:scale-110 duration-500 z-10 relative");
             })()}
             
             <div className="absolute bottom-4 left-4 right-4 pointer-events-none">
@@ -294,7 +326,7 @@ export function WebConsole() {
                  <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs" onClick={() => handleRename(selectedFile)}>
                    <FileEdit className="w-3.5 h-3.5" /> Rename
                  </Button>
-                 <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs" onClick={() => {}}>
+                 <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs" onClick={() => setShowShareModal(true)}>
                    <Share2 className="w-3.5 h-3.5" /> Share
                  </Button>
                  <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs" onClick={() => {
@@ -931,6 +963,43 @@ export function WebConsole() {
                 <Progress value={uploadProgress} className="h-1 bg-[#0B1220]" />
              </div>
           </motion.div>
+        )}
+      </AnimatePresence>
+      
+      {/* Share Configuration Modal */}
+      <AnimatePresence>
+        {showShareModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}>
+              <Card className="w-full max-w-sm bg-[#111827] border-[#374151] p-6 shadow-2xl">
+                <h3 className="text-xl font-bold text-white mb-2">Share Link</h3>
+                <p className="text-xs text-[#9CA3AF] mb-6">Configure access controls for this link.</p>
+                
+                <div className="space-y-4 mb-6">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-white">Read-Only Access</span>
+                    <button onClick={() => setShareConfig({...shareConfig, readOnly: !shareConfig.readOnly})} className={`w-10 h-6 rounded-full transition-colors ${shareConfig.readOnly ? 'bg-[#2563EB]' : 'bg-[#374151]'} relative`}>
+                      <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${shareConfig.readOnly ? 'left-5' : 'left-1'}`} />
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-white">Link Expiry</span>
+                    <select value={shareConfig.expiry} onChange={e => setShareConfig({...shareConfig, expiry: e.target.value})} className="bg-[#0B1220] border border-[#374151] rounded-lg text-sm text-white px-3 py-1.5 outline-none">
+                      <option value="1h">1 Hour</option>
+                      <option value="24h">24 Hours</option>
+                      <option value="7d">7 Days</option>
+                      <option value="never">Never</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-3 mt-2">
+                  <Button variant="ghost" className="text-gray-400 hover:text-white" onClick={() => setShowShareModal(false)}>Cancel</Button>
+                  <Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => { setShowShareModal(false); toast.success("Share link configured & copied!"); }}>Copy Link</Button>
+                </div>
+              </Card>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>

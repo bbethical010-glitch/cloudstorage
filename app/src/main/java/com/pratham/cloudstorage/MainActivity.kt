@@ -313,6 +313,11 @@ class MainActivity : ComponentActivity() {
         fun scanDocument() {
             runOnUiThread { this@MainActivity.scanDocument() }
         }
+
+        @JavascriptInterface
+        fun showNotification(title: String, message: String) {
+            runOnUiThread { this@MainActivity.showNotification(title, message) }
+        }
     }
 
     private fun updateWebState() {
@@ -442,6 +447,24 @@ class MainActivity : ComponentActivity() {
         } catch (e: Exception) {
             null
         }
+    }
+
+    private fun showNotification(title: String, message: String) {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = android.app.NotificationChannel(
+                "cloud_storage_alerts",
+                "Cloud Storage Alerts",
+                android.app.NotificationManager.IMPORTANCE_DEFAULT
+            )
+            manager.createNotificationChannel(channel)
+        }
+        val builder = androidx.core.app.NotificationCompat.Builder(this, "cloud_storage_alerts")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setAutoCancel(true)
+        manager.notify((System.currentTimeMillis() % Integer.MAX_VALUE).toInt(), builder.build())
     }
 
     private fun selectFolder() {
