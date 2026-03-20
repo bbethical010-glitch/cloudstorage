@@ -141,17 +141,26 @@ class RelayTunnelClient(
                                                             val targetDoc = ensureResolvedPath(rootUri, combinedPath)
                                                             if (targetDoc != null && envelope.requestId != null) {
                                                                 val isChunk0 = chunkIndexStr == null || chunkIndexStr == "0"
-                                                                val existingFile = targetDoc.findFile(finalName)
+                                                                val existingFile = findFileReliable(targetDoc, finalName)
                                                                 val fileUri = if (isChunk0) {
                                                                     existingFile?.delete()
-                                                                    targetDoc.createFile("application/octet-stream", finalName)?.uri
+                                                                    var newFileUri: Uri? = null
+                                                                    try {
+                                                                        val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(finalName.substringAfterLast('.', "")) ?: "application/octet-stream"
+                                                                        newFileUri = targetDoc.createFile(mimeType, finalName)?.uri ?: throw Exception("Null URI")
+                                                                    } catch (e: Exception) {
+                                                                        val fallbackName = sanitizeFilename(finalName)
+                                                                        val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(fallbackName.substringAfterLast('.', "")) ?: "application/octet-stream"
+                                                                        newFileUri = targetDoc.createFile(mimeType, fallbackName)?.uri
+                                                                    }
+                                                                    newFileUri
                                                                 } else {
                                                                     existingFile?.uri
                                                                 }
 
                                                                 if (fileUri != null) {
                                                                     val mode = if (isChunk0) "w" else "wa"
-                                                                    activeUploadStreams[envelope.requestId] = context.contentResolver.openOutputStream(fileUri, mode)!!
+                                                                    activeUploadStreams[envelope.requestId] = openOutputStreamWithRetry(context.contentResolver, fileUri, mode)!!
                                                                     Log.d("ChunkDiag", "[TUNNEL CHUNK DIAGNOSTIC] Assertion: Write Target -> $fileUri")
                                                                 } else {
                                                                     val errResponse = RelayEnvelope(type = "response", requestId = envelope.requestId, status = 404, error = "{\"error\":\"missing_file\",\"segment\":\"$finalName\",\"fullPath\":\"$relativePathStr\"}")
@@ -312,11 +321,46 @@ class RelayTunnelClient(
             val segments = path.split("/").filter { it.isNotBlank() }
             for (segment in segments) {
                 if (segment == ".." || segment == ".") continue
-                val nextDir = currentDir.findFile(segment) ?: return null
+                val safeSegment = sanitizeFilename(segment)
+                // Implement auto-healing resolution instead of hard failing with 409 Request Error
+                val nextDir = findFileReliable(currentDir, safeSegment) ?: currentDir.createDirectory(safeSegment)
+                if (nextDir == null) return null
                 currentDir = nextDir
             }
         }
         return currentDir
+    }
+
+    private fun findFileReliable(parent: DocumentFile, name: String): DocumentFile? {
+        parent.findFile(name)?.let { return it }
+        return parent.listFiles().firstOrNull { 
+            it.name?.equals(name, ignoreCase = false) == true 
+        }
+    }
+
+    private fun openOutputStreamWithRetry(
+        contentResolver: android.content.ContentResolver, 
+        uri: android.net.Uri, 
+        mode: String,
+        retries: Int = 3
+    ): java.io.OutputStream? {
+        repeat(retries) { attempt ->
+            val stream = contentResolver.openOutputStream(uri, mode)
+            if (stream != null) return stream
+            Log.w(TAG, "openOutputStream returned null, attempt ${attempt + 1}")
+            Thread.sleep(100L * (attempt + 1))
+        }
+        return context.contentResolver.openOutputStream(uri, mode)
+    }
+
+    private fun sanitizeFilename(name: String): String {
+        return name
+            .replace(' ', '_')
+            .replace(Regex("[()\\[\\]]"), "")
+            .replace(Regex("\\.{2,}"), ".")
+            .replace(Regex("[^a-zA-Z0-9._\\-]"), "_")
+            .trimEnd('.')
+            .ifEmpty { "unnamed_file" }
     }
 
     private fun handleUploadStart(request: RelayEnvelope) {
