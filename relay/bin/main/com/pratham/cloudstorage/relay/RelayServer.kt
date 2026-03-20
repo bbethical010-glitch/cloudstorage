@@ -205,7 +205,8 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
         val agent = registry.getAgent(shareCode)
         if (agent == null) {
             respondText(
-                "No active phone node connected for share code $shareCode. Is the Easy Storage app running?",
+                "{\"error\":\"agent_offline\"}",
+                ContentType.Application.Json,
                 status = HttpStatusCode.ServiceUnavailable
             )
             return
@@ -213,7 +214,9 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
 
         val requestId = UUID.randomUUID().toString()
 
-        val isUpload = request.path().contains("/api/upload") || request.path().contains("/api/folder_")
+        // Only proxy actual binary file streams through the direct-to-disk tunnel.
+        // endpoints like /api/folder_manifest and /api/folder_complete must route through standard HTTP.
+        val isUpload = request.path().contains("/api/upload") || request.path().contains("/upload")
         val contentLength = request.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
         val maxBodyBytes = 50L * 1024 * 1024 // 50 MB for non-streaming
         
@@ -307,8 +310,9 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
             if (relayResponse != null) {
                 if (relayResponse.subType == "download_start_stream") {
                     val status = relayResponse.status?.let(HttpStatusCode::fromValue) ?: HttpStatusCode.OK
-                    val contentType = relayResponse.headers?.get(HttpHeaders.ContentType)?.let { ContentType.parse(it) }
-                    val contentLength = relayResponse.headers?.get(HttpHeaders.ContentLength)?.toLongOrNull()
+                    val contentTypeStr = relayResponse.headers?.entries?.firstOrNull { it.key.equals(HttpHeaders.ContentType, true) }?.value
+                    val contentType = contentTypeStr?.let { ContentType.parse(it) }
+                    val contentLength = relayResponse.headers?.entries?.firstOrNull { it.key.equals(HttpHeaders.ContentLength, true) }?.value?.toLongOrNull()
 
                     relayResponse.headers.orEmpty()
                         .filterNot { (k, _) -> 
@@ -409,7 +413,7 @@ private class RelayRegistry {
 
         return try {
             agent.send(request)
-            withTimeout(45_000) { deferred.await() }
+            withTimeout(60_000) { deferred.await() }
         } catch (e: TimeoutCancellationException) {
             null
         } finally {

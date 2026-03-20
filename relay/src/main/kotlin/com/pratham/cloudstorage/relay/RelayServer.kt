@@ -205,7 +205,8 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
         val agent = registry.getAgent(shareCode)
         if (agent == null) {
             respondText(
-                "No active phone node connected for share code $shareCode. Is the Easy Storage app running?",
+                "{\"error\":\"agent_offline\"}",
+                ContentType.Application.Json,
                 status = HttpStatusCode.ServiceUnavailable
             )
             return
@@ -412,7 +413,7 @@ private class RelayRegistry {
 
         return try {
             agent.send(request)
-            withTimeout(45_000) { deferred.await() }
+            withTimeout(60_000) { deferred.await() }
         } catch (e: TimeoutCancellationException) {
             null
         } finally {

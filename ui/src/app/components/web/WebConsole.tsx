@@ -506,6 +506,21 @@ export function WebConsole() {
     setFolderProgress({ current: 0, total: files.length });
     setFailedUploads([]);
 
+    // Pre-flight check
+    try {
+      const statusRes = await fetch(`${getBaseUrl()}/api/status`, {
+        method: 'GET',
+        headers: getHeaders()
+      });
+      if (!statusRes.ok) {
+        throw new Error();
+      }
+    } catch {
+      setIsUploading(false);
+      toast.error("Android Node is offline. Please open the Easy Storage app on your phone and ensure it is running.");
+      return;
+    }
+
     const manifest = files.filter(f => f.webkitRelativePath && f.webkitRelativePath.includes('/')).map(f => {
       const CHUNK_SIZE = 5 * 1024 * 1024;
       return {
@@ -523,7 +538,10 @@ export function WebConsole() {
           headers: { ...getHeaders(), 'Content-Type': 'application/json' },
           body: JSON.stringify(manifest)
         });
-        if (!res.ok) throw new Error("Failed to pre-create directory tree");
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || "Failed to pre-create directory tree");
+        }
       } catch (e: any) {
         setIsUploading(false);
         toast.error(`Folder manifest creation failed: ${e.message}`);

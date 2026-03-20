@@ -566,10 +566,24 @@ class ServerService : Service() {
                             if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
                             try {
                                 val basePath = call.request.queryParameters["path"] ?: ""
-                                val root = DocumentFile.fromTreeUri(this@ServerService, rootUri) ?: return@post call.respond(HttpStatusCode.NotFound)
-                                val baseDir = ensureSafePathFast(rootUri, basePath) ?: return@post call.respond(HttpStatusCode.NotFound)
+                                val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
+                                if (root == null) {
+                                    call.respondText("{\"error\":\"storage_unavailable\"}", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
+                                    return@post
+                                }
+                                val baseDir = ensureSafePathFast(rootUri, basePath)
+                                if (baseDir == null) {
+                                    call.respondText("{\"error\":\"storage_unavailable\"}", ContentType.Application.Json, HttpStatusCode.NotFound)
+                                    return@post
+                                }
 
                                 val jsonStr: String = call.receiveText()
+                                if (jsonStr.isBlank() || !jsonStr.startsWith("[")) {
+                                    android.util.Log.e("ServerService", "Empty or malformed JSON received for folder manifest: $jsonStr")
+                                    call.respondText("{\"error\":\"empty_or_malformed_manifest\"}", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                                    return@post
+                                }
+
                                 val jsonArray = org.json.JSONArray(jsonStr)
                                 var directoriesCreated = 0
 
@@ -581,39 +595,38 @@ class ServerService : Service() {
                                     val relativePath = item.optString("relativePath", "")
                                     if (relativePath.isBlank() || !relativePath.contains("/")) continue
                                     
-                                    try {
-                                        val cleanPath = sanitizeRelativePath(relativePath)
-                                        val dirPath = cleanPath.substringBeforeLast("/")
-                                        val dirSegments = dirPath.split("/").filter { it.isNotBlank() }
+                                    val cleanPath = sanitizeRelativePath(relativePath)
+                                    val dirPath = cleanPath.substringBeforeLast("/")
+                                    val dirSegments = dirPath.split("/").filter { it.isNotBlank() }
 
-                                        var currentDir = baseDir
-                                        var currentPath = ""
+                                    var currentDir: DocumentFile = baseDir!!
+                                    var currentPath = ""
 
-                                        for (segment in dirSegments) {
-                                            currentPath = if (currentPath.isEmpty()) segment else "$currentPath/$segment"
-                                            if (dirCache.containsKey(currentPath)) {
-                                                currentDir = dirCache[currentPath]!!
-                                            } else {
-                                                var nextDir = currentDir.findFile(segment)
+                                    for (segment in dirSegments) {
+                                        currentPath = if (currentPath.isEmpty()) segment else "$currentPath/$segment"
+                                        if (dirCache.containsKey(currentPath)) {
+                                            currentDir = dirCache[currentPath]!!
+                                        } else {
+                                            var nextDir = currentDir.findFile(segment)
+                                            if (nextDir == null) {
+                                                nextDir = currentDir.createDirectory(segment)
                                                 if (nextDir == null) {
-                                                    nextDir = currentDir.createDirectory(segment)
-                                                    directoriesCreated++
+                                                    throw Exception("Failed to create directory at segment: $segment")
                                                 }
-                                                if (nextDir != null) {
-                                                    currentDir = nextDir
-                                                    dirCache[currentPath] = nextDir
-                                                } else {
-                                                    break
-                                                }
+                                                directoriesCreated++
                                             }
+                                            currentDir = nextDir!!
+                                            dirCache[currentPath] = nextDir!!
                                         }
-                                    } catch (e: IllegalArgumentException) {
-                                        return@post call.respond(HttpStatusCode.BadRequest, "Invalid path traversal")
                                     }
                                 }
                                 call.respondText("{\"directoriesCreated\": $directoriesCreated}", ContentType.Application.Json)
+                            } catch (e: IllegalArgumentException) {
+                                android.util.Log.e("ServerService", "Invalid path traversal in manifest", e)
+                                call.respondText("{\"error\":\"invalid_path_traversal\"}", ContentType.Application.Json, HttpStatusCode.BadRequest)
                             } catch (e: Exception) {
-                                call.respond(HttpStatusCode.InternalServerError, e.stackTraceToString())
+                                android.util.Log.e("ServerService", "Folder manifest processing failed", e)
+                                call.respondText("{\"error\":\"${e.message?.replace("\"", "\\\"")}\"}", ContentType.Application.Json, HttpStatusCode.InternalServerError)
                             }
                         }
 
@@ -775,7 +788,7 @@ class ServerService : Service() {
                                     call.respond(HttpStatusCode.InternalServerError, "Failed to resolve file: $finalFileName")
                                 }
                             } catch (e: Exception) {
-                                call.respond(HttpStatusCode.InternalServerError, "Upload failed: ${e.stackTraceToString()}")
+                                call.respond(HttpStatusCode.InternalServerError, e.stackTraceToString())
                             }
                         }
                     }

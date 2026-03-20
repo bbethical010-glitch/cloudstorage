@@ -19,6 +19,8 @@ import io.ktor.websocket.readText
 import io.ktor.websocket.readBytes
 import io.ktor.utils.io.core.readBytes
 import io.ktor.utils.io.readRemaining
+import io.ktor.http.content.ByteArrayContent
+import io.ktor.http.ContentType
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
@@ -182,7 +184,12 @@ class RelayTunnelClient(
 
                 request.bodyBase64.decodeBase64()?.let { body ->
                     if (body.isNotEmpty()) {
-                        setBody(body)
+                        val contentTypeStr = request.headers?.entries?.firstOrNull { it.key.equals(HttpHeaders.ContentType, true) }?.value
+                        if (contentTypeStr != null) {
+                            setBody(ByteArrayContent(body, ContentType.parse(contentTypeStr)))
+                        } else {
+                            setBody(body)
+                        }
                     }
                 }
             }.execute { statement ->
