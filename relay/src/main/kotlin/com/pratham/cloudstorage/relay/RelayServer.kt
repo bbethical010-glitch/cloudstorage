@@ -104,6 +104,18 @@ fun Application.relayModule() {
 
             registry.register(shareCode, this)
             sendEnvelope(RelayEnvelope(type = "connected", shareCode = shareCode))
+            
+            val pingJob = kotlinx.coroutines.launch {
+                while (kotlinx.coroutines.isActive) {
+                    kotlinx.coroutines.delay(30_000)
+                    try {
+                        send(Frame.Ping(ByteArray(0)))
+                    } catch (e: Exception) {
+                        println("Relay: Ping failed, connection likely dead: ${e.message}")
+                        break
+                    }
+                }
+            }
 
             try {
                 for (frame in incoming) {
@@ -132,8 +144,11 @@ fun Application.relayModule() {
                         else -> {}
                     }
                 }
+                }
             } finally {
+                pingJob.cancel()
                 registry.unregister(shareCode, this)
+                println("Relay: Session cleaned up for nodeId=$shareCode")
             }
         }
 
@@ -201,25 +216,14 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
         return
     }
 
-    try {
-        var agent = registry.getAgent(shareCode)
-        if (agent == null) {
-            for (i in 0 until 20) {
-                kotlinx.coroutines.delay(500)
-                agent = registry.getAgent(shareCode)
-                if (agent != null) break
-            }
-            if (agent == null) {
-                respondText(
-                    "{\"error\":\"agent_offline\"}",
-                    ContentType.Application.Json,
-                    status = HttpStatusCode.ServiceUnavailable
-                )
-                return
-            }
-        }
+    val agent = registry.waitForAgent(shareCode)
+    if (agent == null) {
+        println("Relay: No session for nodeId=$shareCode after timeout, returning 503")
+        respondText("{\"error\":\"agent_offline\", \"nodeId\":\"$shareCode\"}", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
+        return
+    }
 
-        val requestId = UUID.randomUUID().toString()
+    val requestId = UUID.randomUUID().toString()
 
         // Only proxy actual binary file streams through the direct-to-disk tunnel.
         // endpoints like /api/folder_manifest and /api/folder_complete must route through standard HTTP.
@@ -403,6 +407,15 @@ private class RelayRegistry {
     fun connectedShareCodes(): List<String> = agents.keys().toList().sorted()
 
     fun getAgent(shareCode: String): AgentConnection? = agents[shareCode]
+    
+    suspend fun waitForAgent(shareCode: String, timeoutMs: Long = 15_000L): AgentConnection? {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            agents[shareCode]?.let { return it }
+            kotlinx.coroutines.delay(500)
+        }
+        return null
+    }
 
     fun prepareResponse(requestId: String): CompletableDeferred<RelayEnvelope> {
         val deferred = CompletableDeferred<RelayEnvelope>()

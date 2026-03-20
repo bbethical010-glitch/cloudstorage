@@ -91,6 +91,25 @@ export function WebConsole() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    if (!getBaseUrl()) return;
+    const checkStatus = async () => {
+      try {
+        const res = await fetch(`${getBaseUrl()}/api/status`, { headers: getHeaders(), cache: "no-store" });
+        if (res.ok) {
+           setIsNodeOffline(false);
+        } else if (res.status === 502 || res.status === 503 || res.status === 404) {
+           setIsNodeOffline(true);
+        }
+      } catch (e) {
+        setIsNodeOffline(true);
+      }
+    };
+    checkStatus();
+    const interval = setInterval(checkStatus, 20000);
+    return () => clearInterval(interval);
+  }, []);
+
   const SidebarContent = () => (
     <div className="flex flex-col h-full p-4">
       <div className="mb-8 space-y-2">
@@ -406,6 +425,17 @@ export function WebConsole() {
       const res = await fetch(`${getBaseUrl()}${endpoint}`, { 
         headers: { ...getHeaders(), 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' } 
       });
+
+      if (res.status === 502 || res.status === 503) {
+        const body = await res.json().catch(() => ({}));
+        const reason = body.error === 'agent_offline' 
+            ? 'Android Node is offline. Open the Easy Storage app on your phone.'
+            : 'Relay server is unavailable. Please try again in a moment.';
+        toast.error(reason, { duration: 6000 });
+        setFiles([]);
+        return;
+      }
+
       if (res.status === 401) {
         toast.error("Unauthorized: Please provide a valid ?pwd= password.");
         setFiles([]);
@@ -602,6 +632,16 @@ export function WebConsole() {
                         xhr.onload = () => {
                             if (xhr.status === 200) {
                                 resolve(null);
+                            } else if (xhr.status === 502 || xhr.status === 503) {
+                                const bodyStr = xhr.responseText || "{}";
+                                let reason = 'Relay server is unavailable. Please try again in a moment.';
+                                try {
+                                    const body = JSON.parse(bodyStr);
+                                    if (body.error === 'agent_offline') {
+                                        reason = 'Android Node is offline. Open the Easy Storage app on your phone.';
+                                    }
+                                } catch(e) {}
+                                reject(new Error(reason));
                             } else {
                                 try {
                                     const json = JSON.parse(xhr.responseText);
@@ -816,6 +856,12 @@ export function WebConsole() {
               <Cloud className="w-5 h-5 text-white" />
             </div>
             <span className="font-bold tracking-tight text-lg hidden md:block">Easy Storage</span>
+            {isNodeOffline && (
+               <div className="hidden md:flex items-center gap-1.5 px-2 py-1 bg-red-500/10 border border-red-500/20 rounded-full ml-1 shrink-0">
+                  <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                  <span className="text-[10px] font-bold text-red-500 uppercase tracking-wider">Node Offline</span>
+               </div>
+            )}
           </div>
           
           <Separator orientation="vertical" className="h-6 bg-[#1F2937] hidden md:block" />

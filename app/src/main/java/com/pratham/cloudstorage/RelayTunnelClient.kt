@@ -208,7 +208,7 @@ class RelayTunnelClient(
 
                 if (isActive) {
                     delay(backoffMs)
-                    backoffMs = (backoffMs * 2).coerceAtMost(15000L)
+                    backoffMs = (backoffMs * 2).coerceAtMost(30000L)
                     onStatusChange(TunnelStatus.Connecting)
                 }
             }
