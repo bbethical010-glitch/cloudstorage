@@ -583,6 +583,8 @@ export function WebConsole() {
                             uploadUrl += `&relativePath=${encodeURIComponent(file.webkitRelativePath)}`;
                         }
                         
+                        console.log(`[CHUNK DIAGNOSTIC] fileId=${file.name}, chunkIndex=${chunkIndex}, relativePath=${file.webkitRelativePath}`);
+                        
                         xhr.open("POST", uploadUrl);
                         const headers = getHeaders();
                         if (headers.Authorization) xhr.setRequestHeader('Authorization', headers.Authorization);

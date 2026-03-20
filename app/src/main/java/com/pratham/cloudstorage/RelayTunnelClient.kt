@@ -111,13 +111,54 @@ class RelayTunnelClient(
                                                                 ?.let { java.net.URLDecoder.decode(it, "UTF-8") } ?: ""
                                                             val nameStr = envelope.query?.let { q -> Regex("name=([^&]*)").find(q)?.groupValues?.get(1) }
                                                                 ?.let { java.net.URLDecoder.decode(it, "UTF-8") } ?: "uploaded_file"
+                                                            val relativePathStr = envelope.query?.let { q -> Regex("relativePath=([^&]*)").find(q)?.groupValues?.get(1) }
+                                                                ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
+                                                            val chunkIndexStr = envelope.query?.let { q -> Regex("chunkIndex=([^&]*)").find(q)?.groupValues?.get(1) }
+                                                                ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
+
+                                                            Log.d("ChunkDiag", "[TUNNEL CHUNK DIAGNOSTIC] relativePath=$relativePathStr, path=$pathStr, name=$nameStr, chunk=$chunkIndexStr")
 
                                                             envelope.requestId?.let { cleanupStreaming(it) }
-                                                            val file = ensureDirectoriesAndCreateFile(rootUri, pathStr, nameStr)
-                                                            if (file != null && envelope.requestId != null) {
-                                                                activeUploadStreams[envelope.requestId] = context.contentResolver.openOutputStream(file.uri)!!
+
+                                                            val combinedPath = if (!relativePathStr.isNullOrBlank()) {
+                                                                val cleanRelPath = relativePathStr.removePrefix("/").removePrefix("./")
+                                                                val dirPath = cleanRelPath.substringBeforeLast("/", "")
+                                                                if (pathStr.isNotBlank()) {
+                                                                    if (dirPath.isNotBlank()) "$pathStr/$dirPath" else pathStr
+                                                                } else {
+                                                                    dirPath
+                                                                }
                                                             } else {
-                                                                val errResponse = RelayEnvelope(type = "response", requestId = envelope.requestId, status = 500, error = "Failed to create directory path natively on Android.")
+                                                                pathStr
+                                                            }
+
+                                                            val finalName = if (!relativePathStr.isNullOrBlank()) {
+                                                                relativePathStr.removePrefix("/").removePrefix("./").substringAfterLast("/")
+                                                            } else {
+                                                                nameStr
+                                                            }
+
+                                                            val targetDoc = ensureResolvedPath(rootUri, combinedPath)
+                                                            if (targetDoc != null && envelope.requestId != null) {
+                                                                val isChunk0 = chunkIndexStr == null || chunkIndexStr == "0"
+                                                                val existingFile = targetDoc.findFile(finalName)
+                                                                val fileUri = if (isChunk0) {
+                                                                    existingFile?.delete()
+                                                                    targetDoc.createFile("application/octet-stream", finalName)?.uri
+                                                                } else {
+                                                                    existingFile?.uri
+                                                                }
+
+                                                                if (fileUri != null) {
+                                                                    val mode = if (isChunk0) "w" else "wa"
+                                                                    activeUploadStreams[envelope.requestId] = context.contentResolver.openOutputStream(fileUri, mode)!!
+                                                                    Log.d("ChunkDiag", "[TUNNEL CHUNK DIAGNOSTIC] Assertion: Write Target -> $fileUri")
+                                                                } else {
+                                                                    val errResponse = RelayEnvelope(type = "response", requestId = envelope.requestId, status = 404, error = "{\"error\":\"missing_file\",\"segment\":\"$finalName\",\"fullPath\":\"$relativePathStr\"}")
+                                                                    outgoing.send(Frame.Text(relayGson.toJson(errResponse)))
+                                                                }
+                                                            } else {
+                                                                val errResponse = RelayEnvelope(type = "response", requestId = envelope.requestId, status = 409, error = "{\"error\":\"missing_directory\",\"fullPath\":\"$relativePathStr\"}")
                                                                 outgoing.send(Frame.Text(relayGson.toJson(errResponse)))
                                                             }
                                                         }
@@ -263,6 +304,19 @@ class RelayTunnelClient(
         }
         currentDir.findFile(filename)?.delete()
         return currentDir.createFile("application/octet-stream", filename)
+    }
+
+    private fun ensureResolvedPath(rootUri: Uri, path: String): DocumentFile? {
+        var currentDir = DocumentFile.fromTreeUri(context, rootUri) ?: return null
+        if (path.isNotBlank() && path != "/") {
+            val segments = path.split("/").filter { it.isNotBlank() }
+            for (segment in segments) {
+                if (segment == ".." || segment == ".") continue
+                val nextDir = currentDir.findFile(segment) ?: return null
+                currentDir = nextDir
+            }
+        }
+        return currentDir
     }
 
     private fun handleUploadStart(request: RelayEnvelope) {
