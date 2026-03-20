@@ -223,7 +223,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
 
         // Only proxy actual binary file streams through the direct-to-disk tunnel.
         // endpoints like /api/folder_manifest and /api/folder_complete must route through standard HTTP.
-        val isUpload = request.path().contains("/api/upload") || request.path().contains("/upload") || request.path().contains("/folder_manifest") || request.path().contains("/folder_complete")
+        val isUpload = request.path().contains("/api/upload") || request.path().contains("/upload")
         val contentLength = request.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
         val maxBodyBytes = 50L * 1024 * 1024 // 50 MB for non-streaming
         
@@ -420,7 +420,7 @@ private class RelayRegistry {
 
         return try {
             agent.send(request)
-            withTimeout(60_000) { deferred.await() }
+            withTimeout(180_000) { deferred.await() }
         } catch (e: TimeoutCancellationException) {
             null
         } finally {
