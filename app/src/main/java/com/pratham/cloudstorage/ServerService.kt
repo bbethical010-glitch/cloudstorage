@@ -671,84 +671,77 @@ class ServerService : Service() {
 
     private suspend fun io.ktor.server.application.ApplicationCall.handleStreamingUpload(targetDir: DocumentFile) {
         try {
-            val multipart = receiveMultipart()
+            val fileName = request.queryParameters["filename"] ?: "uploaded_file"
+            // If chunkIndex is explicitly provided in the URL, use it
+            val chunkIndex = request.queryParameters["chunkIndex"]?.toIntOrNull() ?: 0
 
             if (!targetDir.canWrite()) {
                 respond(HttpStatusCode.InternalServerError, "Storage not writable")
                 return
             }
 
-            multipart.forEachPart { part: PartData ->
-                if (part is PartData.FileItem) {
-                    val fileName = part.originalFileName ?: "uploaded_file"
-                    var mime = part.contentType?.toString() ?: "application/octet-stream"
-                    mime = mime.substringBefore(";")
-
-                    // NATIVELY QUERY AND DELETE EXISTING TO PREVENT ANDROIDX WRAPPER CRASHES
-                    try {
-                        val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
-                            targetDir.uri,
-                            android.provider.DocumentsContract.getDocumentId(targetDir.uri)
-                        )
-                        var existingUri: Uri? = null
-                        contentResolver.query(
-                            childrenUri,
-                            arrayOf(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID, android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-                            null, null, null
-                        )?.use { cursor ->
-                            val idIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                            val nameIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                            while (cursor.moveToNext()) {
-                                if (cursor.getString(nameIdx) == fileName) {
-                                    val docId = cursor.getString(idIdx)
-                                    existingUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(targetDir.uri, docId)
-                                    break
-                                }
-                            }
+            var existingUri: Uri? = null
+            try {
+                val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
+                    targetDir.uri,
+                    android.provider.DocumentsContract.getDocumentId(targetDir.uri)
+                )
+                contentResolver.query(
+                    childrenUri,
+                    arrayOf(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID, android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                    null, null, null
+                )?.use { cursor ->
+                    val idIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                    val nameIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                    while (cursor.moveToNext()) {
+                        if (cursor.getString(nameIdx) == fileName) {
+                            val docId = cursor.getString(idIdx)
+                            existingUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(targetDir.uri, docId)
+                            break
                         }
-                        if (existingUri != null) {
-                            android.provider.DocumentsContract.deleteDocument(contentResolver, existingUri!!)
-                        }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-
-                    val newFileUri = try {
-                        android.provider.DocumentsContract.createDocument(
-                            contentResolver,
-                            targetDir.uri,
-                            mime,
-                            fileName
-                        )
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                        null
-                    }
-
-                    if (newFileUri != null) {
-                        contentResolver.openOutputStream(newFileUri)?.use { output ->
-                            val input = part.provider()
-                            try {
-                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                    val buffer = ByteArray(64 * 1024)
-                                    while (!input.endOfInput) {
-                                        val count = input.readAvailable(buffer)
-                                        if (count > 0) {
-                                            output.write(buffer, 0, count)
-                                        }
-                                    }
-                                }
-                            } finally {
-                                input.close()
-                            }
-                        }
-                    } else {
-                        throw Exception("Failed to create file: $fileName")
                     }
                 }
-                part.dispose()
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-            respond(HttpStatusCode.OK)
+
+            val fileUri = if (chunkIndex == 0) {
+                // First chunk or single file: delete existing, create new
+                if (existingUri != null) {
+                    android.provider.DocumentsContract.deleteDocument(contentResolver, existingUri!!)
+                }
+                val mime = "application/octet-stream"
+                android.provider.DocumentsContract.createDocument(
+                    contentResolver,
+                    targetDir.uri,
+                    mime,
+                    fileName
+                )
+            } else {
+                // Subsequent chunks: must append
+                existingUri
+            }
+
+            if (fileUri != null) {
+                val mode = if (chunkIndex == 0) "w" else "wa"
+                contentResolver.openOutputStream(fileUri, mode)?.use { output ->
+                    val channel = request.receiveChannel()
+                    val buffer = java.nio.ByteBuffer.allocate(128 * 1024)
+                    while (!channel.isClosedForRead) {
+                        buffer.clear()
+                        val read = channel.readAvailable(buffer)
+                        if (read > 0) {
+                            buffer.flip()
+                            val bytes = ByteArray(read)
+                            buffer.get(bytes)
+                            output.write(bytes)
+                        }
+                    }
+                }
+                respond(HttpStatusCode.OK)
+            } else {
+                respond(HttpStatusCode.InternalServerError, "Failed to resolve file: $fileName")
+            }
         } catch (e: Exception) {
             e.printStackTrace()
             respond(HttpStatusCode.InternalServerError, "Upload inner error: ${e.stackTraceToString()}")

@@ -468,42 +468,51 @@ export function WebConsole() {
     for (let i = 0; i < fileList.length; i++) {
       const file = fileList[i];
       try {
-        await new Promise((resolve, reject) => {
-          const xhr = new XMLHttpRequest();
-          xhr.open("POST", `${getBaseUrl()}/api/upload?path=${encodeURIComponent(currentPath)}&filename=${encodeURIComponent(file.name)}`);
-          
-          const headers = getHeaders();
-          if (headers.Authorization) {
-            xhr.setRequestHeader('Authorization', headers.Authorization);
-          }
-          xhr.setRequestHeader("Content-Type", "application/octet-stream");
+        const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks
+        const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
 
-          let lastLoaded = 0;
-          xhr.upload.addEventListener("progress", (event) => {
-            if (event.lengthComputable) {
-              const delta = event.loaded - lastLoaded;
-              totalLoaded += delta;
-              lastLoaded = event.loaded;
-              setUploadProgress(Math.round((totalLoaded / totalSize) * 100));
+        for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+          const start = chunkIndex * CHUNK_SIZE;
+          const end = Math.min(start + CHUNK_SIZE, file.size);
+          const chunk = file.slice(start, end);
+
+          await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open("POST", `${getBaseUrl()}/api/upload?path=${encodeURIComponent(currentPath)}&filename=${encodeURIComponent(file.name)}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}`);
+            
+            const headers = getHeaders();
+            if (headers.Authorization) {
+              xhr.setRequestHeader('Authorization', headers.Authorization);
             }
+            xhr.setRequestHeader("Content-Type", "application/octet-stream");
+
+            let lastLoaded = 0;
+            xhr.upload.addEventListener("progress", (event) => {
+              if (event.lengthComputable) {
+                const delta = event.loaded - lastLoaded;
+                totalLoaded += delta;
+                lastLoaded = event.loaded;
+                setUploadProgress(Math.round((totalLoaded / totalSize) * 100));
+              }
+            });
+
+            xhr.onload = () => {
+              if (xhr.status === 200) {
+                resolve(null);
+              } else if (xhr.status === 500 && xhr.responseText.includes("Storage not writable")) {
+                reject(new Error("Write Permission Denied"));
+              } else {
+                reject(new Error(xhr.responseText || "Server error"));
+              }
+            };
+
+            xhr.onerror = () => {
+              reject(new Error("Network connection severed."));
+            };
+
+            xhr.send(chunk);
           });
-
-          xhr.onload = () => {
-            if (xhr.status === 200) {
-              resolve(null);
-            } else if (xhr.status === 500 && xhr.responseText.includes("Storage not writable")) {
-              reject(new Error("Write Permission Denied"));
-            } else {
-              reject(new Error(xhr.responseText || "Server error"));
-            }
-          };
-
-          xhr.onerror = () => {
-            reject(new Error("Network connection severed."));
-          };
-
-          xhr.send(file);
-        });
+        }
       } catch (err: any) {
         setIsUploading(false);
         toast.error(`Upload failed for ${file.name}: ${err.message}`);

@@ -107,11 +107,29 @@ fun Application.relayModule() {
 
             try {
                 for (frame in incoming) {
-                    if (frame is Frame.Text) {
-                        val envelope = frame.readText().toEnvelopeOrNull() ?: continue
-                        if (envelope.type == "response" && !envelope.requestId.isNullOrBlank()) {
-                            registry.completeResponse(envelope)
+                    when (frame) {
+                        is Frame.Text -> {
+                            val envelope = frame.readText().toEnvelopeOrNull() ?: continue
+                            if (envelope.type == "response") {
+                                if (envelope.subType == "download_end_stream" && !envelope.requestId.isNullOrBlank()) {
+                                    registry.getAgent(shareCode)?.let {
+                                        it.activeDownloadStreams[envelope.requestId]?.flush()
+                                        it.activeDownloadStreams[envelope.requestId]?.close()
+                                        it.activeDownloadCompletions[envelope.requestId]?.complete(Unit)
+                                    }
+                                } else if (!envelope.requestId.isNullOrBlank()) {
+                                    registry.completeResponse(envelope)
+                                }
+                            }
                         }
+                        is Frame.Binary -> {
+                            val bytes = frame.readBytes()
+                            if (bytes.size >= 36) {
+                                val reqId = String(bytes, 0, 36, Charsets.UTF_8).trim()
+                                registry.getAgent(shareCode)?.activeDownloadStreams?.get(reqId)?.writeFully(bytes, 36, bytes.size - 36)
+                            }
+                        }
+                        else -> {}
                     }
                 }
             } finally {
@@ -195,11 +213,12 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
 
         val requestId = UUID.randomUUID().toString()
 
-
-        // Standard non-multipart request handling
+        val isUpload = request.path().contains("/api/upload")
         val contentLength = request.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
         val maxBodyBytes = 50L * 1024 * 1024 // 50 MB for non-streaming
-        if (contentLength > maxBodyBytes) {
+        
+        // Remove Hardcoded Limits: Ignore 50MB limit only if it's an upload pipe
+        if (!isUpload && contentLength > maxBodyBytes) {
             respondText(
                 "Payload too large (max 50 MB for non-streaming).",
                 status = HttpStatusCode.PayloadTooLarge
@@ -208,29 +227,116 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
         }
 
         val originalShareCode = parameters["shareCode"] ?: shareCode
-        val requestBody = receive<ByteArray>()
         val relayPath = request.path()
             .removePrefix("/node/$originalShareCode")
             .removePrefix("/")
             .let { "/$it" }
 
-        val relayRequest = RelayEnvelope(
-            type = "request",
-            requestId = requestId,
-            method = request.httpMethod.value,
-            path = relayPath,
-            query = request.queryString(),
-            headers = request.headers.flattenEntries()
-                .filterNot { (key, _) -> key.equals(HttpHeaders.Host, ignoreCase = true) || isHopByHopHeader(key) }
-                .associate { (key, value) -> key to value },
-            bodyBase64 = requestBody.encodeBase64()
-        )
+        val relayHeaders = request.headers.flattenEntries()
+            .filterNot { (key, _) -> key.equals(HttpHeaders.Host, ignoreCase = true) || isHopByHopHeader(key) }
+            .associate { (key, value) -> key to value }
 
-        val relayResponse = registry.forwardEnvelope(agent, relayRequest)
-        if (relayResponse != null) {
-            respondRelayResponse(relayResponse)
+        if (isUpload) {
+            // Initiate Pure Stream Forwarding
+            val relayRequest = RelayEnvelope(
+                type = "request",
+                subType = "upload_start_stream",
+                requestId = requestId,
+                method = request.httpMethod.value,
+                path = relayPath,
+                query = request.queryString(),
+                headers = relayHeaders
+                // Body-parsing completely disabled—no base64 payload envelope
+            )
+            
+            val deferred = registry.prepareResponse(requestId)
+            try {
+                agent.send(relayRequest)
+
+                // Extract the incoming stream seamlessly
+                val channel = request.receiveChannel()
+                val idBytes = requestId.padEnd(36, ' ').toByteArray(Charsets.UTF_8).sliceArray(0 until 36)
+                val bb = java.nio.ByteBuffer.allocate(64 * 1024)
+
+                // Manage flow control and suspension points naturally 
+                while (!channel.isClosedForRead) {
+                    bb.clear()
+                    val read = channel.readAvailable(bb)
+                    if (read > 0) {
+                        bb.flip()
+                        val packet = ByteArray(36 + read)
+                        System.arraycopy(idBytes, 0, packet, 0, 36)
+                        bb.get(packet, 36, read)
+                        agent.sendFrame(io.ktor.websocket.Frame.Binary(true, packet))
+                    }
+                }
+                
+                val endEnvelope = RelayEnvelope(
+                    type = "request",
+                    subType = "upload_end_stream",
+                    requestId = requestId
+                )
+                agent.send(endEnvelope)
+
+                val relayResponse = kotlinx.coroutines.withTimeoutOrNull(180_000) { deferred.await() }
+                if (relayResponse != null) {
+                    respondRelayResponse(relayResponse)
+                } else {
+                    respondText("Phone node did not respond in time.", status = HttpStatusCode.GatewayTimeout)
+                }
+            } catch (e: Exception) {
+                // Gracefully Trap Errors without crashing the whole application
+                respondText("Proxy gateway stream interrupted: ${e.message}", status = HttpStatusCode.BadGateway)
+            } finally {
+                registry.removeResponse(requestId)
+            }
         } else {
-            respondText("Phone node did not respond in time.", status = HttpStatusCode.GatewayTimeout)
+            // Standard non-multipart request handling
+            val requestBody = receive<ByteArray>()
+            val relayRequest = RelayEnvelope(
+                type = "request",
+                requestId = requestId,
+                method = request.httpMethod.value,
+                path = relayPath,
+                query = request.queryString(),
+                headers = relayHeaders,
+                bodyBase64 = requestBody.encodeBase64()
+            )
+
+            val relayResponse = registry.forwardEnvelope(agent, relayRequest)
+            if (relayResponse != null) {
+                if (relayResponse.subType == "download_start_stream") {
+                    val status = relayResponse.status?.let(HttpStatusCode::fromValue) ?: HttpStatusCode.OK
+                    val contentType = relayResponse.headers?.get(HttpHeaders.ContentType)?.let { ContentType.parse(it) }
+                    val contentLength = relayResponse.headers?.get(HttpHeaders.ContentLength)?.toLongOrNull()
+
+                    relayResponse.headers.orEmpty()
+                        .filterNot { (k, _) -> 
+                            isHopByHopHeader(k) || 
+                            k.equals(HttpHeaders.ContentLength, true) || 
+                            k.equals(HttpHeaders.ContentType, true) ||
+                            k.equals(HttpHeaders.TransferEncoding, true)
+                        }
+                        .forEach { (k, v) -> response.headers.append(k, v, safeOnly = false) }
+
+                    val completion = CompletableDeferred<Unit>()
+                    agent.activeDownloadCompletions[requestId] = completion
+                    
+                    try {
+                        respondBytesWriter(contentType = contentType, status = status, contentLength = contentLength) {
+                            agent.activeDownloadStreams[requestId] = this
+                            completion.await()
+                        }
+                    } finally {
+                        agent.activeDownloadStreams.remove(requestId)
+                        agent.activeDownloadCompletions.remove(requestId)
+                    }
+                } else {
+                    respondRelayResponse(relayResponse)
+                }
+            } else {
+                respondText("Phone node did not respond in time.", status = HttpStatusCode.GatewayTimeout)
+            }
         }
 
     } catch (e: TimeoutCancellationException) {
@@ -243,7 +349,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
         e.printStackTrace(java.io.PrintWriter(sw))
         respondText(
             "Relay gateway error:\n$sw",
-            status = HttpStatusCode.InternalServerError
+            status = HttpStatusCode.BadGateway
         )
     }
 }
@@ -322,6 +428,8 @@ private data class AgentConnection(
     val session: DefaultWebSocketSession,
     val sendMutex: Mutex = Mutex()
 ) {
+    val activeDownloadStreams = ConcurrentHashMap<String, io.ktor.utils.io.ByteWriteChannel>()
+    val activeDownloadCompletions = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
     suspend fun send(envelope: RelayEnvelope) {
         sendMutex.withLock {
             session.sendEnvelope(envelope)
