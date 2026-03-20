@@ -227,6 +227,12 @@ class ServerService : Service() {
                             val offset = call.request.queryParameters["offset"]?.toIntOrNull() ?: 0
                             val path = call.request.queryParameters["path"]
 
+                            if (hasConsecutiveIdenticalSegments(path)) {
+                                android.util.Log.w("ServerService", "Malformed path detected in /api/files: $path")
+                                call.respondText("{\"error\":\"malformed_path_detected\",\"received\":\"$path\"}", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                                return@get
+                            }
+
                             val targetDocId = resolveSafeDocIdFast(rootUri, path)
                             if (targetDocId == null) {
                                 call.respond(HttpStatusCode.NotFound, "Invalid path")
@@ -272,7 +278,8 @@ class ServerService : Service() {
                                     val size = if (sizeIdx != -1) cursor.getLong(sizeIdx) else 0L
                                     val mod = if (modIdx != -1) cursor.getLong(modIdx) else 0L
 
-                                    jsonList.add("""{"id":"${uri}","name":"${name}","isDirectory":${isDirectory},"size":${size},"lastModified":${mod}}""")
+                                    val itemPath = if (path.isNullOrBlank()) name else "$path/$name"
+                                    jsonList.add("""{"id":"${uri}","name":"${name}","path":"${itemPath}","isDirectory":${isDirectory},"size":${size},"lastModified":${mod}}""")
                                     currentIndex++
                                 }
                             }
@@ -708,6 +715,18 @@ class ServerService : Service() {
                                 val relativePath = call.request.queryParameters["relativePath"]
                                 val chunkIndex = call.request.queryParameters["chunkIndex"]?.toIntOrNull() ?: 0
 
+                                val combinedPath = if (!relativePath.isNullOrBlank()) {
+                                    if (path.isNotBlank()) "$path/$relativePath" else relativePath
+                                } else {
+                                    path
+                                }
+
+                                if (hasConsecutiveIdenticalSegments(combinedPath)) {
+                                    android.util.Log.w("ServerService", "Malformed path detected in /api/upload_chunk: $combinedPath")
+                                    call.respondText("{\"error\":\"malformed_path_detected\",\"received\":\"$combinedPath\"}", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                                    return@post
+                                }
+
                                 val root = DocumentFile.fromTreeUri(applicationContext, rootUri) ?: return@post call.respond(HttpStatusCode.InternalServerError, "Storage not mounted")
                                 var targetDir: DocumentFile = root
                                 val finalFileName: String
@@ -886,6 +905,15 @@ class ServerService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         stopServer()
+    }
+
+    private fun hasConsecutiveIdenticalSegments(path: String?): Boolean {
+        if (path.isNullOrBlank()) return false
+        val segments = path.split("/").filter { it.isNotBlank() }
+        for (i in 0 until segments.size - 1) {
+            if (segments[i] == segments[i + 1]) return true
+        }
+        return false
     }
 
     private fun sanitizeRelativePath(relativePath: String): String {

@@ -58,6 +58,7 @@ import {
 interface FileNode {
   id: string; // Used as the full uri
   name: string;
+  path: string; // Added path property
   isDirectory: boolean;
   size: number;
   lastModified: number;
@@ -524,7 +525,7 @@ export function WebConsole() {
     const manifest = files.filter(f => f.webkitRelativePath && f.webkitRelativePath.includes('/')).map(f => {
       const CHUNK_SIZE = 5 * 1024 * 1024;
       return {
-        relativePath: currentPath ? `${currentPath}/${f.webkitRelativePath}` : f.webkitRelativePath,
+        relativePath: f.webkitRelativePath, // Use verbatim relativePath
         fileId: crypto.randomUUID(),
         size: f.size,
         totalChunks: Math.max(1, Math.ceil(f.size / CHUNK_SIZE))
@@ -652,8 +653,8 @@ export function WebConsole() {
 
   const handleDownload = (file: FileNode) => {
     const url = file.isDirectory 
-        ? `${getBaseUrl()}/api/download_folder?path=${encodeURIComponent(currentPath)}&folder=${encodeURIComponent(file.name)}`
-        : `${getBaseUrl()}/api/download?path=${encodeURIComponent(currentPath)}&file=${encodeURIComponent(file.name)}`;
+        ? `${getBaseUrl()}/api/download_folder?path=${encodeURIComponent(file.path)}&folder=${encodeURIComponent(file.name)}`
+        : `${getBaseUrl()}/api/download?path=${encodeURIComponent(file.path)}&file=${encodeURIComponent(file.name)}`;
     
     // Create an invisible link to trigger the download natively
     const a = document.createElement('a');
@@ -761,9 +762,8 @@ export function WebConsole() {
     }
   };
 
-  const navigateTo = (folderName: string) => {
-    const newPath = currentPath ? `${currentPath}/${folderName}` : folderName;
-    setCurrentPath(newPath);
+  const navigateTo = (itemPath: string) => {
+    setCurrentPath(itemPath);
   };
 
   const navigateUp = () => {
@@ -981,7 +981,7 @@ export function WebConsole() {
                       viewMode === 'list' ? (
                         <button
                           key={file.id}
-                          onClick={() => file.isDirectory ? navigateTo(file.name) : setSelectedFile(file)}
+                          onClick={() => file.isDirectory ? navigateTo(file.path) : setSelectedFile(file)}
                           className={`flex flex-col md:grid md:grid-cols-12 w-full px-4 md:px-6 py-3.5 md:py-3.5 text-left text-sm transition-all relative group pl-12 md:pl-12 min-h-[56px] md:min-h-0 ${
                             selectedFile?.id === file.id ? 'bg-[#2563EB]/5' : 'hover:bg-[#111827]/40'
                           } ${selectedFiles.has(file.id) ? 'bg-[#2563EB]/10' : ''}`}
@@ -1029,7 +1029,7 @@ export function WebConsole() {
                       ) : (
                         <Card 
                           key={file.id} 
-                          onClick={() => file.isDirectory ? navigateTo(file.name) : setSelectedFile(file)}
+                          onClick={() => file.isDirectory ? navigateTo(file.path) : setSelectedFile(file)}
                           className={`p-4 bg-[#111827]/40 border-[#1F2937] hover:border-[#2563EB]/50 transition-all cursor-pointer flex flex-col items-center justify-center group relative min-h-[140px] ${
                             selectedFile?.id === file.id ? 'ring-1 ring-[#2563EB] bg-[#2563EB]/5' : ''
                           } ${selectedFiles.has(file.id) ? 'ring-1 ring-[#2563EB] bg-[#2563EB]/10' : ''}`}

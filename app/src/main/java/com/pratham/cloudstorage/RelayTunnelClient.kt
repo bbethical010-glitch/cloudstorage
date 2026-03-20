@@ -80,11 +80,14 @@ class RelayTunnelClient(
 
         scope.launch {
             onStatusChange(TunnelStatus.Connecting)
+            var backoffMs = 1000L
             while (isActive) {
                 try {
                     relayClient.webSocket(urlString = relayWebSocketUrl) {
                         Log.i(TAG, "Relay tunnel connected for $shareCode")
                         onStatusChange(TunnelStatus.Connected)
+                        outgoing.send(Frame.Text("{\"type\":\"register\",\"nodeId\":\"$shareCode\"}"))
+                        backoffMs = 1000L
                         for (frame in incoming) {
                             when (frame) {
                                 is Frame.Text -> {
@@ -154,7 +157,8 @@ class RelayTunnelClient(
                 }
 
                 if (isActive) {
-                    delay(RECONNECT_DELAY_MS)
+                    delay(backoffMs)
+                    backoffMs = (backoffMs * 2).coerceAtMost(15000L)
                     onStatusChange(TunnelStatus.Connecting)
                 }
             }

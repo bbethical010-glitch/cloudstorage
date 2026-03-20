@@ -202,14 +202,21 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
     }
 
     try {
-        val agent = registry.getAgent(shareCode)
+        var agent = registry.getAgent(shareCode)
         if (agent == null) {
-            respondText(
-                "{\"error\":\"agent_offline\"}",
-                ContentType.Application.Json,
-                status = HttpStatusCode.ServiceUnavailable
-            )
-            return
+            for (i in 0 until 20) {
+                kotlinx.coroutines.delay(500)
+                agent = registry.getAgent(shareCode)
+                if (agent != null) break
+            }
+            if (agent == null) {
+                respondText(
+                    "{\"error\":\"agent_offline\"}",
+                    ContentType.Application.Json,
+                    status = HttpStatusCode.ServiceUnavailable
+                )
+                return
+            }
         }
 
         val requestId = UUID.randomUUID().toString()
