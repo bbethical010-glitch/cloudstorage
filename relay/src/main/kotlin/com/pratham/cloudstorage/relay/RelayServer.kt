@@ -307,8 +307,9 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
             if (relayResponse != null) {
                 if (relayResponse.subType == "download_start_stream") {
                     val status = relayResponse.status?.let(HttpStatusCode::fromValue) ?: HttpStatusCode.OK
-                    val contentType = relayResponse.headers?.get(HttpHeaders.ContentType)?.let { ContentType.parse(it) }
-                    val contentLength = relayResponse.headers?.get(HttpHeaders.ContentLength)?.toLongOrNull()
+                    val contentTypeStr = relayResponse.headers?.entries?.firstOrNull { it.key.equals(HttpHeaders.ContentType, true) }?.value
+                    val contentType = contentTypeStr?.let { ContentType.parse(it) }
+                    val contentLength = relayResponse.headers?.entries?.firstOrNull { it.key.equals(HttpHeaders.ContentLength, true) }?.value?.toLongOrNull()
 
                     relayResponse.headers.orEmpty()
                         .filterNot { (k, _) -> 
