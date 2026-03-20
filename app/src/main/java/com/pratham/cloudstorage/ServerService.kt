@@ -64,7 +64,7 @@ class ServerService : Service() {
         
         val tunnelStatusFlow = kotlinx.coroutines.flow.MutableStateFlow(TunnelStatus.Offline)
     }
-
+    private val activeSanitizationMap = java.util.concurrent.ConcurrentHashMap<String, String>()
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START_SERVER -> {
@@ -610,19 +610,20 @@ class ServerService : Service() {
                                     var currentPath = ""
 
                                     for (segment in dirSegments) {
-                                        currentPath = if (currentPath.isEmpty()) segment else "$currentPath/$segment"
+                                        val safeSegment = sanitizeFilename(segment)
+                                        currentPath = if (currentPath.isEmpty()) safeSegment else "$currentPath/$safeSegment"
                                         if (dirCache.containsKey(currentPath)) {
                                             currentDir = dirCache[currentPath]!!
                                         } else {
-                                            var nextDir = currentDir.findFile(segment)
+                                            var nextDir = findFileReliable(currentDir, safeSegment)
                                             if (nextDir != null && !nextDir.isDirectory) {
-                                                call.respondText("{\"error\":\"path_conflict_at_segment: $segment\"}", ContentType.Application.Json, HttpStatusCode.Conflict)
+                                                call.respondText("{\"error\":\"path_conflict_at_segment: $safeSegment\"}", ContentType.Application.Json, HttpStatusCode.Conflict)
                                                 return@post
                                             }
                                             if (nextDir == null) {
-                                                nextDir = currentDir.createDirectory(segment)
+                                                nextDir = currentDir.createDirectory(safeSegment)
                                                 if (nextDir == null) {
-                                                    throw Exception("Failed to create directory at segment: $segment")
+                                                    throw Exception("Failed to create directory at segment: $safeSegment")
                                                 }
                                                 directoriesCreated++
                                             }
@@ -701,6 +702,12 @@ class ServerService : Service() {
                                 responseJson.put("totalBytesWritten", totalBytesWrite)
                                 responseJson.put("paths", org.json.JSONArray(paths))
 
+                                val sanitizedMapJson = org.json.JSONObject()
+                                for ((originalName, safeName) in activeSanitizationMap) {
+                                    sanitizedMapJson.put(originalName, safeName as Any)
+                                }
+                                responseJson.put("sanitizedNames", sanitizedMapJson)
+
                                 call.respondText(responseJson.toString(), ContentType.Application.Json)
                             } catch (e: Exception) {
                                 call.respond(HttpStatusCode.InternalServerError, "Error: ${e.message}")
@@ -732,11 +739,18 @@ class ServerService : Service() {
                                 val root = DocumentFile.fromTreeUri(applicationContext, rootUri) ?: return@post call.respond(HttpStatusCode.InternalServerError, "Storage not mounted")
                                 var targetDir: DocumentFile = root
                                 val finalFileName: String
+                                val originalFileName: String
 
                                 if (!relativePath.isNullOrBlank()) {
                                     try {
                                         val cleanPath = sanitizeRelativePath(relativePath)
-                                        finalFileName = cleanPath.substringAfterLast("/")
+                                        originalFileName = cleanPath.substringAfterLast("/")
+                                        finalFileName = sanitizeFilename(originalFileName)
+                                        
+                                        if (originalFileName != finalFileName) {
+                                            activeSanitizationMap[originalFileName] = finalFileName
+                                        }
+
                                         val dirPath = cleanPath.substringBeforeLast("/", "")
                                         
                                         val fullDirPath = if (path.isNotBlank()) {
@@ -761,14 +775,18 @@ class ServerService : Service() {
                                     } catch (e: Exception) {
                                         return@post call.respondText("{\"error\":\"${e.message}\"}", ContentType.Application.Json, HttpStatusCode.Conflict)
                                     }
-                                    finalFileName = fileName
+                                    originalFileName = fileName
+                                    finalFileName = sanitizeFilename(originalFileName)
+                                    if (originalFileName != finalFileName) {
+                                        activeSanitizationMap[originalFileName] = finalFileName
+                                    }
                                 }
 
                                 if (!targetDir.canWrite()) {
                                     return@post call.respond(HttpStatusCode.InternalServerError, "Storage not writable")
                                 }
 
-                                val existingDoc = targetDir.findFile(finalFileName)
+                                val existingDoc = findFileReliable(targetDir, finalFileName)
                                 var existingUri: Uri? = existingDoc?.uri
 
                                 val fileUri = if (chunkIndex == 0) {
@@ -796,7 +814,7 @@ class ServerService : Service() {
 
                                 if (fileUri != null) {
                                     val mode = if (chunkIndex == 0) "w" else "wa"
-                                    contentResolver.openOutputStream(fileUri, mode)?.use { output ->
+                                    openOutputStreamWithRetry(contentResolver, fileUri, mode)?.use { output ->
                                         val channel = call.request.receiveChannel()
                                         val bufferBox = ByteArray(8192)
                                         val byteBuffer = java.nio.ByteBuffer.wrap(bufferBox)
@@ -926,18 +944,51 @@ class ServerService : Service() {
         return false
     }
 
+    private fun openOutputStreamWithRetry(
+        contentResolver: android.content.ContentResolver, 
+        uri: android.net.Uri, 
+        mode: String,
+        retries: Int = 3
+    ): java.io.OutputStream {
+        repeat(retries) { attempt ->
+            val stream = contentResolver.openOutputStream(uri, mode)
+            if (stream != null) return stream
+            android.util.Log.w("UploadChunk", "openOutputStream returned null, attempt ${attempt + 1}")
+            Thread.sleep(100L * (attempt + 1))
+        }
+        throw java.io.IOException("openOutputStream returned null after $retries attempts for uri=$uri")
+    }
+
+    private fun findFileReliable(parent: DocumentFile, name: String): DocumentFile? {
+        parent.findFile(name)?.let { return it }
+        return parent.listFiles().firstOrNull { 
+            it.name?.equals(name, ignoreCase = false) == true 
+        }
+    }
+
     private fun resolveOrCreateDirectory(parent: DocumentFile, segment: String): DocumentFile {
-        val existing = parent.findFile(segment)
+        val safeSegment = sanitizeFilename(segment)
+        val existing = findFileReliable(parent, safeSegment)
         if (existing != null && existing.isDirectory) return existing
         if (existing != null && !existing.isDirectory) {
-            throw IllegalStateException("Path conflict: '$segment' exists as a file, not a directory")
+            throw IllegalStateException("Path conflict: '$safeSegment' exists as a file, not a directory")
         }
-        val created = parent.createDirectory(segment)
+        val created = parent.createDirectory(safeSegment)
         if (created != null) {
-            android.util.Log.w("UploadChunk", "Auto-healed missing directory segment: $segment")
+            android.util.Log.w("UploadChunk", "Auto-healed missing directory segment: $safeSegment")
             return created
         }
-        throw IllegalStateException("createDirectory returned null for segment '$segment' under ${parent.uri}")
+        throw IllegalStateException("createDirectory returned null for segment '$safeSegment' under ${parent.uri}")
+    }
+
+    private fun sanitizeFilename(name: String): String {
+        return name
+            .replace(' ', '_')
+            .replace(Regex("[()\\[\\]]"), "")
+            .replace(Regex("\\.{2,}"), ".")
+            .replace(Regex("[^a-zA-Z0-9._\\-]"), "_")
+            .trimEnd('.')
+            .ifEmpty { "unnamed_file" }
     }
 
     private fun sanitizeRelativePath(relativePath: String): String {

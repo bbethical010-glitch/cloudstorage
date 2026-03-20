@@ -74,6 +74,7 @@ export function WebConsole() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [folderProgress, setFolderProgress] = useState({ success: 0, uploading: 0, failed: 0, total: 0 });
   const [failedUploads, setFailedUploads] = useState<{file: File, error: string}[]>([]);
+  const [sanitizedUploads, setSanitizedUploads] = useState<Record<string, string>>({});
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [storageStats, setStorageStats] = useState({ total: 0, used: 0, free: 0 });
   const [searchQuery, setSearchQuery] = useState("");
@@ -506,6 +507,7 @@ export function WebConsole() {
     setUploadProgress(0);
     setFolderProgress({ success: 0, uploading: files.length, failed: 0, total: files.length });
     setFailedUploads([]);
+    setSanitizedUploads({});
 
     // Pre-flight check
     try {
@@ -633,10 +635,16 @@ export function WebConsole() {
         const firstRel = files.find(f => f.webkitRelativePath)?.webkitRelativePath || "";
         const rootFolder = firstRel.split('/')[0] || "folder";
         try {
-            await fetch(`${getBaseUrl()}/api/folder_complete?path=${encodeURIComponent(currentPath)}&folder=${encodeURIComponent(rootFolder)}`, {
+            const response = await fetch(`${getBaseUrl()}/api/folder_complete?path=${encodeURIComponent(currentPath)}&folder=${encodeURIComponent(rootFolder)}`, {
                 method: 'POST',
                 headers: getHeaders()
             });
+            const data = await response.json();
+            if (data.sanitizedNames && Object.keys(data.sanitizedNames).length > 0) {
+                setSanitizedUploads(data.sanitizedNames);
+                toast.success(`${Object.keys(data.sanitizedNames).length} files were renamed to remove unsupported characters. See console.`, { duration: 8000 });
+                console.warn("Sanitized names map:", data.sanitizedNames);
+            }
         } catch (e) {
             console.error("folder_complete failed", e);
         }
@@ -1179,6 +1187,26 @@ export function WebConsole() {
              >
                 Retry Failed Files
              </Button>
+          </motion.div>
+      )}
+
+      {Object.keys(sanitizedUploads).length > 0 && (
+          <motion.div 
+            initial={{ opacity: 0, y: 100 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 100 }}
+            className="fixed bottom-10 left-10 w-96 bg-[#111827] border border-[#F59E0B]/40 p-4 rounded-2xl shadow-2xl z-50 flex flex-col gap-3"
+          >
+             <div className="flex justify-between items-center">
+                <span className="text-xs font-bold text-[#F59E0B]">{Object.keys(sanitizedUploads).length} files renamed</span>
+                <Button size="sm" variant="outline" className="h-7 text-[10px] border-[#374151] hover:bg-[#374151]" onClick={() => setSanitizedUploads({})}><X className="w-3 h-3"/></Button>
+             </div>
+             <div className="max-h-32 overflow-y-auto text-xs text-[#9CA3AF] space-y-1">
+                {Object.entries(sanitizedUploads).map(([original, sanitized], i) => (
+                    <div key={i} className="flex justify-between gap-4">
+                        <span className="truncate flex-1" title={original}>{original}</span>
+                        <span className="text-[#F59E0B] text-[10px] truncate w-32 text-right" title={sanitized}>&#8594; {sanitized}</span>
+                    </div>
+                ))}
+             </div>
           </motion.div>
       )}
 
