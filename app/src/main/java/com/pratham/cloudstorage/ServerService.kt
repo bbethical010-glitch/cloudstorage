@@ -608,6 +608,10 @@ class ServerService : Service() {
                                             currentDir = dirCache[currentPath]!!
                                         } else {
                                             var nextDir = currentDir.findFile(segment)
+                                            if (nextDir != null && !nextDir.isDirectory) {
+                                                call.respondText("{\"error\":\"path_conflict_at_segment: $segment\"}", ContentType.Application.Json, HttpStatusCode.Conflict)
+                                                return@post
+                                            }
                                             if (nextDir == null) {
                                                 nextDir = currentDir.createDirectory(segment)
                                                 if (nextDir == null) {
@@ -702,7 +706,8 @@ class ServerService : Service() {
                                 val relativePath = call.request.queryParameters["relativePath"]
                                 val chunkIndex = call.request.queryParameters["chunkIndex"]?.toIntOrNull() ?: 0
 
-                                val targetDir: DocumentFile
+                                val root = DocumentFile.fromTreeUri(applicationContext, rootUri) ?: return@post call.respond(HttpStatusCode.InternalServerError, "Storage not mounted")
+                                var targetDir: DocumentFile = root
                                 val finalFileName: String
 
                                 if (!relativePath.isNullOrBlank()) {
@@ -717,12 +722,28 @@ class ServerService : Service() {
                                             dirPath
                                         }
 
-                                        targetDir = ensureSafePathFast(rootUri, fullDirPath) ?: return@post call.respond(HttpStatusCode.InternalServerError, "Failed to resolve folder path")
+                                        val segments = fullDirPath.split("/").filter { it.isNotBlank() }
+                                        for (segment in segments) {
+                                            val nextDir = targetDir.findFile(segment)
+                                            if (nextDir == null) {
+                                                call.respondText("{\"error\":\"directory_not_found_at_segment: $segment\"}", ContentType.Application.Json, HttpStatusCode.Conflict)
+                                                return@post
+                                            }
+                                            targetDir = nextDir
+                                        }
                                     } catch (e: IllegalArgumentException) {
                                         return@post call.respond(HttpStatusCode.BadRequest, "Invalid path traversal")
                                     }
                                 } else {
-                                    targetDir = ensureSafePathFast(rootUri, path) ?: return@post call.respond(HttpStatusCode.InternalServerError, "Failed to resolve upload path")
+                                    val segments = path.split("/").filter { it.isNotBlank() }
+                                    for (segment in segments) {
+                                        val nextDir = targetDir.findFile(segment)
+                                        if (nextDir == null) {
+                                            call.respondText("{\"error\":\"directory_not_found_at_segment: $segment\"}", ContentType.Application.Json, HttpStatusCode.Conflict)
+                                            return@post
+                                        }
+                                        targetDir = nextDir
+                                    }
                                     finalFileName = fileName
                                 }
 
@@ -730,30 +751,8 @@ class ServerService : Service() {
                                     return@post call.respond(HttpStatusCode.InternalServerError, "Storage not writable")
                                 }
 
-                                var existingUri: Uri? = null
-                                try {
-                                    val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
-                                        targetDir.uri,
-                                        android.provider.DocumentsContract.getDocumentId(targetDir.uri)
-                                    )
-                                    contentResolver.query(
-                                        childrenUri,
-                                        arrayOf(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID, android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-                                        null, null, null
-                                    )?.use { cursor ->
-                                        val idIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                                        val nameIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                                        while (cursor.moveToNext()) {
-                                            if (cursor.getString(nameIdx) == finalFileName) {
-                                                val docId = cursor.getString(idIdx)
-                                                existingUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(targetDir.uri, docId)
-                                                break
-                                            }
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    e.printStackTrace()
-                                }
+                                val existingDoc = targetDir.findFile(finalFileName)
+                                var existingUri: Uri? = existingDoc?.uri
 
                                 val fileUri = if (chunkIndex == 0) {
                                     if (existingUri != null) {
