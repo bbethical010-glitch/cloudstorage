@@ -630,7 +630,9 @@ class ServerService : Service() {
                                 call.respondText("{\"error\":\"invalid_path_traversal\"}", ContentType.Application.Json, HttpStatusCode.BadRequest)
                             } catch (e: Exception) {
                                 android.util.Log.e("ServerService", "Folder manifest processing failed", e)
-                                call.respondText("{\"error\":\"${e.message?.replace("\"", "\\\"")}\"}", ContentType.Application.Json, HttpStatusCode.InternalServerError)
+                                val errJson = org.json.JSONObject()
+                                errJson.put("error", e.message ?: "Unknown error")
+                                call.respondText(errJson.toString(), ContentType.Application.Json, HttpStatusCode.InternalServerError)
                             }
                         }
 
