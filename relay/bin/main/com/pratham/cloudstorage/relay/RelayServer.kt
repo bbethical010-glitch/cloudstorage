@@ -114,7 +114,7 @@ fun Application.relayModule() {
                                 if (envelope.subType == "download_end_stream" && !envelope.requestId.isNullOrBlank()) {
                                     registry.getAgent(shareCode)?.let {
                                         it.activeDownloadStreams[envelope.requestId]?.flush()
-                                        it.activeDownloadStreams[envelope.requestId]?.close()
+                                        it.activeDownloadStreams[envelope.requestId]?.close(null)
                                         it.activeDownloadCompletions[envelope.requestId]?.complete(Unit)
                                     }
                                 } else if (!envelope.requestId.isNullOrBlank()) {
@@ -213,7 +213,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
 
         val requestId = UUID.randomUUID().toString()
 
-        val isUpload = request.path().contains("/api/upload")
+        val isUpload = request.path().contains("/api/upload") || request.path().contains("/api/folder_")
         val contentLength = request.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
         val maxBodyBytes = 50L * 1024 * 1024 // 50 MB for non-streaming
         

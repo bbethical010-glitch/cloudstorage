@@ -562,15 +562,220 @@ class ServerService : Service() {
                             }
                         }
 
-                        post("/upload") {
+                        post("/folder_manifest") {
                             if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
                             try {
-                                val path = call.request.queryParameters["path"]
-                                val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
-                                val targetDir = resolveSafePath(root, path) ?: return@post call.respond(HttpStatusCode.NotFound)
-                                call.handleStreamingUpload(targetDir)
+                                val basePath = call.request.queryParameters["path"] ?: ""
+                                val root = DocumentFile.fromTreeUri(this@ServerService, rootUri) ?: return@post call.respond(HttpStatusCode.NotFound)
+                                val baseDir = ensureSafePathFast(rootUri, basePath) ?: return@post call.respond(HttpStatusCode.NotFound)
+
+                                val jsonStr: String = call.receiveText()
+                                val jsonArray = org.json.JSONArray(jsonStr)
+                                var directoriesCreated = 0
+
+                                val dirCache = mutableMapOf<String, DocumentFile>()
+                                dirCache[""] = baseDir
+
+                                for (i in 0 until jsonArray.length()) {
+                                    val item = jsonArray.getJSONObject(i)
+                                    val relativePath = item.optString("relativePath", "")
+                                    if (relativePath.isBlank() || !relativePath.contains("/")) continue
+                                    
+                                    try {
+                                        val cleanPath = sanitizeRelativePath(relativePath)
+                                        val dirPath = cleanPath.substringBeforeLast("/")
+                                        val dirSegments = dirPath.split("/").filter { it.isNotBlank() }
+
+                                        var currentDir = baseDir
+                                        var currentPath = ""
+
+                                        for (segment in dirSegments) {
+                                            currentPath = if (currentPath.isEmpty()) segment else "$currentPath/$segment"
+                                            if (dirCache.containsKey(currentPath)) {
+                                                currentDir = dirCache[currentPath]!!
+                                            } else {
+                                                var nextDir = currentDir.findFile(segment)
+                                                if (nextDir == null) {
+                                                    nextDir = currentDir.createDirectory(segment)
+                                                    directoriesCreated++
+                                                }
+                                                if (nextDir != null) {
+                                                    currentDir = nextDir
+                                                    dirCache[currentPath] = nextDir
+                                                } else {
+                                                    break
+                                                }
+                                            }
+                                        }
+                                    } catch (e: IllegalArgumentException) {
+                                        return@post call.respond(HttpStatusCode.BadRequest, "Invalid path traversal")
+                                    }
+                                }
+                                call.respondText("{\"directoriesCreated\": $directoriesCreated}", ContentType.Application.Json)
                             } catch (e: Exception) {
-                                call.respond(HttpStatusCode.InternalServerError, "Upload outer failed: ${e.stackTraceToString()}")
+                                call.respond(HttpStatusCode.InternalServerError, e.stackTraceToString())
+                            }
+                        }
+
+                        post("/folder_complete") {
+                            if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            try {
+                                val basePath = call.request.queryParameters["path"] ?: ""
+                                val folderName = call.request.queryParameters["folder"] ?: ""
+                                val root = DocumentFile.fromTreeUri(this@ServerService, rootUri) ?: return@post call.respond(HttpStatusCode.NotFound)
+                                
+                                val fullPath = if (basePath.isBlank()) folderName else if (folderName.isBlank()) basePath else "$basePath/$folderName"
+                                val targetDir = resolveSafePath(root, fullPath) ?: return@post call.respond(HttpStatusCode.NotFound)
+
+                                var totalFileCount = 0
+                                var totalBytesWrite = 0L
+                                val paths = mutableListOf<String>()
+
+                                fun scanFolder(dir: DocumentFile, currentPath: String) {
+                                    val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
+                                        rootUri,
+                                        android.provider.DocumentsContract.getDocumentId(dir.uri)
+                                    )
+                                    val columns = arrayOf(
+                                        android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                                        android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                                        android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
+                                        android.provider.DocumentsContract.Document.COLUMN_SIZE
+                                    )
+                                    contentResolver.query(childrenUri, columns, null, null, null)?.use { cursor ->
+                                        val idIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                                        val nameIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                                        val mimeIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE)
+                                        val sizeIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_SIZE)
+
+                                        while(cursor.moveToNext()) {
+                                            val name = cursor.getString(nameIdx)
+                                            val id = cursor.getString(idIdx)
+                                            val mime = cursor.getString(mimeIdx)
+                                            val size = cursor.getLong(sizeIdx)
+                                            val relPath = if (currentPath.isEmpty()) name else "$currentPath/$name"
+
+                                            if (mime == android.provider.DocumentsContract.Document.MIME_TYPE_DIR) {
+                                                val uri = android.provider.DocumentsContract.buildDocumentUriUsingTree(rootUri, id)
+                                                val subDir = DocumentFile.fromTreeUri(this@ServerService, uri)
+                                                if (subDir != null) scanFolder(subDir, relPath)
+                                            } else {
+                                                totalFileCount++
+                                                totalBytesWrite += size
+                                                paths.add(relPath)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                scanFolder(targetDir, "")
+
+                                val responseJson = org.json.JSONObject()
+                                responseJson.put("totalFileCount", totalFileCount)
+                                responseJson.put("totalBytesWritten", totalBytesWrite)
+                                responseJson.put("paths", org.json.JSONArray(paths))
+
+                                call.respondText(responseJson.toString(), ContentType.Application.Json)
+                            } catch (e: Exception) {
+                                call.respond(HttpStatusCode.InternalServerError, "Error: ${e.message}")
+                            }
+                        }
+
+                        post("/upload_chunk") {
+                            if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            try {
+                                val path = call.request.queryParameters["path"] ?: ""
+                                val fileName = call.request.queryParameters["filename"] ?: "uploaded_file"
+                                val relativePath = call.request.queryParameters["relativePath"]
+                                val chunkIndex = call.request.queryParameters["chunkIndex"]?.toIntOrNull() ?: 0
+
+                                val targetDir: DocumentFile
+                                val finalFileName: String
+
+                                if (!relativePath.isNullOrBlank()) {
+                                    try {
+                                        val cleanPath = sanitizeRelativePath(relativePath)
+                                        finalFileName = cleanPath.substringAfterLast("/")
+                                        val dirPath = cleanPath.substringBeforeLast("/", "")
+                                        
+                                        val fullDirPath = if (path.isNotBlank()) {
+                                            if (dirPath.isNotBlank()) "$path/$dirPath" else path
+                                        } else {
+                                            dirPath
+                                        }
+
+                                        targetDir = ensureSafePathFast(rootUri, fullDirPath) ?: return@post call.respond(HttpStatusCode.InternalServerError, "Failed to resolve folder path")
+                                    } catch (e: IllegalArgumentException) {
+                                        return@post call.respond(HttpStatusCode.BadRequest, "Invalid path traversal")
+                                    }
+                                } else {
+                                    targetDir = ensureSafePathFast(rootUri, path) ?: return@post call.respond(HttpStatusCode.InternalServerError, "Failed to resolve upload path")
+                                    finalFileName = fileName
+                                }
+
+                                if (!targetDir.canWrite()) {
+                                    return@post call.respond(HttpStatusCode.InternalServerError, "Storage not writable")
+                                }
+
+                                var existingUri: Uri? = null
+                                try {
+                                    val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
+                                        targetDir.uri,
+                                        android.provider.DocumentsContract.getDocumentId(targetDir.uri)
+                                    )
+                                    contentResolver.query(
+                                        childrenUri,
+                                        arrayOf(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID, android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                                        null, null, null
+                                    )?.use { cursor ->
+                                        val idIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                                        val nameIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                                        while (cursor.moveToNext()) {
+                                            if (cursor.getString(nameIdx) == finalFileName) {
+                                                val docId = cursor.getString(idIdx)
+                                                existingUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(targetDir.uri, docId)
+                                                break
+                                            }
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
+
+                                val fileUri = if (chunkIndex == 0) {
+                                    if (existingUri != null) {
+                                        android.provider.DocumentsContract.deleteDocument(contentResolver, existingUri!!)
+                                    }
+                                    android.provider.DocumentsContract.createDocument(
+                                        contentResolver,
+                                        targetDir.uri,
+                                        "application/octet-stream",
+                                        finalFileName
+                                    )
+                                } else {
+                                    existingUri
+                                }
+
+                                if (fileUri != null) {
+                                    val mode = if (chunkIndex == 0) "w" else "wa"
+                                    contentResolver.openOutputStream(fileUri, mode)?.use { output ->
+                                        val channel = call.request.receiveChannel()
+                                        val bufferBox = ByteArray(8192)
+                                        val byteBuffer = java.nio.ByteBuffer.wrap(bufferBox)
+                                        while (!channel.isClosedForRead) {
+                                            byteBuffer.clear()
+                                            val read = channel.readAvailable(byteBuffer)
+                                            if (read > 0) {
+                                                output.write(bufferBox, 0, read)
+                                            }
+                                        }
+                                    }
+                                    call.respond(HttpStatusCode.OK)
+                                } else {
+                                    call.respond(HttpStatusCode.InternalServerError, "Failed to resolve file: $finalFileName")
+                                }
+                            } catch (e: Exception) {
+                                call.respond(HttpStatusCode.InternalServerError, "Upload failed: ${e.stackTraceToString()}")
                             }
                         }
                     }
@@ -669,83 +874,12 @@ class ServerService : Service() {
         stopServer()
     }
 
-    private suspend fun io.ktor.server.application.ApplicationCall.handleStreamingUpload(targetDir: DocumentFile) {
-        try {
-            val fileName = request.queryParameters["filename"] ?: "uploaded_file"
-            // If chunkIndex is explicitly provided in the URL, use it
-            val chunkIndex = request.queryParameters["chunkIndex"]?.toIntOrNull() ?: 0
-
-            if (!targetDir.canWrite()) {
-                respond(HttpStatusCode.InternalServerError, "Storage not writable")
-                return
-            }
-
-            var existingUri: Uri? = null
-            try {
-                val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
-                    targetDir.uri,
-                    android.provider.DocumentsContract.getDocumentId(targetDir.uri)
-                )
-                contentResolver.query(
-                    childrenUri,
-                    arrayOf(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID, android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-                    null, null, null
-                )?.use { cursor ->
-                    val idIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                    val nameIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                    while (cursor.moveToNext()) {
-                        if (cursor.getString(nameIdx) == fileName) {
-                            val docId = cursor.getString(idIdx)
-                            existingUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(targetDir.uri, docId)
-                            break
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-
-            val fileUri = if (chunkIndex == 0) {
-                // First chunk or single file: delete existing, create new
-                if (existingUri != null) {
-                    android.provider.DocumentsContract.deleteDocument(contentResolver, existingUri!!)
-                }
-                val mime = "application/octet-stream"
-                android.provider.DocumentsContract.createDocument(
-                    contentResolver,
-                    targetDir.uri,
-                    mime,
-                    fileName
-                )
-            } else {
-                // Subsequent chunks: must append
-                existingUri
-            }
-
-            if (fileUri != null) {
-                val mode = if (chunkIndex == 0) "w" else "wa"
-                contentResolver.openOutputStream(fileUri, mode)?.use { output ->
-                    val channel = request.receiveChannel()
-                    val buffer = java.nio.ByteBuffer.allocate(128 * 1024)
-                    while (!channel.isClosedForRead) {
-                        buffer.clear()
-                        val read = channel.readAvailable(buffer)
-                        if (read > 0) {
-                            buffer.flip()
-                            val bytes = ByteArray(read)
-                            buffer.get(bytes)
-                            output.write(bytes)
-                        }
-                    }
-                }
-                respond(HttpStatusCode.OK)
-            } else {
-                respond(HttpStatusCode.InternalServerError, "Failed to resolve file: $fileName")
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            respond(HttpStatusCode.InternalServerError, "Upload inner error: ${e.stackTraceToString()}")
+    private fun sanitizeRelativePath(relativePath: String): String {
+        val clean = relativePath.removePrefix("/").removePrefix("./")
+        if (clean.contains("..") || clean.contains("./") || clean.contains("//")) {
+            throw IllegalArgumentException("Invalid path traversal detected")
         }
+        return clean
     }
 
     private fun resolveSafeDocIdFast(rootUri: Uri, path: String?): String? {
@@ -784,6 +918,47 @@ class ServerService : Service() {
         
         val docId = resolveSafeDocIdFast(root.uri, path) ?: return null
         val targetUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(root.uri, docId)
+        return DocumentFile.fromTreeUri(this@ServerService, targetUri)
+    }
+
+    private fun ensureSafePathFast(rootUri: Uri, path: String?): DocumentFile? {
+        var currentDocId = android.provider.DocumentsContract.getTreeDocumentId(rootUri) ?: return null
+        if (path.isNullOrBlank() || path == "/") {
+            val targetUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(rootUri, currentDocId)
+            return DocumentFile.fromTreeUri(this@ServerService, targetUri)
+        }
+        val segments = path.split("/").filter { it.isNotBlank() }
+        
+        for (segment in segments) {
+            if (segment == ".." || segment == ".") return null
+            val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(rootUri, currentDocId)
+            var foundId = contentResolver.query(
+                childrenUri,
+                arrayOf(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID, android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                null, null, null
+            )?.use { cursor ->
+                val idIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameIdx = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                var id: String? = null
+                while (cursor.moveToNext()) {
+                    if (cursor.getString(nameIdx) == segment) {
+                        id = cursor.getString(idIdx)
+                        break
+                    }
+                }
+                id
+            }
+            if (foundId == null) {
+                // Must create it
+                val parentUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(rootUri, currentDocId)
+                val newDirUri = android.provider.DocumentsContract.createDocument(contentResolver, parentUri, android.provider.DocumentsContract.Document.MIME_TYPE_DIR, segment)
+                if (newDirUri == null) return null
+                foundId = android.provider.DocumentsContract.getDocumentId(newDirUri)
+            }
+            if (foundId == null) return null
+            currentDocId = foundId
+        }
+        val targetUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(rootUri, currentDocId)
         return DocumentFile.fromTreeUri(this@ServerService, targetUri)
     }
 }

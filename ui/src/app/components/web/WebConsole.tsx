@@ -71,6 +71,8 @@ export function WebConsole() {
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [folderProgress, setFolderProgress] = useState({ current: 0, total: 0 });
+  const [failedUploads, setFailedUploads] = useState<{file: File, error: string}[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [storageStats, setStorageStats] = useState({ total: 0, used: 0, free: 0 });
   const [searchQuery, setSearchQuery] = useState("");
@@ -85,6 +87,7 @@ export function WebConsole() {
   const [shareConfig, setShareConfig] = useState({ expiry: '24h', readOnly: true });
   
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const SidebarContent = () => (
     <div className="flex flex-col h-full p-4">
@@ -96,6 +99,12 @@ export function WebConsole() {
            <Upload className="w-5 h-5" /> Upload File
          </Button>
          <Button 
+          onClick={() => { folderInputRef.current?.click(); setIsMobileMenuOpen(false); }}
+          className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] h-11 rounded-xl shadow-lg shadow-blue-500/10 gap-2 font-bold transition-all"
+         >
+           <Folder className="w-5 h-5 fill-white/20" /> Upload Folder
+         </Button>
+         <Button 
           variant="outline"
           onClick={() => { handleCreateFolder(); setIsMobileMenuOpen(false); }}
           className="w-full bg-transparent border-[#1F2937] hover:bg-[#111827] h-10 rounded-xl gap-2 font-bold transition-all"
@@ -103,6 +112,7 @@ export function WebConsole() {
            <Plus className="w-4 h-4" /> New Folder
          </Button>
          <input type="file" ref={fileInputRef} className="hidden" multiple onChange={handleUpload} />
+         <input type="file" ref={folderInputRef} className="hidden" multiple {...{webkitdirectory: "true", directory: "true"} as any} onChange={handleUpload} />
       </div>
 
       <ScrollArea className="flex-1 -mx-2 px-2">
@@ -455,77 +465,171 @@ export function WebConsole() {
     }
   };
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const fileList = e.target.files;
-    if (!fileList || fileList.length === 0) return;
+  const traverseFileTree = async (item: any, path: string = ''): Promise<File[]> => {
+    return new Promise((resolve) => {
+      if (item.isFile) {
+        item.file((file: File) => {
+          Object.defineProperty(file, 'webkitRelativePath', {
+            value: path + file.name,
+            writable: true
+          });
+          resolve([file]);
+        });
+      } else if (item.isDirectory) {
+        const dirReader = item.createReader();
+        const entries: any[] = [];
+        
+        const readEntries = () => {
+          dirReader.readEntries(async (results: any[]) => {
+            if (!results.length) {
+              const filesPromises = entries.map(entry => traverseFileTree(entry, path + item.name + '/'));
+              const filesArrays = await Promise.all(filesPromises);
+              resolve(filesArrays.flat());
+            } else {
+              entries.push(...results);
+              readEntries();
+            }
+          });
+        };
+        readEntries();
+      } else {
+        resolve([]);
+      }
+    });
+  };
+
+  const processFiles = async (files: File[]) => {
+    if (!files || files.length === 0) return;
     
     setIsUploading(true);
     setUploadProgress(0);
+    setFolderProgress({ current: 0, total: files.length });
+    setFailedUploads([]);
 
-    let totalLoaded = 0;
-    const totalSize = Array.from(fileList).reduce((acc, file) => acc + file.size, 0);
+    const manifest = files.filter(f => f.webkitRelativePath && f.webkitRelativePath.includes('/')).map(f => {
+      const CHUNK_SIZE = 5 * 1024 * 1024;
+      return {
+        relativePath: currentPath ? `${currentPath}/${f.webkitRelativePath}` : f.webkitRelativePath,
+        fileId: crypto.randomUUID(),
+        size: f.size,
+        totalChunks: Math.max(1, Math.ceil(f.size / CHUNK_SIZE))
+      };
+    });
 
-    for (let i = 0; i < fileList.length; i++) {
-      const file = fileList[i];
+    if (manifest.length > 0) {
       try {
-        const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks
-        const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
-
-        for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-          const start = chunkIndex * CHUNK_SIZE;
-          const end = Math.min(start + CHUNK_SIZE, file.size);
-          const chunk = file.slice(start, end);
-
-          await new Promise((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            xhr.open("POST", `${getBaseUrl()}/api/upload?path=${encodeURIComponent(currentPath)}&filename=${encodeURIComponent(file.name)}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}`);
-            
-            const headers = getHeaders();
-            if (headers.Authorization) {
-              xhr.setRequestHeader('Authorization', headers.Authorization);
-            }
-            xhr.setRequestHeader("Content-Type", "application/octet-stream");
-
-            let lastLoaded = 0;
-            xhr.upload.addEventListener("progress", (event) => {
-              if (event.lengthComputable) {
-                const delta = event.loaded - lastLoaded;
-                totalLoaded += delta;
-                lastLoaded = event.loaded;
-                setUploadProgress(Math.round((totalLoaded / totalSize) * 100));
-              }
-            });
-
-            xhr.onload = () => {
-              if (xhr.status === 200) {
-                resolve(null);
-              } else if (xhr.status === 500 && xhr.responseText.includes("Storage not writable")) {
-                reject(new Error("Write Permission Denied"));
-              } else {
-                reject(new Error(xhr.responseText || "Server error"));
-              }
-            };
-
-            xhr.onerror = () => {
-              reject(new Error("Network connection severed."));
-            };
-
-            xhr.send(chunk);
-          });
-        }
-      } catch (err: any) {
+        const res = await fetch(`${getBaseUrl()}/api/folder_manifest?path=${encodeURIComponent(currentPath)}`, {
+          method: 'POST',
+          headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(manifest)
+        });
+        if (!res.ok) throw new Error("Failed to pre-create directory tree");
+      } catch (e: any) {
         setIsUploading(false);
-        toast.error(`Upload failed for ${file.name}: ${err.message}`);
-        if (fileInputRef.current) fileInputRef.current.value = "";
+        toast.error(`Folder manifest creation failed: ${e.message}`);
         return;
       }
+    }
+
+    const failed: {file: File, error: string}[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i] as File & { webkitRelativePath?: string };
+        let relativePath = file.webkitRelativePath || "";
+        let filename = file.name;
+        
+        if (relativePath) {
+            const parts = relativePath.split('/');
+            filename = parts.pop() || file.name;
+        }
+        
+        let success = false;
+        let lastError = "";
+        
+        for (let retry = 0; retry < 3; retry++) {
+            try {
+                const CHUNK_SIZE = 5 * 1024 * 1024;
+                const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+                setUploadProgress(0);
+
+                for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+                    const start = chunkIndex * CHUNK_SIZE;
+                    const end = Math.min(start + CHUNK_SIZE, file.size);
+                    const chunk = file.slice(start, end);
+
+                    await new Promise((resolve, reject) => {
+                        const xhr = new XMLHttpRequest();
+                        let uploadUrl = `${getBaseUrl()}/api/upload_chunk?path=${encodeURIComponent(currentPath)}&filename=${encodeURIComponent(filename)}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}`;
+                        if (file.webkitRelativePath) {
+                            uploadUrl += `&relativePath=${encodeURIComponent(file.webkitRelativePath)}`;
+                        }
+                        
+                        xhr.open("POST", uploadUrl);
+                        const headers = getHeaders();
+                        if (headers.Authorization) xhr.setRequestHeader('Authorization', headers.Authorization);
+                        xhr.setRequestHeader("Content-Type", "application/octet-stream");
+
+                        xhr.upload.addEventListener("progress", (event) => {
+                            if (event.lengthComputable) {
+                                const totalUploadedSoFar = (chunkIndex * CHUNK_SIZE) + event.loaded;
+                                setUploadProgress(Math.round((totalUploadedSoFar / file.size) * 100));
+                            }
+                        });
+
+                        xhr.onload = () => {
+                            if (xhr.status === 200) resolve(null);
+                            else reject(new Error(xhr.responseText || "Server error"));
+                        };
+                        xhr.onerror = () => reject(new Error("Network connection severed."));
+                        xhr.send(chunk);
+                    });
+                }
+                success = true;
+                break;
+            } catch (err: any) {
+                lastError = err.message;
+            }
+        }
+
+        if (!success) {
+            failed.push({file, error: lastError});
+        }
+        
+        setFolderProgress(prev => ({ ...prev, current: prev.current + 1 }));
+    }
+    
+    if (manifest.length > 0 && files.length > 0) {
+        const firstRel = files.find(f => f.webkitRelativePath)?.webkitRelativePath || "";
+        const rootFolder = firstRel.split('/')[0] || "folder";
+        try {
+            await fetch(`${getBaseUrl()}/api/folder_complete?path=${encodeURIComponent(currentPath)}&folder=${encodeURIComponent(rootFolder)}`, {
+                method: 'POST',
+                headers: getHeaders()
+            });
+        } catch (e) {
+            console.error("folder_complete failed", e);
+        }
     }
     
     setIsUploading(false);
     setUploadProgress(100);
-    toast.success("Upload complete!");
+    
+    if (failed.length > 0) {
+        setFailedUploads(failed);
+        toast.error(`${failed.length} files failed to upload. See details.`);
+    } else {
+        toast.success("Upload complete!");
+    }
+    
     if (fileInputRef.current) fileInputRef.current.value = "";
+    if (folderInputRef.current) folderInputRef.current.value = "";
     loadFiles(currentPath);
+  };
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      processFiles(Array.from(e.target.files));
+    }
   };
 
   const handleDownload = (file: FileNode) => {
@@ -702,6 +806,9 @@ export function WebConsole() {
           <Button variant="ghost" size="icon" className="md:hidden text-white bg-[#2563EB] hover:bg-[#1d4ed8] rounded-full w-8 h-8 shrink-0" onClick={() => fileInputRef.current?.click()}>
             <Upload className="w-4 h-4" />
           </Button>
+          <Button variant="ghost" size="icon" className="md:hidden text-white bg-[#2563EB] hover:bg-[#1d4ed8] rounded-full w-8 h-8 shrink-0" onClick={() => folderInputRef.current?.click()}>
+            <Folder className="w-4 h-4 fill-white/20" />
+          </Button>
           <div className="relative w-40 md:w-80 hidden sm:block">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#4B5563]" />
             <Input 
@@ -752,11 +859,24 @@ export function WebConsole() {
         <Panel defaultSize={62} minSize={40} className="bg-[#0B1220] flex flex-col relative w-full h-full"
           onDragOver={(e) => { e.preventDefault(); setIsDragging(true); e.dataTransfer.dropEffect = "copy"; }}
           onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
-          onDrop={(e) => {
+          onDrop={async (e) => {
             e.preventDefault();
             setIsDragging(false);
-            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-              handleUpload({ target: { files: e.dataTransfer.files } } as any);
+            if (e.dataTransfer.items) {
+                const items = Array.from(e.dataTransfer.items);
+                const allFiles: File[] = [];
+                for (let i = 0; i < items.length; i++) {
+                    const item = items[i].webkitGetAsEntry();
+                    if (item) {
+                        const files = await traverseFileTree(item);
+                        allFiles.push(...files);
+                    }
+                }
+                if (allFiles.length > 0) {
+                    processFiles(allFiles);
+                }
+            } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                processFiles(Array.from(e.dataTransfer.files));
             }
           }}>
           
@@ -986,11 +1106,48 @@ export function WebConsole() {
                    <span className="text-[10px] font-mono font-bold text-white">{uploadProgress}%</span>
                 </div>
                 <Progress value={uploadProgress} className="h-1 bg-[#0B1220]" />
+                {folderProgress.total > 1 && (
+                  <div className="mt-2 text-[10px] text-[#9CA3AF] font-medium flex justify-between">
+                    <span>Folder Progress</span>
+                    <span>{folderProgress.current} / {folderProgress.total} files</span>
+                  </div>
+                )}
              </div>
           </motion.div>
         )}
       </AnimatePresence>
       
+      {failedUploads.length > 0 && (
+          <motion.div 
+            initial={{ opacity: 0, y: 100 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 100 }}
+            className="fixed bottom-10 right-10 w-96 bg-[#111827] border border-[#EF4444]/40 p-4 rounded-2xl shadow-2xl z-50 flex flex-col gap-3"
+          >
+             <div className="flex justify-between items-center">
+                <span className="text-xs font-bold text-[#EF4444]">{failedUploads.length} files failed</span>
+                <Button size="sm" variant="outline" className="h-7 text-[10px] border-[#374151] hover:bg-[#374151]" onClick={() => setFailedUploads([])}><X className="w-3 h-3"/></Button>
+             </div>
+             <div className="max-h-32 overflow-y-auto text-xs text-[#9CA3AF] space-y-1">
+                {failedUploads.map((f, i) => (
+                    <div key={i} className="flex justify-between gap-4">
+                        <span className="truncate flex-1">{f.file.name}</span>
+                        <span className="text-[#EF4444] text-[10px] truncate w-32 text-right">{f.error}</span>
+                    </div>
+                ))}
+             </div>
+             <Button 
+                size="sm" 
+                className="h-8 bg-[#2563EB] hover:bg-[#1d4ed8] text-xs font-bold w-full" 
+                onClick={() => {
+                    const filesToRetry = failedUploads.map(f => f.file);
+                    setFailedUploads([]);
+                    processFiles(filesToRetry);
+                }}
+             >
+                Retry Failed Files
+             </Button>
+          </motion.div>
+      )}
+
       {/* Share Configuration Modal */}
       <AnimatePresence>
         {showShareModal && (
