@@ -709,11 +709,13 @@ class ServerService : Service() {
 
                         post("/upload_chunk") {
                             if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            var relativePath: String? = null
+                            var chunkIndex: Int = 0
                             try {
                                 val path = call.request.queryParameters["path"] ?: ""
                                 val fileName = call.request.queryParameters["filename"] ?: "uploaded_file"
-                                val relativePath = call.request.queryParameters["relativePath"]
-                                val chunkIndex = call.request.queryParameters["chunkIndex"]?.toIntOrNull() ?: 0
+                                relativePath = call.request.queryParameters["relativePath"]
+                                chunkIndex = call.request.queryParameters["chunkIndex"]?.toIntOrNull() ?: 0
 
                                 val combinedPath = if (!relativePath.isNullOrBlank()) {
                                     if (path.isNotBlank()) "$path/$relativePath" else relativePath
@@ -745,25 +747,19 @@ class ServerService : Service() {
 
                                         val segments = fullDirPath.split("/").filter { it.isNotBlank() }
                                         for (segment in segments) {
-                                            val nextDir = targetDir.findFile(segment)
-                                            if (nextDir == null) {
-                                                call.respondText("{\"error\":\"directory_not_found_at_segment: $segment\"}", ContentType.Application.Json, HttpStatusCode.Conflict)
-                                                return@post
-                                            }
-                                            targetDir = nextDir
+                                            targetDir = resolveOrCreateDirectory(targetDir, segment)
                                         }
-                                    } catch (e: IllegalArgumentException) {
-                                        return@post call.respond(HttpStatusCode.BadRequest, "Invalid path traversal")
+                                    } catch (e: Exception) {
+                                        return@post call.respondText("{\"error\":\"${e.message}\"}", ContentType.Application.Json, HttpStatusCode.Conflict)
                                     }
                                 } else {
                                     val segments = path.split("/").filter { it.isNotBlank() }
-                                    for (segment in segments) {
-                                        val nextDir = targetDir.findFile(segment)
-                                        if (nextDir == null) {
-                                            call.respondText("{\"error\":\"directory_not_found_at_segment: $segment\"}", ContentType.Application.Json, HttpStatusCode.Conflict)
-                                            return@post
+                                    try {
+                                        for (segment in segments) {
+                                            targetDir = resolveOrCreateDirectory(targetDir, segment)
                                         }
-                                        targetDir = nextDir
+                                    } catch (e: Exception) {
+                                        return@post call.respondText("{\"error\":\"${e.message}\"}", ContentType.Application.Json, HttpStatusCode.Conflict)
                                     }
                                     finalFileName = fileName
                                 }
@@ -779,12 +775,21 @@ class ServerService : Service() {
                                     if (existingUri != null) {
                                         android.provider.DocumentsContract.deleteDocument(contentResolver, existingUri!!)
                                     }
-                                    android.provider.DocumentsContract.createDocument(
-                                        contentResolver,
-                                        targetDir.uri,
-                                        "application/octet-stream",
-                                        finalFileName
-                                    )
+                                    var newFileUri: Uri? = null
+                                    try {
+                                        val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(finalFileName.substringAfterLast('.', "")) ?: "application/octet-stream"
+                                        val newFileDoc = targetDir.createFile(mimeType, finalFileName)
+                                        newFileUri = newFileDoc?.uri
+                                        if (newFileUri == null) throw Exception("Returned null URI")
+                                    } catch (e: Exception) {
+                                        android.util.Log.w("UploadChunk", "Sanitized filename fallback invoked for '$finalFileName': ${e.message}")
+                                        val sanitized = finalFileName.replace(Regex("[^a-zA-Z0-9.\\-_]"), "_")
+                                        val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(sanitized.substringAfterLast('.', "")) ?: "application/octet-stream"
+                                        val fallbackFileDoc = targetDir.createFile(mimeType, sanitized)
+                                            ?: throw IllegalStateException("createFile fallback returned null for sanitized name '$sanitized' under ${targetDir.uri}")
+                                        newFileUri = fallbackFileDoc.uri
+                                    }
+                                    newFileUri
                                 } else {
                                     existingUri
                                 }
@@ -808,7 +813,12 @@ class ServerService : Service() {
                                     call.respond(HttpStatusCode.InternalServerError, "Failed to resolve file: $finalFileName")
                                 }
                             } catch (e: Exception) {
-                                call.respond(HttpStatusCode.InternalServerError, e.stackTraceToString())
+                                android.util.Log.e("UploadChunk", "Crash for relativePath=$relativePath chunkIndex=$chunkIndex", e)
+                                val errJson = org.json.JSONObject()
+                                errJson.put("error", "${e::class.simpleName}: ${e.message}")
+                                errJson.put("relativePath", relativePath ?: "")
+                                errJson.put("chunkIndex", chunkIndex)
+                                call.respondText(errJson.toString(), ContentType.Application.Json, HttpStatusCode.InternalServerError)
                             }
                         }
                     }
@@ -914,6 +924,20 @@ class ServerService : Service() {
             if (segments[i] == segments[i + 1]) return true
         }
         return false
+    }
+
+    private fun resolveOrCreateDirectory(parent: DocumentFile, segment: String): DocumentFile {
+        val existing = parent.findFile(segment)
+        if (existing != null && existing.isDirectory) return existing
+        if (existing != null && !existing.isDirectory) {
+            throw IllegalStateException("Path conflict: '$segment' exists as a file, not a directory")
+        }
+        val created = parent.createDirectory(segment)
+        if (created != null) {
+            android.util.Log.w("UploadChunk", "Auto-healed missing directory segment: $segment")
+            return created
+        }
+        throw IllegalStateException("createDirectory returned null for segment '$segment' under ${parent.uri}")
     }
 
     private fun sanitizeRelativePath(relativePath: String): String {

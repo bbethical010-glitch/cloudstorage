@@ -72,7 +72,7 @@ export function WebConsole() {
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [folderProgress, setFolderProgress] = useState({ current: 0, total: 0 });
+  const [folderProgress, setFolderProgress] = useState({ success: 0, uploading: 0, failed: 0, total: 0 });
   const [failedUploads, setFailedUploads] = useState<{file: File, error: string}[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [storageStats, setStorageStats] = useState({ total: 0, used: 0, free: 0 });
@@ -504,7 +504,7 @@ export function WebConsole() {
     
     setIsUploading(true);
     setUploadProgress(0);
-    setFolderProgress({ current: 0, total: files.length });
+    setFolderProgress({ success: 0, uploading: files.length, failed: 0, total: files.length });
     setFailedUploads([]);
 
     // Pre-flight check
@@ -598,8 +598,17 @@ export function WebConsole() {
                         });
 
                         xhr.onload = () => {
-                            if (xhr.status === 200) resolve(null);
-                            else reject(new Error(xhr.responseText || "Server error"));
+                            if (xhr.status === 200) {
+                                resolve(null);
+                            } else {
+                                try {
+                                    const json = JSON.parse(xhr.responseText);
+                                    console.error(`Chunk failed for ${file.webkitRelativePath} chunk ${chunkIndex}:`, json.error);
+                                    reject(new Error(json.error || `Server error ${xhr.status}`));
+                                } catch {
+                                    reject(new Error(xhr.responseText || `Server error ${xhr.status}`));
+                                }
+                            }
                         };
                         xhr.onerror = () => reject(new Error("Network connection severed."));
                         xhr.send(chunk);
@@ -614,9 +623,10 @@ export function WebConsole() {
 
         if (!success) {
             failed.push({file, error: lastError});
+            setFolderProgress(prev => ({ ...prev, uploading: prev.uploading - 1, failed: prev.failed + 1 }));
+        } else {
+            setFolderProgress(prev => ({ ...prev, uploading: prev.uploading - 1, success: prev.success + 1 }));
         }
-        
-        setFolderProgress(prev => ({ ...prev, current: prev.current + 1 }));
     }
     
     if (manifest.length > 0 && files.length > 0) {
@@ -1127,9 +1137,13 @@ export function WebConsole() {
                 </div>
                 <Progress value={uploadProgress} className="h-1 bg-[#0B1220]" />
                 {folderProgress.total > 1 && (
-                  <div className="mt-2 text-[10px] text-[#9CA3AF] font-medium flex justify-between">
+                  <div className="mt-2 text-[10px] text-[#9CA3AF] font-medium flex justify-between gap-4">
                     <span>Folder Progress</span>
-                    <span>{folderProgress.current} / {folderProgress.total} files</span>
+                    <span className="flex gap-2">
+                        <span className="text-[#10B981]">{folderProgress.success} uploaded</span> &middot;
+                        <span className="text-[#3B82F6]">{folderProgress.uploading} uploading</span> &middot;
+                        <span className="text-[#EF4444]">{folderProgress.failed} failed</span>
+                    </span>
                   </div>
                 )}
              </div>
