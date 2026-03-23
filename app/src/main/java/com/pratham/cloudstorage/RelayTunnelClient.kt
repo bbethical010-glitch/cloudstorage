@@ -97,85 +97,25 @@ class RelayTunnelClient(
                                                 Log.d(TAG, "[RELAY LOG] ${envelope.error ?: "unspecified"}")
                                             }
                                             "request" -> {
-                                                scope.launch {
-                                                    when (envelope.subType) {
-                                                        "upload_start" -> {
-                                                            handleUploadStart(envelope)
-                                                        }
-                                                        "upload_end" -> {
-                                                            val response = handleUploadEnd(envelope)
-                                                            outgoing.send(Frame.Text(relayGson.toJson(response)))
-                                                        }
-                                                        "upload_start_stream" -> {
-                                                            val pathStr = envelope.query?.let { q -> Regex("path=([^&]*)").find(q)?.groupValues?.get(1) }
-                                                                ?.let { java.net.URLDecoder.decode(it, "UTF-8") } ?: ""
-                                                            val nameStr = envelope.query?.let { q -> Regex("name=([^&]*)").find(q)?.groupValues?.get(1) }
-                                                                ?.let { java.net.URLDecoder.decode(it, "UTF-8") } ?: "uploaded_file"
-                                                            val relativePathStr = envelope.query?.let { q -> Regex("relativePath=([^&]*)").find(q)?.groupValues?.get(1) }
-                                                                ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
-                                                            val chunkIndexStr = envelope.query?.let { q -> Regex("chunkIndex=([^&]*)").find(q)?.groupValues?.get(1) }
-                                                                ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
-
-                                                            Log.d("ChunkDiag", "[TUNNEL CHUNK DIAGNOSTIC] relativePath=$relativePathStr, path=$pathStr, name=$nameStr, chunk=$chunkIndexStr")
-
-                                                            envelope.requestId?.let { cleanupStreaming(it) }
-
-                                                            val combinedPath = if (!relativePathStr.isNullOrBlank()) {
-                                                                val cleanRelPath = relativePathStr.removePrefix("/").removePrefix("./")
-                                                                val dirPath = cleanRelPath.substringBeforeLast("/", "")
-                                                                if (pathStr.isNotBlank()) {
-                                                                    if (dirPath.isNotBlank()) "$pathStr/$dirPath" else pathStr
-                                                                } else {
-                                                                    dirPath
-                                                                }
-                                                            } else {
-                                                                pathStr
-                                                            }
-
-                                                            val finalName = if (!relativePathStr.isNullOrBlank()) {
-                                                                relativePathStr.removePrefix("/").removePrefix("./").substringAfterLast("/")
-                                                            } else {
-                                                                nameStr
-                                                            }
-
-                                                            val targetDoc = ensureResolvedPath(rootUri, combinedPath)
-                                                            if (targetDoc != null && envelope.requestId != null) {
-                                                                val isChunk0 = chunkIndexStr == null || chunkIndexStr == "0"
-                                                                val existingFile = findFileReliable(targetDoc, finalName)
-                                                                val fileUri = if (isChunk0) {
-                                                                    existingFile?.delete()
-                                                                    var newFileUri: Uri? = null
-                                                                    try {
-                                                                        val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(finalName.substringAfterLast('.', "")) ?: "application/octet-stream"
-                                                                        newFileUri = targetDoc.createFile(mimeType, finalName)?.uri ?: throw Exception("Null URI")
-                                                                    } catch (e: Exception) {
-                                                                        val fallbackName = sanitizeFilename(finalName)
-                                                                        val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(fallbackName.substringAfterLast('.', "")) ?: "application/octet-stream"
-                                                                        newFileUri = targetDoc.createFile(mimeType, fallbackName)?.uri
-                                                                    }
-                                                                    newFileUri
-                                                                } else {
-                                                                    existingFile?.uri
-                                                                }
-
-                                                                if (fileUri != null) {
-                                                                    val mode = if (isChunk0) "w" else "wa"
-                                                                    activeUploadStreams[envelope.requestId] = openOutputStreamWithRetry(context.contentResolver, fileUri, mode)!!
-                                                                    Log.d("ChunkDiag", "[TUNNEL CHUNK DIAGNOSTIC] Assertion: Write Target -> $fileUri")
-                                                                } else {
-                                                                    val errResponse = RelayEnvelope(type = "response", requestId = envelope.requestId, status = 404, error = "{\"error\":\"missing_file\",\"segment\":\"$finalName\",\"fullPath\":\"$relativePathStr\"}")
-                                                                    outgoing.send(Frame.Text(relayGson.toJson(errResponse)))
-                                                                }
-                                                            } else {
-                                                                val errResponse = RelayEnvelope(type = "response", requestId = envelope.requestId, status = 409, error = "{\"error\":\"missing_directory\",\"fullPath\":\"$relativePathStr\"}")
-                                                                outgoing.send(Frame.Text(relayGson.toJson(errResponse)))
-                                                            }
-                                                        }
-                                                        "upload_end_stream" -> {
-                                                            val response = handleUploadEnd(envelope)
-                                                            outgoing.send(Frame.Text(relayGson.toJson(response)))
-                                                        }
-                                                        else -> {
+                                                when (envelope.subType) {
+                                                    "upload_start" -> {
+                                                        handleUploadStart(envelope)
+                                                    }
+                                                    "upload_end" -> {
+                                                        val response = handleUploadEnd(envelope)
+                                                        outgoing.send(Frame.Text(relayGson.toJson(response)))
+                                                    }
+                                                    "upload_start_stream" -> {
+                                                        // CRITICAL: Run synchronously on the WS loop so the OutputStream
+                                                        // is registered BEFORE subsequent binary frames arrive.
+                                                        handleUploadStartStream(envelope, outgoing)
+                                                    }
+                                                    "upload_end_stream" -> {
+                                                        val response = handleUploadEnd(envelope)
+                                                        outgoing.send(Frame.Text(relayGson.toJson(response)))
+                                                    }
+                                                    else -> {
+                                                        scope.launch {
                                                             forwardToLocalNodeAndStream(envelope, outgoing)
                                                         }
                                                     }
@@ -385,6 +325,72 @@ class RelayTunnelClient(
         }
     }
 
+    private suspend fun handleUploadStartStream(envelope: RelayEnvelope, outgoing: kotlinx.coroutines.channels.SendChannel<Frame>) {
+        val pathStr = envelope.query?.let { q -> Regex("path=([^&]*)").find(q)?.groupValues?.get(1) }
+            ?.let { java.net.URLDecoder.decode(it, "UTF-8") } ?: ""
+        val nameStr = envelope.query?.let { q -> Regex("filename=([^&]*)").find(q)?.groupValues?.get(1) }
+            ?.let { java.net.URLDecoder.decode(it, "UTF-8") } ?: "uploaded_file"
+        val relativePathStr = envelope.query?.let { q -> Regex("relativePath=([^&]*)").find(q)?.groupValues?.get(1) }
+            ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
+        val chunkIndexStr = envelope.query?.let { q -> Regex("chunkIndex=([^&]*)").find(q)?.groupValues?.get(1) }
+            ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
+
+        Log.d("ChunkDiag", "[TUNNEL STREAM] relativePath=$relativePathStr, path=$pathStr, name=$nameStr, chunk=$chunkIndexStr")
+
+        envelope.requestId?.let { cleanupStreaming(it) }
+
+        val combinedPath = if (!relativePathStr.isNullOrBlank()) {
+            val cleanRelPath = relativePathStr.removePrefix("/").removePrefix("./")
+            val dirPath = cleanRelPath.substringBeforeLast("/", "")
+            if (pathStr.isNotBlank()) {
+                if (dirPath.isNotBlank()) "$pathStr/$dirPath" else pathStr
+            } else {
+                dirPath
+            }
+        } else {
+            pathStr
+        }
+
+        val finalName = if (!relativePathStr.isNullOrBlank()) {
+            relativePathStr.removePrefix("/").removePrefix("./").substringAfterLast("/")
+        } else {
+            nameStr
+        }
+
+        val targetDoc = ensureResolvedPath(rootUri, combinedPath)
+        if (targetDoc != null && envelope.requestId != null) {
+            val isChunk0 = chunkIndexStr == null || chunkIndexStr == "0"
+            val existingFile = findFileReliable(targetDoc, finalName)
+            val fileUri = if (isChunk0) {
+                existingFile?.delete()
+                var newFileUri: Uri? = null
+                try {
+                    val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(finalName.substringAfterLast('.', "")) ?: "application/octet-stream"
+                    newFileUri = targetDoc.createFile(mimeType, finalName)?.uri ?: throw Exception("Null URI")
+                } catch (e: Exception) {
+                    val fallbackName = sanitizeFilename(finalName)
+                    val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(fallbackName.substringAfterLast('.', "")) ?: "application/octet-stream"
+                    newFileUri = targetDoc.createFile(mimeType, fallbackName)?.uri
+                }
+                newFileUri
+            } else {
+                existingFile?.uri
+            }
+
+            if (fileUri != null) {
+                val mode = if (isChunk0) "w" else "wa"
+                activeUploadStreams[envelope.requestId] = openOutputStreamWithRetry(context.contentResolver, fileUri, mode)!!
+                Log.d("ChunkDiag", "[TUNNEL STREAM] OutputStream ready for ${envelope.requestId} -> $fileUri")
+            } else {
+                val errResponse = RelayEnvelope(type = "response", requestId = envelope.requestId, status = 404, error = "{\"error\":\"missing_file\",\"segment\":\"$finalName\"}")
+                outgoing.send(Frame.Text(relayGson.toJson(errResponse)))
+            }
+        } else {
+            val errResponse = RelayEnvelope(type = "response", requestId = envelope.requestId, status = 409, error = "{\"error\":\"missing_directory\",\"fullPath\":\"$combinedPath\"}")
+            outgoing.send(Frame.Text(relayGson.toJson(errResponse)))
+        }
+    }
+
     private fun handleUploadEnd(request: RelayEnvelope): RelayEnvelope {
         val requestId = request.requestId
         Log.i(TAG, "Finalizing streaming upload: $requestId")
@@ -393,27 +399,20 @@ class RelayTunnelClient(
         if (requestId != null) cleanupStreaming(requestId)
         
         return if (success) {
-            // Return a simple success page that goes back
             RelayEnvelope(
                 type = "response",
                 requestId = requestId,
                 status = 200,
-                headers = mapOf(HttpHeaders.ContentType to "text/html"),
-                bodyBase64 = """
-                    <html><body>
-                    <h2>Upload Successful</h2>
-                    <p>File has been streamed to your drive.</p>
-                    <script>setTimeout(() => history.back(), 1500);</script>
-                    </body></html>
-                """.trimIndent().encodeToByteArray().encodeBase64()
+                headers = mapOf(HttpHeaders.ContentType to "application/json"),
+                bodyBase64 = "{\"success\":true}".encodeToByteArray().encodeBase64()
             )
         } else {
             RelayEnvelope(
                 type = "response",
                 requestId = requestId,
                 status = 500,
-                headers = mapOf(HttpHeaders.ContentType to "text/plain"),
-                bodyBase64 = "Upload failed during streaming.".encodeToByteArray().encodeBase64()
+                headers = mapOf(HttpHeaders.ContentType to "application/json"),
+                bodyBase64 = "{\"error\":\"Upload failed during streaming\"}".encodeToByteArray().encodeBase64()
             )
         }
     }
