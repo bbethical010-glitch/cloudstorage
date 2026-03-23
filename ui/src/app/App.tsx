@@ -74,9 +74,9 @@ function Main() {
   const refreshFiles = useCallback(async (path: string) => {
      if (!window.Android || !appStateRaw?.node?.isRunning) return;
      try {
-       const pwd = new URLSearchParams(window.location.hash.split('?')[1]).get('pwd') || appStateRaw?.node.shareCode || '';
+       const token = localStorage.getItem('cloud_storage_android_token') || '';
        const res = await fetch(`http://127.0.0.1:8080/api/files?path=${encodeURIComponent(path)}&t=${Date.now()}`, { 
-         headers: { Authorization: `Bearer ${pwd}`, 'Cache-Control': 'no-store' } 
+         headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-store' } 
        });
        if (res.ok) {
          const items = await res.json();
@@ -88,7 +88,7 @@ function Main() {
      } catch (e: any) {
        console.error("[JS_DEBUG] Files fetch failed", e.message || e);
      }
-  }, [appStateRaw?.node.shareCode, setAppState]);
+  }, [setAppState]);
 
   useEffect(() => {
     if (!window.Android) {

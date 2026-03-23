@@ -19,9 +19,7 @@ import {
   Clock,
   RefreshCw,
   AlertCircle,
-  Plus,
-  ScanLine,
-  Smartphone
+  Plus
 } from "lucide-react";
 import { Link } from "react-router";
 import { Button } from "../ui/button";
@@ -129,27 +127,57 @@ export function AndroidBrowser() {
     fileInputRef.current?.click();
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    const token = localStorage.getItem('cloud_storage_android_token') || '';
+    const CHUNK_SIZE = 5 * 1024 * 1024;
+    const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+
     setUploadProgress({ fileName: `Uploading ${file.name}...`, progress: 0 });
-    let prog = 0;
-    const interval = setInterval(() => {
-      prog += Math.floor(Math.random() * 20) + 5;
-      if (prog >= 100) {
-        clearInterval(interval);
-        setUploadProgress(null);
-        toast.success(`Complete: ${file.name}`);
-        
-        const appSet = JSON.parse(localStorage.getItem('appSettings') || '{}');
-        if (appSet.notifications !== 'None') {
-           androidBridge.showNotification("Upload Complete", file.name);
-        }
-      } else {
-        setUploadProgress(prev => prev ? { ...prev, progress: Math.min(prog, 100) } : null);
+
+    try {
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        const start = chunkIndex * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunk = file.slice(start, end);
+
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          const uploadUrl = `http://127.0.0.1:8080/api/upload_chunk?path=${encodeURIComponent(currentPath)}&filename=${encodeURIComponent(file.name)}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}`;
+          xhr.open("POST", uploadUrl);
+          xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+          xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+
+          xhr.upload.addEventListener('progress', (event) => {
+            if (event.lengthComputable) {
+              const totalUploaded = (chunkIndex * CHUNK_SIZE) + event.loaded;
+              setUploadProgress(prev => prev ? { ...prev, progress: Math.round((totalUploaded / file.size) * 100) } : null);
+            }
+          });
+
+          xhr.onload = () => {
+            if (xhr.status === 200) resolve();
+            else reject(new Error(`Server error ${xhr.status}`));
+          };
+          xhr.onerror = () => reject(new Error('Network error'));
+          xhr.send(chunk);
+        });
       }
-    }, 400);
+
+      setUploadProgress(null);
+      toast.success(`Uploaded: ${file.name}`);
+      const appSet = JSON.parse(localStorage.getItem('appSettings') || '{}');
+      if (appSet.notifications !== 'None') {
+        androidBridge.showNotification("Upload Complete", file.name);
+      }
+      fetchFiles(currentPath);
+    } catch (err: any) {
+      setUploadProgress(null);
+      toast.error(`Upload failed: ${err.message}`);
+    }
+
     // Reset input
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -175,18 +203,18 @@ export function AndroidBrowser() {
     setShowCreateFolder(false);
     
     try {
-      const parentUrl = appState?.node?.relayBaseUrl || "http://localhost:8080";
+      const token = localStorage.getItem('cloud_storage_android_token') || '';
       const actualPath = currentPath === "/" ? "" : currentPath;
       
       const formData = new URLSearchParams();
       formData.append("name", name);
       formData.append("path", actualPath);
       
-      const res = await fetch(`${parentUrl}/api/folder`, {
+      const res = await fetch(`http://127.0.0.1:8080/api/folder`, {
         method: "POST",
         headers: { 
           "Content-Type": "application/x-www-form-urlencoded",
-          "Authorization": `Bearer ${appState?.node?.shareCode}`
+          "Authorization": `Bearer ${token}`
         },
         body: formData.toString()
       });
@@ -398,12 +426,6 @@ export function AndroidBrowser() {
                  </Button>
                  <Button onClick={handleCreateFolderClick} className="h-12 px-5 rounded-full bg-[#111827] border border-[#374151] shadow-xl text-sm font-medium hover:bg-[#1F2937] flex gap-3">
                    Create Folder <FolderPlus className="w-4 h-4 text-[#10B981]" />
-                 </Button>
-                 <Button onClick={() => { setIsFabOpen(false); androidBridge.scanDocument(); }} className="h-12 px-5 rounded-full bg-[#111827] border border-[#374151] shadow-xl text-sm font-medium hover:bg-[#1F2937] flex gap-3">
-                   Scan Document <ScanLine className="w-4 h-4 text-[#A855F7]" />
-                 </Button>
-                 <Button onClick={handleImportDevice} className="h-12 px-5 rounded-full bg-[#111827] border border-[#374151] shadow-xl text-sm font-medium hover:bg-[#1F2937] flex gap-3">
-                   Import from Device <Smartphone className="w-4 h-4 text-[#F59E0B]" />
                  </Button>
                </motion.div>
              )}
