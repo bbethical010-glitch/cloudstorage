@@ -263,7 +263,7 @@ class MainActivity : ComponentActivity() {
             addJavascriptInterface(WebAppInterface(), "Android")
         }
         setContentView(webView)
-        webView.loadUrl("file:///android_asset/www/index.html")
+        webView.loadUrl("file:///android_asset/web/index.html")
     }
 
     inner class WebAppInterface {
