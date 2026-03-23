@@ -120,7 +120,7 @@ export function WebConsole() {
         const authStat = await fetch(`${getBaseUrl()}/api/auth/status`);
         if (authStat.ok) {
            const { hasAccount } = await authStat.json();
-           const token = localStorage.getItem('cloud_storage_token');
+           const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token');
            const params = new URLSearchParams(window.location.hash.split('?')[1]);
            const pwd = params.get('pwd');
            
@@ -253,7 +253,7 @@ export function WebConsole() {
   };
 
   const getHeaders = () => {
-    const token = localStorage.getItem('cloud_storage_token') || '';
+    const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token') || '';
     const params = new URLSearchParams(window.location.hash.split('?')[1]);
     const pwd = params.get('pwd') || token;
     return { 'Authorization': `Bearer ${pwd}` };
@@ -266,14 +266,24 @@ export function WebConsole() {
 
   useEffect(() => {
     let interval: any;
+    let consecutiveFailures = 0;
     const checkStatus = async () => {
       try {
-        const res = await fetch(`${getBaseUrl()}/api/status`);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+        const res = await fetch(`${getBaseUrl()}/api/status`, { signal: controller.signal });
+        clearTimeout(timeoutId);
         if (!res.ok) throw new Error();
         const data = await res.json();
-        setIsNodeOffline(data.status === "offline");
+        if (data.status === "offline") {
+          consecutiveFailures++;
+        } else {
+          consecutiveFailures = 0;
+        }
+        setIsNodeOffline(consecutiveFailures >= 3);
       } catch {
-        setIsNodeOffline(true);
+        consecutiveFailures++;
+        setIsNodeOffline(consecutiveFailures >= 3);
       }
     };
     checkStatus();
@@ -581,10 +591,13 @@ export function WebConsole() {
 
     // Pre-flight check
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
       const statusRes = await fetch(`${getBaseUrl()}/api/status`, {
         method: 'GET',
-        headers: getHeaders()
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
       if (!statusRes.ok) {
         throw new Error();
       }
@@ -915,6 +928,7 @@ export function WebConsole() {
       await fetch(`${getBaseUrl()}/api/auth/logout`, { method: 'POST', headers: getHeaders() });
     } catch (e) {}
     localStorage.removeItem('cloud_storage_token');
+    localStorage.removeItem('cloud_storage_android_token');
     setIsAuthenticated(false);
     setAuthMode('login');
     setFiles([]);
