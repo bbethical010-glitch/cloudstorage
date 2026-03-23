@@ -82,6 +82,8 @@ import com.pratham.cloudstorage.ui.theme.HighlightPurple
 
 import android.webkit.JavascriptInterface
 import org.json.JSONObject
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 
 class MainActivity : ComponentActivity() {
 
@@ -142,6 +144,12 @@ class MainActivity : ComponentActivity() {
                 }
                 contentResolver.delete(uri, null, null)
             }
+        }
+    }
+
+    private val scanQrLauncher = registerForActivityResult(ScanContract()) { result ->
+        if (result.contents != null) {
+            Toast.makeText(this, "Scanned: ${result.contents}", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -317,6 +325,11 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun showNotification(title: String, message: String) {
             runOnUiThread { this@MainActivity.showNotification(title, message) }
+        }
+
+        @JavascriptInterface
+        fun scanQRCode() {
+            runOnUiThread { this@MainActivity.scanQRCode() }
         }
     }
 
@@ -544,6 +557,16 @@ class MainActivity : ComponentActivity() {
             putExtra(android.provider.MediaStore.EXTRA_OUTPUT, tempCameraUri)
         }
         scanDocumentLauncher.launch(intent)
+    }
+
+    private fun scanQRCode() {
+        val options = ScanOptions()
+        options.setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+        options.setPrompt("Scan to authenticate local device")
+        options.setCameraId(0)
+        options.setBeepEnabled(false)
+        options.setBarcodeImageEnabled(true)
+        scanQrLauncher.launch(options)
     }
 
     override fun onBackPressed() {

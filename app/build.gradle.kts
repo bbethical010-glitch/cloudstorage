@@ -75,6 +75,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.documentfile:documentfile:1.0.1")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
     // Ktor for embedded web server
     val ktor_version = "2.3.7"

@@ -36,7 +36,9 @@ import {
   X,
   Check,
   Menu,
-  ArrowLeft
+  ArrowLeft,
+  Sun,
+  Moon
 } from "lucide-react";
 import { Card } from "../ui/card";
 import { Button } from "../ui/button";
@@ -87,6 +89,26 @@ export function WebConsole() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareConfig, setShareConfig] = useState({ expiry: '24h', readOnly: true });
+
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [authMode, setAuthMode] = useState<'login' | 'signup' | 'none'>('none');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+  
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    return (localStorage.getItem("cloud_storage_theme") as "dark" | "light") || "dark";
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "light") {
+      root.classList.add("light");
+    } else {
+      root.classList.remove("light");
+    }
+    localStorage.setItem("cloud_storage_theme", theme);
+  }, [theme]);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -95,10 +117,27 @@ export function WebConsole() {
     if (!getBaseUrl()) return;
     const checkStatus = async () => {
       try {
-        const res = await fetch(`${getBaseUrl()}/api/status`, { headers: getHeaders(), cache: "no-store" });
-        if (res.ok) {
+        const authStat = await fetch(`${getBaseUrl()}/api/auth/status`);
+        if (authStat.ok) {
+           const { hasAccount } = await authStat.json();
+           const token = localStorage.getItem('cloud_storage_token');
+           const params = new URLSearchParams(window.location.hash.split('?')[1]);
+           const pwd = params.get('pwd');
+           
+           if (token || pwd) {
+               const verify = await fetch(`${getBaseUrl()}/api/storage`, { headers: { Authorization: `Bearer ${pwd || token}` }});
+               if (verify.ok) {
+                   setIsAuthenticated(true);
+                   setIsNodeOffline(false);
+                   setAuthMode('none');
+                   return;
+               }
+           }
+           
+           setIsAuthenticated(false);
+           setAuthMode(hasAccount ? 'login' : 'signup');
            setIsNodeOffline(false);
-        } else if (res.status === 502 || res.status === 503 || res.status === 404) {
+        } else if (authStat.status === 502 || authStat.status === 503 || authStat.status === 404) {
            setIsNodeOffline(true);
         }
       } catch (e) {
@@ -214,8 +253,9 @@ export function WebConsole() {
   };
 
   const getHeaders = () => {
+    const token = localStorage.getItem('cloud_storage_token') || '';
     const params = new URLSearchParams(window.location.hash.split('?')[1]);
-    const pwd = params.get('pwd') || '';
+    const pwd = params.get('pwd') || token;
     return { 'Authorization': `Bearer ${pwd}` };
   };
 
@@ -843,6 +883,98 @@ export function WebConsole() {
     );
   }
 
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    try {
+      const endpoint = authMode === 'signup' ? '/api/auth/signup' : '/api/auth/login';
+      const res = await fetch(`${getBaseUrl()}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, password: authPassword })
+      });
+      
+      const data = await res.json();
+      if (res.ok && data.token) {
+        localStorage.setItem('cloud_storage_token', data.token);
+        setIsAuthenticated(true);
+        setAuthMode('none');
+        loadFiles("");
+        loadStorageStats();
+        toast.success(authMode === 'signup' ? "Account crafted & secured!" : "Welcome back");
+      } else {
+        setAuthError(data.error || "Authentication failed");
+      }
+    } catch {
+      setAuthError("Network error. Is the node online?");
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch(`${getBaseUrl()}/api/auth/logout`, { method: 'POST', headers: getHeaders() });
+    } catch (e) {}
+    localStorage.removeItem('cloud_storage_token');
+    setIsAuthenticated(false);
+    setAuthMode('login');
+    setFiles([]);
+  };
+
+  if (!isAuthenticated && authMode !== 'none') {
+    return (
+      <div className="h-screen bg-[#0B1220] flex flex-col items-center justify-center p-6 text-[#E5E7EB] relative overflow-hidden">
+        {/* Decorative Gradients */}
+        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-[#2563EB]/20 blur-[120px] rounded-full pointer-events-none" />
+        <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-[#A855F7]/20 blur-[120px] rounded-full pointer-events-none" />
+        
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="z-10 w-full max-w-md">
+          <Card className="bg-[#111827]/80 backdrop-blur-xl border-[#1F2937] p-8 shadow-2xl rounded-3xl">
+            <div className="flex justify-center mb-6">
+              <div className="w-16 h-16 bg-gradient-to-br from-[#2563EB] to-[#A855F7] rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+                <Cloud className="w-8 h-8 text-white" />
+              </div>
+            </div>
+            <h2 className="text-3xl font-bold text-center text-white mb-2">
+              {authMode === 'signup' ? 'Claim Your Node' : 'Node Locked'}
+            </h2>
+            <p className="text-center text-[#9CA3AF] mb-8 text-sm">
+              {authMode === 'signup' 
+                ? 'Register credentials directly onto your physical Android device to secure this bridge.' 
+                : 'Authenticate to access your synchronized files.'}
+            </p>
+
+            <form onSubmit={handleAuth} className="space-y-4">
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-[#9CA3AF] uppercase px-1">Email</label>
+                <Input 
+                  type="email" required
+                  placeholder="admin@local.host"
+                  value={authEmail} onChange={e => setAuthEmail(e.target.value)}
+                  className="bg-[#0B1220] border-[#374151] text-white focus:ring-[#2563EB] h-12 rounded-xl"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-[#9CA3AF] uppercase px-1">Passkey</label>
+                <Input 
+                  type="password" required
+                  placeholder="••••••••"
+                  value={authPassword} onChange={e => setAuthPassword(e.target.value)}
+                  className="bg-[#0B1220] border-[#374151] text-white focus:ring-[#2563EB] h-12 rounded-xl"
+                />
+              </div>
+
+              {authError && <div className="text-red-400 text-xs font-medium text-center bg-red-500/10 py-2 rounded-lg">{authError}</div>}
+
+              <Button type="submit" className="w-full h-12 bg-[#2563EB] hover:bg-[#1d4ed8] text-white font-bold rounded-xl mt-4">
+                {authMode === 'signup' ? 'Secure Node Bridge' : 'Unlock Node Bridge'}
+              </Button>
+            </form>
+          </Card>
+        </motion.div>
+      </div>
+    );
+  }
+
   return (
     <div className="h-screen bg-[#0B1220] text-[#E5E7EB] flex flex-col overflow-hidden font-sans selection:bg-[#2563EB]/30">
       {/* Top Bar - Refined */}
@@ -902,10 +1034,31 @@ export function WebConsole() {
               className="h-9 bg-[#111827] border-[#1F2937] text-sm pl-10 focus:ring-1 ring-[#2563EB]/50 rounded-xl transition-all w-full"
             />
           </div>
-          <div className="hidden md:flex items-center gap-1">
-             <div className="w-9 h-9 rounded-xl bg-[#1F2937] border border-[#374151] flex items-center justify-center cursor-pointer hover:bg-[#374151] transition-colors">
-               <User className="w-5 h-5 text-[#9CA3AF]" />
-             </div>
+          <div className="flex items-center gap-1 md:gap-3">
+             <Button 
+                variant="ghost" 
+                size="icon" 
+                className="w-9 h-9 rounded-xl hover:bg-[#374151] hover:text-white transition-colors"
+                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+             >
+                {theme === 'dark' ? <Sun className="w-4 h-4 text-[#9CA3AF] hover:text-white" /> : <Moon className="w-4 h-4 text-[#9CA3AF] hover:text-slate-800" />}
+             </Button>
+             
+             <DropdownMenu>
+               <DropdownMenuTrigger asChild>
+                 <div className="hidden md:flex w-9 h-9 rounded-xl bg-[#1F2937] border border-[#374151] items-center justify-center cursor-pointer hover:bg-[#374151] transition-colors">
+                   <User className="w-5 h-5 text-[#9CA3AF]" />
+                 </div>
+               </DropdownMenuTrigger>
+               <DropdownMenuContent align="end" className="bg-[#111827] border-[#1F2937] text-[#E5E7EB] w-48">
+                 <div className="px-3 py-2 text-xs text-[#9CA3AF] font-mono border-b border-[#1F2937] mb-1">
+                    {authEmail || "Admin Session"}
+                 </div>
+                 <DropdownMenuItem className="gap-2 text-[#EF4444]" onClick={handleLogout}>
+                    <Trash2 className="w-4 h-4" /> Disconnect Tunnel
+                 </DropdownMenuItem>
+               </DropdownMenuContent>
+             </DropdownMenu>
           </div>
         </div>
       </div>

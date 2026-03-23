@@ -231,7 +231,10 @@ class RelayTunnelClient(
             localNodeClient.prepareRequest(targetUrl) {
                 this.method = HttpMethod.parse(request.method ?: HttpMethod.Get.value)
                 request.headers.orEmpty().forEach { (key, value) ->
-                    if (!isHopByHopHeader(key) && !key.equals(HttpHeaders.Host, ignoreCase = true)) {
+                    if (!isHopByHopHeader(key) && 
+                        !key.equals(HttpHeaders.Host, true) && 
+                        !key.equals(HttpHeaders.ContentLength, true) && 
+                        !key.equals(HttpHeaders.ContentType, true)) {
                         header(key, value)
                     }
                 }

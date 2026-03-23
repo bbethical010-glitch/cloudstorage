@@ -61,6 +61,7 @@ class ServerService : Service() {
         const val EXTRA_RELAY_BASE_URL = "EXTRA_RELAY_BASE_URL"
         const val EXTRA_CONSOLE_PASSWORD = "EXTRA_CONSOLE_PASSWORD"
         private const val CHANNEL_ID = "ServerChannelId"
+        private const val UPLOAD_CHANNEL_ID = "UploadStatusChannel"
         
         val tunnelStatusFlow = kotlinx.coroutines.flow.MutableStateFlow(TunnelStatus.Offline)
     }
@@ -138,13 +139,93 @@ class ServerService : Service() {
                 routing {
                     
                     fun io.ktor.server.application.ApplicationCall.hasValidAuth(): Boolean {
-                        if (consolePassword.isNullOrBlank()) return true
-                        val authHeader = request.headers["Authorization"] ?: return false
-                        val token = authHeader.removePrefix("Bearer ").trim()
-                        return token == consolePassword
+                        val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
+                        val activeToken = prefs.getString("active_token", null)
+                        
+                        val headerToken = request.headers["Authorization"]?.removePrefix("Bearer ")?.trim()
+
+                        if (activeToken.isNullOrBlank()) {
+                            // Legacy fallback (no account created yet)
+                            if (consolePassword.isNullOrBlank()) return true
+                            return headerToken == consolePassword
+                        }
+                        
+                        return headerToken == activeToken
                     }
 
                     route("/api") {
+                        route("/auth") {
+                            get("/status") {
+                                val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
+                                val hasAccount = prefs.contains("email")
+                                call.respondText("{\"hasAccount\": $hasAccount}", ContentType.Application.Json)
+                            }
+                            
+                            post("/signup") {
+                                val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
+                                if (prefs.contains("email")) {
+                                    return@post call.respond(HttpStatusCode.Forbidden, "{\"error\": \"Account exists\"}")
+                                }
+                                
+                                val jsonStr = call.receiveText()
+                                if (jsonStr.isBlank()) return@post call.respond(HttpStatusCode.BadRequest)
+                                
+                                val obj = org.json.JSONObject(jsonStr)
+                                val email = obj.optString("email", "")
+                                val password = obj.optString("password", "")
+                                
+                                if (email.isBlank() || password.isBlank()) {
+                                    return@post call.respond(HttpStatusCode.BadRequest, "{\"error\": \"Missing credentials\"}")
+                                }
+                                
+                                val md = java.security.MessageDigest.getInstance("SHA-256")
+                                val hash = java.util.Base64.getEncoder().encodeToString(md.digest(password.toByteArray()))
+                                
+                                val token = java.util.UUID.randomUUID().toString()
+                                prefs.edit()
+                                    .putString("email", email)
+                                    .putString("password_hash", hash)
+                                    .putString("active_token", token)
+                                    .apply()
+                                    
+                                call.respondText("{\"token\":\"$token\"}", ContentType.Application.Json)
+                            }
+
+                            post("/login") {
+                                val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
+                                val existingEmail = prefs.getString("email", null)
+                                val existingHash = prefs.getString("password_hash", null)
+                                
+                                if (existingEmail == null || existingHash == null) {
+                                    return@post call.respond(HttpStatusCode.NotFound, "{\"error\": \"No account\"}")
+                                }
+                                
+                                val jsonStr = call.receiveText()
+                                if (jsonStr.isBlank()) return@post call.respond(HttpStatusCode.BadRequest)
+                                
+                                val obj = org.json.JSONObject(jsonStr)
+                                val email = obj.optString("email", "")
+                                val password = obj.optString("password", "")
+                                
+                                val md = java.security.MessageDigest.getInstance("SHA-256")
+                                val hash = java.util.Base64.getEncoder().encodeToString(md.digest(password.toByteArray()))
+                                
+                                if (email == existingEmail && hash == existingHash) {
+                                    val token = java.util.UUID.randomUUID().toString()
+                                    prefs.edit().putString("active_token", token).apply()
+                                    call.respondText("{\"token\":\"$token\"}", ContentType.Application.Json)
+                                } else {
+                                    call.respond(HttpStatusCode.Unauthorized, "{\"error\": \"Invalid credentials\"}")
+                                }
+                            }
+                            
+                            post("/logout") {
+                                val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
+                                prefs.edit().remove("active_token").apply()
+                                call.respond(HttpStatusCode.OK)
+                            }
+                        }
+
                         get("/status") {
                             val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
                             if (root != null && root.canRead()) {
@@ -219,6 +300,22 @@ class ServerService : Service() {
                                 android.util.Log.e("STORAGE_DEBUG", "Absolute api/storage endpoint failure", e)
                                 call.respondText("""{"total":0,"free":0,"used":0}""", ContentType.Application.Json)
                             }
+                        }
+
+                        post("/upload_event") {
+                            if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            val jsonStr = try { call.receiveText() } catch (e: Exception) { "" }
+                            if (jsonStr.isNotBlank()) {
+                                try {
+                                    val obj = org.json.JSONObject(jsonStr)
+                                    val filename = obj.optString("filename", "Unknown File")
+                                    val progress = obj.optInt("progress", 0)
+                                    triggerUploadNotification(filename, progress)
+                                } catch (e: Exception) {
+                                    android.util.Log.e("UploadEvent", "Failed to parse upload event JSON", e)
+                                }
+                            }
+                            call.respond(HttpStatusCode.OK)
                         }
 
                         get("/files") {
@@ -1077,6 +1174,27 @@ class ServerService : Service() {
         }
         val targetUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(rootUri, currentDocId)
         return DocumentFile.fromTreeUri(this@ServerService, targetUri)
+    }
+
+    private fun triggerUploadNotification(filename: String, progress: Int) {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                UPLOAD_CHANNEL_ID,
+                "File Uploads",
+                NotificationManager.IMPORTANCE_LOW
+            )
+            manager.createNotificationChannel(channel)
+        }
+        val builder = NotificationCompat.Builder(this, UPLOAD_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setContentTitle(if (progress == 100) "Upload Complete" else "Uploading File")
+            .setContentText(filename)
+            .setProgress(100, progress, progress == 0)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(progress == 100)
+        
+        manager.notify(filename.hashCode(), builder.build())
     }
 }
 

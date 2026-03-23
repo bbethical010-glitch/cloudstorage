@@ -52,6 +52,7 @@ declare global {
       updateRelayBaseUrl(url: string): void;
       scanDocument(): void;
       showNotification(title: string, message: string): void;
+      scanQRCode?(): void;
     };
     updateWebState?: (stateJson: string) => void;
   }

@@ -4,6 +4,12 @@ import { RouterProvider } from "react-router";
 import { router } from "./routes";
 import { LoadingScreen } from "./components/LoadingScreen";
 import "../styles/index.css";
+import { Cloud } from "lucide-react";
+import { Card } from "./components/ui/card";
+import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
+import { motion } from "motion/react";
+import { toast } from "sonner";
 
 import { WelcomeScreen } from "./components/android/WelcomeScreen";
 import { AndroidOnboarding } from "./components/android/AndroidOnboarding";
@@ -13,7 +19,13 @@ export const AppStateContext = createContext<GlobalContextType | null>(null);
 
 function Main() {
   const [appStateRaw, setAppStateRaw] = useState<AppState | null>(null);
-  const [step, setStep] = useState<"loading" | "welcome" | "tutorial" | "app">("loading");
+  const [step, setStep] = useState<"loading" | "welcome" | "tutorial" | "auth" | "app">("loading");
+
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [authMode, setAuthMode] = useState<'login' | 'signup' | 'none'>('none');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState('');
 
   const setAppState = useCallback((newState: Partial<AppState> | ((prev: AppState | null) => AppState | null)) => {
     setAppStateRaw(prev => {
@@ -98,7 +110,52 @@ function Main() {
       }
     };
     loadInitialState();
+    
+    // Apply Startup Theme
+    const savedSettings = localStorage.getItem('appSettings');
+    if (savedSettings) {
+      try {
+        const parsedTheme = JSON.parse(savedSettings).theme;
+        if (parsedTheme === 'Light') {
+          document.documentElement.classList.add('light');
+        }
+      } catch(e) {}
+    }
   }, [setAppState]);
+
+  // Auth Guard
+  useEffect(() => {
+    if (!window.Android || !appStateRaw?.node?.isRunning) return;
+    const checkAuth = async () => {
+      try {
+        const pwd = new URLSearchParams(window.location.hash.split('?')[1]).get('pwd') || appStateRaw?.node.shareCode || '';
+        const token = localStorage.getItem('cloud_storage_android_token') || pwd;
+        
+        const authStat = await fetch(`http://127.0.0.1:8080/api/auth/status?t=${Date.now()}`);
+        if (authStat.ok) {
+           const { hasAccount } = await authStat.json();
+           
+           if (token) {
+               const verify = await fetch(`http://127.0.0.1:8080/api/storage`, { headers: { Authorization: `Bearer ${token}` }});
+               if (verify.ok) {
+                   setIsAuthenticated(true);
+                   setAuthMode('none');
+                   if (step === 'loading' || step === 'auth') {
+                      const hasTut = localStorage.getItem("hasSeenTutorial");
+                      setStep(hasTut ? "app" : "welcome");
+                   }
+                   return;
+               }
+           }
+           
+           setIsAuthenticated(false);
+           setAuthMode(hasAccount ? 'login' : 'signup');
+           setStep('auth');
+        }
+      } catch (e) {}
+    };
+    checkAuth();
+  }, [appStateRaw?.node?.isRunning, step]);
 
   useEffect(() => {
     if (!window.Android) return;
@@ -127,15 +184,82 @@ function Main() {
     };
   }, [setAppState]);
 
+  const performAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    try {
+      const endpoint = authMode === 'signup' ? '/api/auth/signup' : '/api/auth/login';
+      const res = await fetch(`http://127.0.0.1:8080${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, password: authPassword })
+      });
+      const data = await res.json();
+      if (res.ok && data.token) {
+        localStorage.setItem('cloud_storage_android_token', data.token);
+        setIsAuthenticated(true);
+        setAuthMode('none');
+        toast.success("Identity Secured");
+        const hasTut = localStorage.getItem("hasSeenTutorial");
+        setStep(hasTut ? "app" : "welcome");
+      } else {
+        setAuthError(data.error || "Authentication failed");
+      }
+    } catch {
+      setAuthError("Network error. Is the node online?");
+    }
+  };
+
   if (step === "loading") {
     return <LoadingScreen onComplete={() => {
       if (!window.Android) {
         setStep("app");
       } else {
+        if (authMode !== 'none') return;
         const hasSeenTutorial = localStorage.getItem("hasSeenTutorial");
         setStep(hasSeenTutorial ? "app" : "welcome");
       }
     }} />;
+  }
+
+  if (step === "auth") {
+    return (
+      <div className="h-[100dvh] w-full bg-[#0B1220] flex flex-col items-center justify-center p-6 text-[#E5E7EB] relative overflow-hidden">
+        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-[#2563EB]/20 blur-[120px] rounded-full pointer-events-none" />
+        <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-[#A855F7]/20 blur-[120px] rounded-full pointer-events-none" />
+        
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="z-10 w-full max-w-sm">
+          <Card className="bg-[#111827]/80 backdrop-blur-xl border-[#1F2937] p-8 shadow-2xl rounded-3xl mx-auto">
+            <div className="flex justify-center mb-6">
+              <div className="w-16 h-16 bg-gradient-to-br from-[#2563EB] to-[#A855F7] rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+                <Cloud className="w-8 h-8 text-white" />
+              </div>
+            </div>
+            <h2 className="text-2xl font-bold text-center text-white mb-2">
+              {authMode === 'signup' ? 'Secure Local Node' : 'Node Locked'}
+            </h2>
+            <p className="text-center text-[#9CA3AF] mb-8 text-xs">
+              {authMode === 'signup' ? 'Create an admin identity across the mesh.' : 'Authenticate to manage your local node.'}
+            </p>
+
+            <form onSubmit={performAuth} className="space-y-4">
+              <div className="space-y-1">
+                <Input type="email" required placeholder="admin@local.host" value={authEmail} onChange={e => setAuthEmail(e.target.value)}
+                  className="bg-[#0B1220] border-[#374151] text-white h-12 rounded-xl" />
+              </div>
+              <div className="space-y-1">
+                <Input type="password" required placeholder="••••••••" value={authPassword} onChange={e => setAuthPassword(e.target.value)}
+                  className="bg-[#0B1220] border-[#374151] text-white h-12 rounded-xl" />
+              </div>
+              {authError && <div className="text-red-400 text-xs font-medium text-center bg-red-500/10 py-2 rounded-lg">{authError}</div>}
+              <Button type="submit" className="w-full h-12 bg-[#2563EB] hover:bg-[#1d4ed8] text-white font-bold rounded-xl mt-4">
+                {authMode === 'signup' ? 'Lock Core API' : 'Unlock Node Engine'}
+              </Button>
+            </form>
+          </Card>
+        </motion.div>
+      </div>
+    );
   }
 
   if (step === "welcome") {
@@ -170,10 +294,24 @@ function Main() {
 
   return (
     <AppStateContext.Provider value={contextValue}>
-      <RouterProvider router={router} />
+      <div className="w-full max-w-md mx-auto md:max-w-xl lg:max-w-2xl min-h-screen bg-[#0B1220] shadow-2xl shadow-blue-900/5">
+        <RouterProvider router={router} />
+      </div>
     </AppStateContext.Provider>
   );
 }
+
+// === Client-Side Hardening ===
+window.addEventListener('unhandledrejection', (event) => {
+  console.error("Resource or Promise failed to load:", event.reason);
+  // Prevent the app from freezing entirely
+  event.preventDefault();
+});
+
+window.addEventListener('error', (event) => {
+  console.error("Global crash caught:", event.error);
+});
+// =============================
 
 const rootElement = document.getElementById("root");
 if (rootElement) {

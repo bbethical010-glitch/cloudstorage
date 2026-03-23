@@ -28,6 +28,9 @@ import io.ktor.server.websocket.*
 import java.time.Duration
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
@@ -105,11 +108,11 @@ fun Application.relayModule() {
             registry.register(shareCode, this)
             sendEnvelope(RelayEnvelope(type = "connected", shareCode = shareCode))
             
-            val pingJob = kotlinx.coroutines.launch {
-                while (kotlinx.coroutines.isActive) {
+            val pingJob = launch {
+                while (isActive) {
                     kotlinx.coroutines.delay(30_000)
                     try {
-                        send(Frame.Ping(ByteArray(0)))
+                        send(io.ktor.websocket.Frame.Ping(ByteArray(0)))
                     } catch (e: Exception) {
                         println("Relay: Ping failed, connection likely dead: ${e.message}")
                         break
@@ -143,7 +146,6 @@ fun Application.relayModule() {
                         }
                         else -> {}
                     }
-                }
                 }
             } finally {
                 pingJob.cancel()
@@ -216,8 +218,9 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
         return
     }
 
-    val agent = registry.waitForAgent(shareCode)
-    if (agent == null) {
+    try {
+        val agent = registry.waitForAgent(shareCode)
+        if (agent == null) {
         println("Relay: No session for nodeId=$shareCode after timeout, returning 503")
         respondText("{\"error\":\"agent_offline\", \"nodeId\":\"$shareCode\"}", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
         return
@@ -306,7 +309,13 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
             }
         } else {
             // Standard non-multipart request handling
-            val requestBody = receive<ByteArray>()
+            val requestBody = try {
+                if (request.httpMethod == HttpMethod.Get || request.httpMethod == HttpMethod.Head || request.httpMethod == HttpMethod.Options) {
+                    ByteArray(0)
+                } else {
+                    receive<ByteArray>()
+                }
+            } catch (e: Exception) { ByteArray(0) }
             val relayRequest = RelayEnvelope(
                 type = "request",
                 requestId = requestId,
