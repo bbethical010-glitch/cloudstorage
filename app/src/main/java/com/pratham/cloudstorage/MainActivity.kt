@@ -222,6 +222,9 @@ class MainActivity : ComponentActivity() {
             settings.allowFileAccessFromFileURLs = true
             settings.allowUniversalAccessFromFileURLs = true
             settings.databaseEnabled = true
+            settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+            
+            clearCache(true)
             
             webChromeClient = object : WebChromeClient() {
                 override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
