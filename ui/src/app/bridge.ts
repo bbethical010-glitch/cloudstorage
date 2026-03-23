@@ -16,6 +16,7 @@ export interface AppState {
     folderName: string | null;
     shareCode: string;
     relayBaseUrl: string;
+    lanUrl?: string;
     health?: {
       cpu: string;
       memory: string;
@@ -53,6 +54,7 @@ declare global {
       scanDocument(): void;
       showNotification(title: string, message: string): void;
       scanQRCode?(): void;
+      shareLink?(text: string): void;
     };
     updateWebState?: (stateJson: string) => void;
   }
@@ -100,5 +102,14 @@ export const androidBridge = {
 
   isAvailable: () => {
     return Capacitor.isNativePlatform();
+  },
+
+  shareLink: (text: string) => {
+    if (window.Android?.shareLink) {
+      window.Android.shareLink(text);
+    } else {
+      // Fallback for non-Android: copy to clipboard
+      navigator.clipboard?.writeText(text);
+    }
   }
 };

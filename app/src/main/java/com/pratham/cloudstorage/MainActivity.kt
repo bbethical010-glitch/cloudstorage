@@ -331,6 +331,18 @@ class MainActivity : ComponentActivity() {
         fun scanQRCode() {
             runOnUiThread { this@MainActivity.scanQRCode() }
         }
+
+        @JavascriptInterface
+        fun shareLink(text: String) {
+            runOnUiThread {
+                val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, "Easy Storage Cloud")
+                    putExtra(Intent.EXTRA_TEXT, text)
+                }
+                startActivity(Intent.createChooser(sendIntent, "Share Link"))
+            }
+        }
     }
 
     private fun updateWebState() {
@@ -353,6 +365,7 @@ class MainActivity : ComponentActivity() {
                 put("folderName", resolveFolderName(selectedUri ?: Uri.EMPTY))
                 put("shareCode", shareCode)
                 put("relayBaseUrl", relayBaseUrl)
+                put("lanUrl", buildLocalAccessUrl() ?: "")
                 put("isRunning", isNodeRunning)
                 put("tunnelConnected", tunnelStatus == TunnelStatus.Connected.name)
                 put("tunnelStatus", tunnelStatus)

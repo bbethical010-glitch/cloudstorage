@@ -1,12 +1,12 @@
 import { Link } from "react-router";
 import { motion, AnimatePresence } from "motion/react";
-import QRCode from "react-qr-code";
 import {
   Server,
   Link2,
   FolderOpen,
   Share2,
-  Power
+  Power,
+  QrCode
 } from "lucide-react";
 import { Card } from "../ui/card";
 import { Button } from "../ui/button";
@@ -16,11 +16,13 @@ import { useContext, useState } from "react";
 import { toast } from "sonner";
 import { AppStateContext } from "../../App";
 import { androidBridge } from "../../bridge";
+import { ShareQRDialog } from "./ShareQRDialog";
 
 export function AndroidDashboard() {
   const ctx = useContext(AppStateContext);
   const appState = ctx?.state;
   const [isRemoteAccessEnabled, setIsRemoteAccessEnabled] = useState(false);
+  const [showShareQR, setShowShareQR] = useState(false);
 
   const isOnline = appState?.node?.isRunning ?? false;
   const folderName = appState?.node?.folderName;
@@ -77,18 +79,17 @@ export function AndroidDashboard() {
           <div className="mt-8 grid grid-cols-2 gap-4 w-full">
             <Button 
               onClick={() => {
-                 if(appState?.node?.tunnelStatus !== 'Connected') {
-                    toast.error("Waiting for Cloud Tunnel connection...");
-                    return;
-                 }
-                 androidBridge.shareInvite();
+                if (!isOnline) {
+                  toast.error("Start the node first.");
+                  return;
+                }
+                setShowShareQR(true);
               }} 
-              disabled={appState?.node?.tunnelStatus !== 'Connected'}
               variant="outline"
-              className={`w-full border-transparent rounded-2xl h-12 text-[13px] font-medium flex gap-2 justify-start px-4 transition-colors truncate ${appState?.node?.tunnelStatus === 'Connected' ? 'bg-[#1F2937]/80 hover:bg-[#1F2937] text-white' : 'bg-[#111827] opacity-60 text-[#6B7280]'}`}
+              className={`w-full border-transparent rounded-2xl h-12 text-[13px] font-medium flex gap-2 justify-start px-4 transition-colors truncate ${isOnline ? 'bg-[#1F2937]/80 hover:bg-[#1F2937] text-white' : 'bg-[#111827] opacity-60 text-[#6B7280]'}`}
             >
-              <Share2 className={`w-4 h-4 shrink-0 ${appState?.node?.tunnelStatus === 'Connected' ? 'text-[#A855F7]' : 'text-[#4B5563]'}`} />
-              <span className="truncate">{appState?.node?.tunnelStatus === 'Connected' ? 'Share Tunnel Access' : 'Cloud Offline'}</span>
+              <QrCode className={`w-4 h-4 shrink-0 ${isOnline ? 'text-[#A855F7]' : 'text-[#4B5563]'}`} />
+              <span className="truncate">Share & QR</span>
             </Button>
             <Button 
               onClick={() => androidBridge.copyToClipboard(shareCode, "ID Copied")} 
@@ -105,7 +106,7 @@ export function AndroidDashboard() {
       <div className="px-6 flex flex-col gap-6">
         {/* Remote Access Card */}
         <Card className="bg-[#111827] border-[#1F2937] p-6 lg:p-8">
-          <div className="flex items-start justify-between mb-4">
+          <div className="flex items-start justify-between">
             <div>
               <h3 className="text-[13px] font-bold text-white tracking-wider flex items-center gap-2">
                 <Link2 className="w-4 h-4 text-[#A855F7]" />
@@ -125,30 +126,24 @@ export function AndroidDashboard() {
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
-                className="overflow-hidden mt-6 flex flex-col items-center gap-6 border-t border-[#1F2937] pt-6"
+                className="overflow-hidden mt-4 border-t border-[#1F2937] pt-4"
               >
-                <div className="bg-white p-4 rounded-3xl shadow-[0_0_30px_rgba(168,85,247,0.1)] transition-transform hover:scale-105 duration-300">
-                  <QRCode 
-                    value={`https://${appState.node.relayBaseUrl}/node/${shareCode}`} 
-                    size={160}
-                    level="Q"
-                    bgColor="#ffffff"
-                    fgColor="#111827"
-                  />
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-[#10B981] animate-pulse" />
+                    <span className="text-xs text-[#10B981] font-bold">Tunnel Active</span>
+                  </div>
+                  <Button 
+                    onClick={() => setShowShareQR(true)}
+                    variant="ghost"
+                    className="h-8 px-3 rounded-lg text-[11px] font-bold text-[#A855F7] hover:bg-[#A855F7]/10"
+                  >
+                    <QrCode className="w-3.5 h-3.5 mr-1.5" /> View QR & Links
+                  </Button>
                 </div>
-                <div className="text-center w-full max-w-xs space-y-2">
-                  <Badge variant="outline" className="px-3 py-1 bg-[#A855F7]/10 text-[#A855F7] border-transparent uppercase font-bold text-[10px] tracking-widest block mx-auto w-fit mb-2">SCAN TO CONNECT</Badge>
-                  <p className="text-[11px] font-mono text-[#9CA3AF] break-all bg-[#0B1220] py-2 px-3 rounded-xl border border-[#1F2937]">
-                    https://{appState.node.relayBaseUrl}/node/{shareCode}
-                  </p>
-                </div>
-                <Button 
-                    onClick={() => androidBridge.scanQRCode && androidBridge.scanQRCode()} 
-                    variant="default"
-                    className="w-full bg-gradient-to-r from-[#2563EB] to-[#A855F7] hover:opacity-90 rounded-2xl h-12 text-sm font-bold flex justify-center gap-2 text-white transition-opacity shadow-lg shadow-purple-500/20"
-                >
-                    Authenticate Local Device
-                </Button>
+                <p className="text-[10px] font-mono text-[#6B7280] mt-2 break-all bg-[#0B1220] py-2 px-3 rounded-lg border border-[#1F2937]">
+                  https://{appState.node.relayBaseUrl}/node/{shareCode}
+                </p>
               </motion.div>
             )}
           </AnimatePresence>
@@ -242,7 +237,18 @@ export function AndroidDashboard() {
         </div>
       </div>
 
+      {/* Share QR Dialog */}
+      <ShareQRDialog
+        open={showShareQR}
+        onClose={() => setShowShareQR(false)}
+        relayBaseUrl={appState?.node?.relayBaseUrl || ""}
+        shareCode={shareCode}
+        lanUrl={appState?.node?.lanUrl}
+        tunnelConnected={appState?.node?.tunnelStatus === 'Connected'}
+      />
+
       {/* Bottom Removed for Full Scroll */}
     </div>
   );
 }
+
