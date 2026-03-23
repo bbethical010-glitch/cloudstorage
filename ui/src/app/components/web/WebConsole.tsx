@@ -114,7 +114,6 @@ export function WebConsole() {
   const folderInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!getBaseUrl()) return;
     const checkStatus = async () => {
       try {
         const authStat = await fetch(`${getBaseUrl()}/api/auth/status`);
