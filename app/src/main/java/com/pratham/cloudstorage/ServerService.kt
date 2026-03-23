@@ -950,14 +950,14 @@ class ServerService : Service() {
 
                         // 2. Map the request path to the actual static asset path
                         val assetPath = when {
-                            requestPath.isEmpty() -> "www/index.html"
-                            requestPath.matches(Regex("^node/[a-zA-Z0-9]+/?$")) -> "www/index.html"
+                            requestPath.isEmpty() -> "web/index.html"
+                            requestPath.matches(Regex("^node/[a-zA-Z0-9]+/?$")) -> "web/index.html"
                             requestPath.startsWith("node/") -> {
                                 // Extract the path after the share code: /node/12345/assets/main.css -> assets/main.css
                                 val afterShareCode = requestPath.substringAfter("node/").substringAfter("/")
-                                if (afterShareCode.isEmpty()) "www/index.html" else "www/$afterShareCode"
+                                if (afterShareCode.isEmpty()) "web/index.html" else "web/$afterShareCode"
                             }
-                            else -> "www/$requestPath"
+                            else -> "web/$requestPath"
                         }
                         
                         fun getContentType(path: String): ContentType {
@@ -977,7 +977,7 @@ class ServerService : Service() {
                         } catch (e: Exception) {
                             // Fallback to SPA index.html for unknown routes
                             try {
-                                val indexStream = this@ServerService.assets.open("www/index.html")
+                                val indexStream = this@ServerService.assets.open("web/index.html")
                                 call.respondBytes(indexStream.readBytes(), ContentType.Text.Html)
                             } catch (e2: Exception) {
                                 call.respond(HttpStatusCode.NotFound)
