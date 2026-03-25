@@ -1097,16 +1097,14 @@ export function WebConsole() {
       </AnimatePresence>
 
       {/* Main Content Areas */}
-      <PanelGroup direction="horizontal" className="flex-1 w-full relative">
+      <div className="flex-1 w-full relative overflow-hidden grid grid-cols-1 md:grid-cols-[240px_minmax(400px,1fr)_320px]">
         {/* Sidebar - Pro Style */}
-        <Panel defaultSize={18} minSize={14} className="hidden md:block bg-[#0B1220] border-r border-[#1F2937]">
+        <div className="hidden md:block bg-[#0B1220] border-r border-[#1F2937] overflow-y-auto" style={{ minWidth: 240, width: 240 }}>
           <SidebarContent />
-        </Panel>
-
-        <PanelResizeHandle className="hidden md:flex w-px bg-transparent hover:bg-[#2563EB]/30 transition-colors" />
+        </div>
 
         {/* File Browser Area */}
-        <Panel defaultSize={62} minSize={40} className="bg-[#0B1220] flex flex-col relative w-full h-full"
+        <div className="bg-[#0B1220] flex flex-col relative min-w-0 overflow-x-hidden overflow-y-hidden"
           onDragOver={(e) => { e.preventDefault(); setIsDragging(true); e.dataTransfer.dropEffect = "copy"; }}
           onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
           onDrop={async (e) => {
@@ -1181,15 +1179,16 @@ export function WebConsole() {
 
             {/* List Header */}
             {viewMode === 'list' && (
-              <div className="hidden md:grid grid-cols-12 px-8 py-3 bg-[#0B1220] border-b border-[#1F2937] text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] shrink-0">
-                <div className="col-span-6 flex items-center gap-2 cursor-pointer hover:text-white transition-colors" onClick={() => toggleSort('name')}>
+              <div className="hidden md:flex items-center px-4 py-3 bg-[#0B1220] border-b border-[#1F2937] text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] shrink-0">
+                <div style={{ width: 40 }} className="shrink-0" />
+                <div className="flex-1 min-w-[200px] flex items-center gap-2 cursor-pointer hover:text-white transition-colors" onClick={() => toggleSort('name')}>
                   Name {sortField === 'name' && (sortDirection === 'asc' ? <ChevronUp className="w-3 h-3"/> : <ChevronDown className="w-3 h-3"/>)}
                 </div>
-                <div className="col-span-2 cursor-pointer hover:text-white transition-colors flex items-center gap-2" onClick={() => toggleSort('size')}>
+                <div style={{ width: 100 }} className="shrink-0 cursor-pointer hover:text-white transition-colors flex items-center gap-2 whitespace-nowrap" onClick={() => toggleSort('size')}>
                   Size {sortField === 'size' && (sortDirection === 'asc' ? <ChevronUp className="w-3 h-3"/> : <ChevronDown className="w-3 h-3"/>)}
                 </div>
-                <div className="col-span-4 text-right cursor-pointer hover:text-white transition-colors flex items-center justify-end gap-2" onClick={() => toggleSort('lastModified')}>
-                  {sortField === 'lastModified' && (sortDirection === 'asc' ? <ChevronUp className="w-3 h-3"/> : <ChevronDown className="w-3 h-3"/>)} Modified
+                <div style={{ width: 140 }} className="shrink-0 text-right cursor-pointer hover:text-white transition-colors flex items-center justify-end gap-2 whitespace-nowrap pr-10" onClick={() => toggleSort('lastModified')}>
+                  Modified {sortField === 'lastModified' && (sortDirection === 'asc' ? <ChevronUp className="w-3 h-3"/> : <ChevronDown className="w-3 h-3"/>)}
                 </div>
               </div>
             )}
@@ -1214,39 +1213,38 @@ export function WebConsole() {
                         <button
                           key={file.id}
                           onClick={() => file.isDirectory ? navigateTo(file.path) : setSelectedFile(file)}
-                          className={`flex flex-col md:grid md:grid-cols-12 w-full px-4 md:px-6 py-3.5 md:py-3.5 text-left text-sm transition-all relative group pl-12 md:pl-12 min-h-[56px] md:min-h-0 ${
+                          className={`flex items-center w-full px-4 py-3 text-left text-sm transition-all relative group min-h-[48px] ${
                             selectedFile?.id === file.id ? 'bg-[#2563EB]/5' : 'hover:bg-[#111827]/40'
                           } ${selectedFiles.has(file.id) ? 'bg-[#2563EB]/10' : ''}`}
                         >
-                          <div className={`absolute left-3 md:left-4 top-1/2 -translate-y-1/2 flex items-center transition-opacity ${selectedFiles.has(file.id) ? 'opacity-100' : 'opacity-100 md:opacity-0 group-hover:opacity-100'}`} onClick={e => e.stopPropagation()}>
-                            <div onClick={(e) => toggleSelection(e, file.id, index)} className={`w-6 h-6 md:w-4 md:h-4 rounded border flex items-center justify-center cursor-pointer transition-colors ${selectedFiles.has(file.id) ? 'bg-[#2563EB] border-[#2563EB]' : 'border-[#4B5563] hover:border-[#E5E7EB]'}`}>
-                              {selectedFiles.has(file.id) && <Check className="w-4 h-4 md:w-3 md:h-3 text-white" />}
+                          {/* Checkbox */}
+                          <div style={{ width: 40 }} className="shrink-0 flex items-center justify-center" onClick={e => e.stopPropagation()}>
+                            <div onClick={(e) => toggleSelection(e, file.id, index)} className={`w-4 h-4 rounded border flex items-center justify-center cursor-pointer transition-colors ${selectedFiles.has(file.id) ? 'bg-[#2563EB] border-[#2563EB]' : 'border-[#4B5563] hover:border-[#E5E7EB] opacity-0 group-hover:opacity-100'} ${selectedFiles.has(file.id) ? '!opacity-100' : ''}`}>
+                              {selectedFiles.has(file.id) && <Check className="w-3 h-3 text-white" />}
                             </div>
                           </div>
-                          {selectedFile?.id === file.id && <div className="absolute left-0 top-1.5 bottom-1.5 w-1 bg-[#2563EB] rounded-r-full hidden md:block" />}
+                          {selectedFile?.id === file.id && <div className="absolute left-0 top-1.5 bottom-1.5 w-1 bg-[#2563EB] rounded-r-full" />}
                           
-                          <div className="w-full md:col-span-6 flex items-center gap-3 md:gap-4 pr-10 md:pr-4">
+                          {/* NAME column — takes all remaining space */}
+                          <div className="flex-1 min-w-0 flex items-center gap-3 pr-4">
                             <div className="transition-transform group-hover:scale-110 duration-200 shrink-0">
-                              {getFileIcon(file.name, file.isDirectory, "w-6 h-6 md:w-5 md:h-5")}
+                              {getFileIcon(file.name, file.isDirectory, "w-5 h-5")}
                             </div>
-                            <span className="truncate flex-1 font-medium group-hover:text-[#2563EB] transition-colors">{file.name}</span>
+                            <span className="truncate font-medium group-hover:text-[#2563EB] transition-colors">{file.name}</span>
                           </div>
 
-                          {/* Mobile Subtitle */}
-                          <div className="w-full pl-9 md:hidden flex items-center gap-2 mt-1 opacity-70">
-                              <span className="text-[11px] text-[#9CA3AF] font-mono">{formatSize(file.size)}</span>
-                              <span className="w-1 h-1 rounded-full bg-[#4B5563]" />
-                              <span className="text-[11px] text-[#9CA3AF] font-mono">{formatDate(file.lastModified)}</span>
-                          </div>
+                          {/* SIZE column — fixed width */}
+                          <div style={{ width: 100 }} className="hidden md:flex shrink-0 font-mono text-xs text-[#4B5563] items-center whitespace-nowrap">{formatSize(file.size)}</div>
 
-                          <div className="hidden md:flex col-span-2 font-mono text-xs text-[#4B5563] items-center">{formatSize(file.size)}</div>
-                          <div className="hidden md:flex col-span-4 text-[#4B5563] items-center justify-end text-xs font-mono">{formatDate(file.lastModified)}</div>
+                          {/* MODIFIED column — fixed width */}
+                          <div style={{ width: 140 }} className="hidden md:flex shrink-0 text-[#4B5563] items-center justify-end text-xs font-mono whitespace-nowrap pr-10">{formatDate(file.lastModified)}</div>
                           
-                          <div className="absolute right-1 md:right-4 top-1/2 -translate-y-1/2 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                          {/* Actions menu */}
+                          <div className="absolute right-1 md:right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="icon" className="h-10 w-10 md:h-8 md:w-8 px-0 text-[#9CA3AF] hover:text-[#E5E7EB]" onClick={(e) => { e.stopPropagation(); setSelectedFile(file); }}>
-                                  <MoreVertical className="w-5 h-5 md:w-4 md:h-4" />
+                                <Button variant="ghost" size="icon" className="h-8 w-8 px-0 text-[#9CA3AF] hover:text-[#E5E7EB]" onClick={(e) => { e.stopPropagation(); setSelectedFile(file); }}>
+                                  <MoreVertical className="w-4 h-4" />
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent className="bg-[#111827] border-[#1F2937] text-[#E5E7EB]">
@@ -1313,15 +1311,13 @@ export function WebConsole() {
               )}
             </AnimatePresence>
           </div>
-        </Panel>
-
-        <PanelResizeHandle className="w-px bg-transparent hover:bg-[#2563EB]/30 transition-colors" />
+        </div>
 
         {/* Info & Preview Panel */}
-        <Panel defaultSize={20} minSize={20} className="hidden md:block bg-[#0B1220] border-l border-[#1F2937]">
+        <div className="hidden md:flex flex-col bg-[#0B1220] border-l border-[#1F2937] overflow-y-auto" style={{ minWidth: 320, width: 320 }}>
           <PreviewContent />
-        </Panel>
-      </PanelGroup>
+        </div>
+      </div>
 
       {/* Mobile Preview Modal */}
       <AnimatePresence>

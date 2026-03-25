@@ -140,17 +140,21 @@ class ServerService : Service() {
                     
                     fun io.ktor.server.application.ApplicationCall.hasValidAuth(): Boolean {
                         val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
+                        val accountExists = prefs.contains("email")
                         val activeToken = prefs.getString("active_token", null)
                         
                         val headerToken = request.headers["Authorization"]?.removePrefix("Bearer ")?.trim()
 
-                        if (activeToken.isNullOrBlank()) {
-                            // Legacy fallback (no account created yet)
+                        if (accountExists) {
+                            // If an account is claimed, require a matching active token.
+                            // If no active token (e.g. they logged out), all requests fail until they login again.
+                            if (activeToken.isNullOrBlank()) return false
+                            return headerToken == activeToken
+                        } else {
+                            // First-time setup / legacy fallback
                             if (consolePassword.isNullOrBlank()) return true
                             return headerToken == consolePassword
                         }
-                        
-                        return headerToken == activeToken
                     }
 
                     route("/api") {
