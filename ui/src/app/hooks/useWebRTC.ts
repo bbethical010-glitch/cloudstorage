@@ -44,7 +44,7 @@ interface UseWebRTCReturn {
 
 export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOptions): UseWebRTCReturn {
   console.log("useWebRTC HOOK CALLED", { enabled, shareCode });
-  const [connectionState, setConnectionState] = useState<P2PConnectionState>('disconnected');
+  const [connectionState, setConnectionState] = useState<P2PConnectionState>(enabled ? 'connecting' : 'disconnected');
   const [isReady, setIsReady] = useState(false);
   const [isDataChannelReady, setIsDataChannelReady] = useState(false);
   const transportRef = useRef<P2PTransport>(new P2PTransport());
@@ -310,6 +310,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
   }
 
   useEffect(() => {
+    console.log("WEBRTC_EFFECT_RUNNING", { enabled });
     if (enabled) {
       connect();
     } else {

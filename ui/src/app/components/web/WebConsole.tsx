@@ -69,6 +69,7 @@ interface FileNode {
 }
 
 export function WebConsole() {
+  console.log("WEB_CONSOLE_RENDERED");
   const [files, setFiles] = useState<FileNode[]>([]);
   const [currentPath, setCurrentPath] = useState<string>("");
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
@@ -282,11 +283,21 @@ export function WebConsole() {
   // Establishes a direct peer-to-peer connection to the Android node.
   // When connected, API requests bypass the relay entirely — file bytes
   // flow directly between this browser and the Android device.
-  const { connectionState: p2pState, transport: p2pTransport, isReady: p2pReady, isDataChannelReady, reconnect: p2pReconnect } = useWebRTC({
+  const shareCode = getShareCode();
+  if (!shareCode) {
+    console.error("NO SHARE CODE");
+  } else {
+    console.log("SHARE_CODE:", shareCode);
+  }
+
+  const webrtc = useWebRTC({
     relayUrl: getRelayUrl(),
-    shareCode: getShareCode(),
-    enabled: true,
+    shareCode: shareCode,
+    enabled: !!shareCode,
   });
+  console.log("HOOK_RESULT", webrtc);
+
+  const { connectionState: p2pState, transport: p2pTransport, isReady: p2pReady, isDataChannelReady, reconnect: p2pReconnect } = webrtc;
 
   /**
    * Unified API fetch — uses P2P DataChannel when connected, falls back to relay.
