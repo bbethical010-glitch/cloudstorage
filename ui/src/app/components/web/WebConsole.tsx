@@ -1037,14 +1037,36 @@ export function WebConsole() {
     );
   }
 
-  if (p2pState === 'connecting' || p2pState === 'signaling' || (p2pState === 'connected' && !isDataChannelReady)) {
+  useEffect(() => {
+    if ((p2pState === 'connected' && isDataChannelReady) || p2pState === 'fallback') {
+      loadFiles(currentPath);
+      loadStorageStats();
+    }
+  }, [currentPath, activeTab, p2pState, isDataChannelReady]);
+
+  if (p2pState === 'connecting' || p2pState === 'signaling' || p2pState === 'ice-gathering' || p2pState === 'dc-opening' || (p2pState === 'connected' && !isDataChannelReady)) {
+    const getP2PMessage = () => {
+      switch (p2pState) {
+        case 'connecting': return 'Initializing P2P stack...';
+        case 'signaling': return 'Negotiating signaling handshake...';
+        case 'ice-gathering': return 'Gathering ICE networking candidates...';
+        case 'dc-opening': return 'Opening secure DataChannel...';
+        case 'connected': return 'Finalizing secure bridge...';
+        default: return 'Establishing Secure Bridge...';
+      }
+    };
+
     return (
       <div className="h-screen bg-[#0B1220] flex flex-col items-center justify-center p-6 text-[#E5E7EB] relative overflow-hidden">
         <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-[#2563EB]/10 blur-[120px] rounded-full pointer-events-none" />
         <div className="z-10 flex flex-col items-center justify-center text-center">
           <div className="w-16 h-16 border-4 border-[#2563EB] border-t-transparent rounded-full animate-spin mb-8 shadow-[0_0_15px_rgba(37,99,235,0.5)]"></div>
-          <h1 className="text-3xl font-bold mb-3 tracking-tight text-white">Establishing Secure Bridge...</h1>
+          <h1 className="text-3xl font-bold mb-3 tracking-tight text-white">{getP2PMessage()}</h1>
           <p className="text-sm text-[#9CA3AF] max-w-sm mx-auto">Creating a direct peer-to-peer connection for fast, private file transfers. No data passes through the relay.</p>
+          <div className="mt-6 flex items-center gap-2 px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded-full">
+            <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+            <span className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">{p2pState}</span>
+          </div>
         </div>
       </div>
     );

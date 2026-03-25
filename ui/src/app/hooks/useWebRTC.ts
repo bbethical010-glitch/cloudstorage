@@ -19,10 +19,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { P2PTransport } from './p2pTransport';
 
-export type P2PConnectionState = 'disconnected' | 'connecting' | 'signaling' | 'connected' | 'fallback' | 'failed';
+export type P2PConnectionState = 'disconnected' | 'connecting' | 'signaling' | 'ice-gathering' | 'dc-opening' | 'connected' | 'fallback' | 'failed';
 
-// Public STUN servers for NAT traversal — these help discover
-// the device's public IP/port mapping behind home/office routers
+// Public STUN servers for NAT traversal
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
@@ -30,24 +29,16 @@ const ICE_SERVERS: RTCIceServer[] = [
 ];
 
 interface UseWebRTCOptions {
-  /** The relay server URL (e.g., https://easy-storage-relay.onrender.com) */
   relayUrl: string;
-  /** The Android node's share code */
   shareCode: string;
-  /** Whether to auto-connect */
   enabled?: boolean;
 }
 
 interface UseWebRTCReturn {
-  /** Current connection state */
   connectionState: P2PConnectionState;
-  /** The P2P transport for making API requests */
   transport: P2PTransport | null;
-  /** Whether the transport is ready for API calls */
   isReady: boolean;
-  /** strictly for UI elements */
   isDataChannelReady: boolean;
-  /** Reconnect if disconnected */
   reconnect: () => void;
 }
 
@@ -60,37 +51,44 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
   const wsRef = useRef<WebSocket | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
   const reconnectRef = useRef<number>(0);
-  const fallbackTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
-  // Queue for ICE candidates received before the remote description is fully set
+  // Strict Stage Timeouts
+  const offerTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const iceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const dcTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
   const iceCandidateQueueRef = useRef<RTCIceCandidateInit[]>([]);
+
+  const failAndFallback = useCallback((reason: string) => {
+    console.warn(`[PC_DEBUG] HARD_FAIL: ${reason}. Triggering fallbackToRelay().`);
+    setConnectionState('fallback');
+    // We don't fully cleanup here so we can potentially recover P2P later, 
+    // but we clear all current stage timeouts.
+    clearAllTimeouts();
+  }, []);
+
+  const clearAllTimeouts = useCallback(() => {
+    if (offerTimeoutRef.current) { clearTimeout(offerTimeoutRef.current); offerTimeoutRef.current = null; }
+    if (iceTimeoutRef.current) { clearTimeout(iceTimeoutRef.current); iceTimeoutRef.current = null; }
+    if (dcTimeoutRef.current) { clearTimeout(dcTimeoutRef.current); dcTimeoutRef.current = null; }
+  }, []);
 
   const connect = useCallback(() => {
     if (!enabled || !relayUrl || !shareCode) return;
 
-    // Cleanup previous connection stringently
     cleanup();
-
     setConnectionState('connecting');
 
-    // Start 8-second fallback timeout
-    fallbackTimeoutRef.current = setTimeout(() => {
-      console.warn('[WebRTC] Connection timed out (>8s). Falling back to HTTP Relay transport.');
-      setConnectionState('fallback');
-      // We don't cleanup() here; if the connection eventually succeeds, it can still seamlessly take over.
-    }, 8000);
-
-    // 1. Build signaling WebSocket URL
     const wsUrl = relayUrl
       .replace('https://', 'wss://')
       .replace('http://', 'ws://') + `/signal/${shareCode.toUpperCase()}`;
 
-    console.log('[WebRTC] Connecting to signaling server:', wsUrl);
+    console.log('[SIGNAL_DEBUG] Connecting to:', wsUrl);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      console.log('[WebRTC] Signaling WebSocket connected');
+      console.log('[SIGNAL_DEBUG] WS_OPEN');
       setConnectionState('signaling');
       initiatePeerConnection(ws);
     };
@@ -100,65 +98,51 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
         const msg = JSON.parse(event.data);
         handleSignalingMessage(msg);
       } catch (e) {
-        console.error('[WebRTC] Failed to parse signaling message:', e);
+        console.error('[SIGNAL_DEBUG] Parse error:', e);
       }
     };
 
     ws.onerror = (err) => {
-      console.error('[WebRTC] Signaling WebSocket error:', err);
-      setConnectionState('failed');
+      console.error('[SIGNAL_DEBUG] WS_ERROR:', err);
+      failAndFallback('SIGNAL_WS_ERROR');
     };
 
     ws.onclose = () => {
-      console.log('[WebRTC] Signaling WebSocket closed');
+      console.log('[SIGNAL_DEBUG] WS_CLOSE');
       if (wsRef.current === ws) {
-        if (connectionState !== 'connected') {
+        if (connectionState !== 'connected' && connectionState !== 'fallback') {
           setConnectionState('disconnected');
         }
-        // Auto-reconnect with exponential backoff
-        const delay = Math.min(2000 * Math.pow(2, reconnectRef.current), 30000);
-        reconnectRef.current++;
-        setTimeout(() => {
-          if (enabled) connect();
-        }, delay);
       }
     };
-  }, [relayUrl, shareCode, enabled]);
+  }, [relayUrl, shareCode, enabled, failAndFallback]);
 
   function initiatePeerConnection(ws: WebSocket) {
-    // 2. Create RTCPeerConnection with STUN servers
+    console.log('[PC_DEBUG] INITIALIZING');
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     pcRef.current = pc;
     iceCandidateQueueRef.current = [];
 
-    // 3. Create a DataChannel for API communication
-    const dc = pc.createDataChannel('files', {
-      ordered: true, // Maintain message order for API request/response matching
-    });
+    // Stage 1: DataChannel creation BEFORE offer
+    console.log('[DC_DEBUG] CREATING "files"');
+    const dc = pc.createDataChannel('files', { ordered: true });
     dcRef.current = dc;
-
-    // Attach the DataChannel to the P2P transport layer
     transportRef.current.attach(dc);
 
     dc.onopen = () => {
-      console.log('[WebRTC] DataChannel "files" opened — P2P ready!');
-      if (fallbackTimeoutRef.current) {
-        clearTimeout(fallbackTimeoutRef.current);
-        fallbackTimeoutRef.current = null;
-      }
+      console.log('[DC_DEBUG] DATA_CHANNEL_OPEN — P2P Live');
+      clearAllTimeouts();
       setConnectionState('connected');
       setIsReady(true);
       setIsDataChannelReady(true);
-      reconnectRef.current = 0; // Reset backoff on successful connection
     };
 
     dc.onclose = () => {
-      console.log('[WebRTC] DataChannel closed');
+      console.log('[DC_DEBUG] DATA_CHANNEL_CLOSE');
       setIsReady(false);
       setIsDataChannelReady(false);
     };
 
-    // 4. Gather ICE candidates and send them to the Android node via relay
     pc.onicecandidate = (event) => {
       if (event.candidate && wsRef.current?.readyState === WebSocket.OPEN) {
         const signal = {
@@ -171,40 +155,51 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
           },
         };
         ws.send(JSON.stringify(signal));
+        console.log('[SIGNAL_DEBUG] SENT_ICE');
       }
     };
 
     pc.onconnectionstatechange = () => {
-      console.log('[WebRTC] Connection state:', pc.connectionState);
-      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-        setConnectionState('failed');
-        setIsReady(false);
-        setIsDataChannelReady(false);
+      console.log('[PC_DEBUG] STATE:', pc.connectionState);
+      if (pc.connectionState === 'failed') {
+        failAndFallback('PC_STATE_FAILED');
       }
     };
 
     pc.oniceconnectionstatechange = () => {
-      console.log('[WebRTC] ICE connection state:', pc.iceConnectionState);
+      console.log('[ICE_DEBUG] STATE:', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        console.log('[ICE_DEBUG] SUCCESS: Signaling transition to DC_OPENING');
+        if (iceTimeoutRef.current) { clearTimeout(iceTimeoutRef.current); iceTimeoutRef.current = null; }
+        setConnectionState('dc-opening');
+        
+        // Timeout 3: DataChannel must open within 6s of ICE success
+        dcTimeoutRef.current = setTimeout(() => {
+          if (dc.readyState !== 'open') failAndFallback('FAIL_DC_TIMEOUT');
+        }, 6000);
+      }
     };
 
-    // 5. Create the SDP offer and send it to the Android node
+    // Stage 2: Create Offer
     pc.createOffer().then((offer) => {
       return pc.setLocalDescription(offer).then(() => {
         const signal = {
           type: 'signal',
-          signal: {
-            type: 'offer',
-            sdp: offer.sdp,
-          },
+          signal: { type: 'offer', sdp: offer.sdp },
         };
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
+        if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify(signal));
-          console.log('[WebRTC] SDP offer sent to Android node');
+          console.log('[SIGNAL_DEBUG] SENT_OFFER');
+          
+          // Timeout 1: SDP Answer must arrive within 3s
+          offerTimeoutRef.current = setTimeout(() => {
+            if (pc.signalingState === 'have-local-offer') failAndFallback('FAIL_SIGNAL_TIMEOUT');
+          }, 3000);
         }
       });
     }).catch((err) => {
-      console.error('[WebRTC] Failed to create offer:', err);
-      setConnectionState('failed');
+      console.error('[PC_DEBUG] CREATE_OFFER_ERROR:', err);
+      failAndFallback('PC_INIT_ERROR');
     });
   }
 
@@ -212,79 +207,59 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
     const pc = pcRef.current;
     if (!pc) return;
 
-    if (msg.type === 'status') {
-      console.log('[WebRTC] Node status:', msg.agentOnline ? 'online' : 'offline');
-      if (!msg.agentOnline) {
-        setConnectionState('disconnected');
-      }
-      return;
-    }
-
     if (msg.type === 'signal' && msg.signal) {
       const signal = msg.signal;
 
       if (signal.type === 'answer') {
-        // STATE GUARD: Prevent DOMException when receiving duplicate answers or in wrong state
         if (pc.signalingState !== 'have-local-offer') {
-          console.warn('[WebRTC] Ignoring unexpected answer in state:', pc.signalingState);
+          console.warn('[SIGNAL_DEBUG] Unexpected answer in state:', pc.signalingState);
           return;
         }
 
-        // Set the Android node's SDP answer as remote description
-        const answer = new RTCSessionDescription({
-          type: 'answer',
-          sdp: signal.sdp,
-        });
-        
-        pc.setRemoteDescription(answer).then(() => {
-          console.log('[WebRTC] Remote description (answer) set successfully');
-          // Process any queued ICE candidates that arrived before the answer
-          iceCandidateQueueRef.current.forEach(c => {
-            pc.addIceCandidate(new RTCIceCandidate(c)).catch(err => {
-              console.warn('[WebRTC] Failed to add queued ICE candidate:', err);
-            });
-          });
+        console.log('[SIGNAL_DEBUG] RECEIVED_ANSWER');
+        if (offerTimeoutRef.current) { clearTimeout(offerTimeoutRef.current); offerTimeoutRef.current = null; }
+        setConnectionState('ice-gathering');
+
+        // Timeout 2: ICE must connect within 5s of receiving answer
+        iceTimeoutRef.current = setTimeout(() => {
+          if (pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
+            failAndFallback('FAIL_ICE_TIMEOUT');
+          }
+        }, 5000);
+
+        pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: signal.sdp })).then(() => {
+          console.log('[PC_DEBUG] REMOTE_SDP_SET');
+          iceCandidateQueueRef.current.forEach(c => pc.addIceCandidate(new RTCIceCandidate(c)));
           iceCandidateQueueRef.current = [];
         }).catch((err) => {
-          console.error('[WebRTC] Failed to set remote description:', err);
+          console.error('[PC_DEBUG] SET_REMOTE_ERROR:', err);
+          failAndFallback('SDP_SET_ERROR');
         });
 
       } else if (signal.type === 'ice') {
+        console.log('[SIGNAL_DEBUG] RECEIVED_ICE');
         const candidateInit = {
           candidate: signal.candidate,
           sdpMid: signal.sdpMid,
           sdpMLineIndex: signal.sdpMLineIndex,
         };
 
-        // ICE QUEUING: If remote description isn't set yet, queue the candidate
         if (!pc.remoteDescription) {
-          console.log('[WebRTC] Queuing ICE candidate (remote description not set)');
           iceCandidateQueueRef.current.push(candidateInit);
           return;
         }
 
-        // Add the Android node's ICE candidate for NAT traversal
-        try {
-          const candidate = new RTCIceCandidate(candidateInit);
-          pc.addIceCandidate(candidate).catch((err) => {
-            console.warn('[WebRTC] Failed to add ICE candidate:', err);
-          });
-        } catch (err) {
-          console.warn('[WebRTC] Synchronous error adding ICE candidate:', err);
-        }
+        pc.addIceCandidate(new RTCIceCandidate(candidateInit)).catch((err) => {
+          console.warn('[ICE_DEBUG] CANDIDATE_ADD_ERROR:', err);
+        });
       }
     }
   }
 
   function cleanup() {
-    console.log('[WebRTC] Cleaning up connection resources');
-    
-    if (fallbackTimeoutRef.current) {
-      clearTimeout(fallbackTimeoutRef.current);
-      fallbackTimeoutRef.current = null;
-    }
+    console.log('[PC_DEBUG] CLEANUP');
+    clearAllTimeouts();
 
-    // Clean up DataChannel
     if (dcRef.current) {
       dcRef.current.onopen = null;
       dcRef.current.onclose = null;
@@ -292,7 +267,6 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
       dcRef.current = null;
     }
     
-    // Clean up PeerConnection
     if (pcRef.current) {
       pcRef.current.onicecandidate = null;
       pcRef.current.onconnectionstatechange = null;
@@ -301,7 +275,6 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
       pcRef.current = null;
     }
     
-    // Clean up WebSocket
     if (wsRef.current) {
       wsRef.current.onopen = null;
       wsRef.current.onmessage = null;
@@ -319,11 +292,13 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
   }
 
   useEffect(() => {
-    if (enabled) connect();
-    // Strict Cleanup: Ensure all listeners and sockets are destroyed when hook unmounts 
-    // or dependencies change, preventing ghost connections in Strict Mode.
+    if (enabled) {
+      connect();
+    } else {
+      cleanup();
+    }
     return () => cleanup();
-  }, [relayUrl, shareCode, enabled, connect]);
+  }, [enabled, connect]);
 
   const reconnect = useCallback(() => {
     reconnectRef.current = 0;

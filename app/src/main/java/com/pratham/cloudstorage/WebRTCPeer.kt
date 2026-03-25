@@ -102,7 +102,7 @@ class WebRTCPeer(
 
     private fun handleOffer(browserId: String, signalMap: Map<*, *>) {
         val sdp = signalMap["sdp"] as? String ?: return
-        Log.i(TAG, "[SIGNAL_DEBUG] Received SDP offer from browser $browserId")
+        Log.i(TAG, "[SIGNAL_DEBUG] OFFER_RECEIVED from $browserId")
 
         // Create a new PeerConnection for this browser
         val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
@@ -126,10 +126,11 @@ class WebRTCPeer(
                 kotlinx.coroutines.runBlocking {
                     onSignal(gson.toJson(msg))
                 }
+                Log.i(TAG, "[SIGNAL_DEBUG] ICE_SENT to $browserId")
             }
 
             override fun onDataChannel(dc: DataChannel) {
-                Log.i(TAG, "[DC_DEBUG] DataChannel opened by browser: ${dc.label()}")
+                Log.i(TAG, "[DC_DEBUG] DATA_CHANNEL_OPEN: ${dc.label()}")
                 dataChannels[browserId] = dc
                 setupDataChannel(browserId, dc)
             }
@@ -186,7 +187,7 @@ class WebRTCPeer(
                         kotlinx.coroutines.runBlocking {
                             onSignal(gson.toJson(msg))
                         }
-                        Log.i(TAG, "[SIGNAL_DEBUG] Sent SDP answer to browser $browserId")
+                        Log.i(TAG, "[SIGNAL_DEBUG] ANSWER_SENT to $browserId")
                     }
                     override fun onCreateFailure(error: String) {
                         Log.e(TAG, "[SIGNAL_DEBUG] Failed to create answer: $error")

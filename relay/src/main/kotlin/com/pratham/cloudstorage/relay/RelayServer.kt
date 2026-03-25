@@ -153,7 +153,12 @@ fun Application.relayModule() {
                             "signal" -> {
                                 val browserId = msg["browserId"] as? String
                                 if (browserId != null) {
-                                    println("[SIGNAL_DEBUG] Relay routing from Android to browser $browserId")
+                                    val signal = msg["signal"] as? Map<*, *>
+                                    val signalType = signal?.get("type") as? String
+                                    when (signalType) {
+                                        "answer" -> println("[SIGNAL_DEBUG] FORWARD_ANSWER to browser $browserId")
+                                        "ice" -> println("[SIGNAL_DEBUG] FORWARD_ICE to browser $browserId")
+                                    }
                                     registry.forwardToBrowser(shareCode, browserId, text)
                                 } else {
                                     println("[SIGNAL_DEBUG] Relay broadcasting from Android to all browsers (no browserId)")
@@ -204,7 +209,12 @@ fun Application.relayModule() {
                         when (type) {
                             // Forward signaling messages from browser → Android agent
                             "signal" -> {
-                                println("[SIGNAL_DEBUG] Relay routing from browser $browserId to Android")
+                                val signal = msg["signal"] as? Map<*, *>
+                                val signalType = signal?.get("type") as? String
+                                when (signalType) {
+                                    "offer" -> println("[SIGNAL_DEBUG] FORWARD_OFFER from browser $browserId")
+                                    "ice" -> println("[SIGNAL_DEBUG] FORWARD_ICE from browser $browserId")
+                                }
                                 // Inject the browserId so the Android node knows who to reply to
                                 val enriched = msg.toMutableMap()
                                 enriched["browserId"] = browserId
