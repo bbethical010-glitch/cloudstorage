@@ -44,6 +44,8 @@ interface UseWebRTCReturn {
   transport: P2PTransport | null;
   /** Whether the transport is ready for API calls */
   isReady: boolean;
+  /** strictly for UI elements */
+  isDataChannelReady: boolean;
   /** Reconnect if disconnected */
   reconnect: () => void;
 }
@@ -51,6 +53,7 @@ interface UseWebRTCReturn {
 export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOptions): UseWebRTCReturn {
   const [connectionState, setConnectionState] = useState<P2PConnectionState>('disconnected');
   const [isReady, setIsReady] = useState(false);
+  const [isDataChannelReady, setIsDataChannelReady] = useState(false);
   const transportRef = useRef<P2PTransport>(new P2PTransport());
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -132,12 +135,14 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
       console.log('[WebRTC] DataChannel "files" opened — P2P ready!');
       setConnectionState('connected');
       setIsReady(true);
+      setIsDataChannelReady(true);
       reconnectRef.current = 0; // Reset backoff on successful connection
     };
 
     dc.onclose = () => {
       console.log('[WebRTC] DataChannel closed');
       setIsReady(false);
+      setIsDataChannelReady(false);
     };
 
     // 4. Gather ICE candidates and send them to the Android node via relay
@@ -161,6 +166,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
       if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
         setConnectionState('failed');
         setIsReady(false);
+        setIsDataChannelReady(false);
       }
     };
 
@@ -291,6 +297,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
     transportRef.current = new P2PTransport();
     iceCandidateQueueRef.current = [];
     setIsReady(false);
+    setIsDataChannelReady(false);
   }
 
   useEffect(() => {
@@ -309,6 +316,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
     connectionState,
     transport: transportRef.current,
     isReady,
+    isDataChannelReady,
     reconnect,
   };
 }

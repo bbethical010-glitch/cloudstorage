@@ -90,8 +90,8 @@ export class P2PTransport {
     headers?: Record<string, string>;
     body?: string | ArrayBuffer | null;
   } = {}): Promise<P2PResponse> {
-    if (!this.ready) {
-      throw new Error('P2P transport not ready — DataChannel is not open');
+    if (!this.dc || this.dc.readyState !== 'open') {
+      throw new Error('Data channel is not open');
     }
 
     const id = crypto.randomUUID();
@@ -141,7 +141,9 @@ export class P2PTransport {
    * The file is read in 64KB slices to prevent memory overflow.
    */
   async upload(path: string, query: string, file: File, headers: Record<string, string> = {}): Promise<P2PResponse> {
-    if (!this.ready) throw new Error('P2P transport not ready');
+    if (!this.dc || this.dc.readyState !== 'open') {
+      throw new Error('Data channel is not open');
+    }
 
     const id = crypto.randomUUID();
 

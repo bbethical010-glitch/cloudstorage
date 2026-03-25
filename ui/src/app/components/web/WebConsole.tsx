@@ -277,7 +277,7 @@ export function WebConsole() {
   // Establishes a direct peer-to-peer connection to the Android node.
   // When connected, API requests bypass the relay entirely — file bytes
   // flow directly between this browser and the Android device.
-  const { connectionState: p2pState, transport: p2pTransport, isReady: p2pReady, reconnect: p2pReconnect } = useWebRTC({
+  const { connectionState: p2pState, transport: p2pTransport, isReady: p2pReady, isDataChannelReady, reconnect: p2pReconnect } = useWebRTC({
     relayUrl: getRelayUrl(),
     shareCode: getShareCode(),
     enabled: true,
@@ -288,7 +288,7 @@ export function WebConsole() {
    * This is the primary replacement for all fetch(getBaseUrl() + endpoint) calls.
    */
   const apiFetch = useCallback(async (endpoint: string, options: RequestInit = {}): Promise<Response | P2PResponse> => {
-    if (p2pReady && p2pTransport?.ready) {
+    if (p2pReady && isDataChannelReady && p2pTransport?.ready) {
       // Route through the P2P DataChannel — zero relay bandwidth
       return p2pTransport.fetch(endpoint, {
         method: options.method || 'GET',
@@ -301,9 +301,11 @@ export function WebConsole() {
   }, [p2pReady, p2pTransport]);
 
   useEffect(() => {
-    loadFiles(currentPath);
-    loadStorageStats();
-  }, [currentPath, activeTab]);
+    if (p2pState === 'connected' && isDataChannelReady) {
+      loadFiles(currentPath);
+      loadStorageStats();
+    }
+  }, [currentPath, activeTab, p2pState, isDataChannelReady]);
 
   useEffect(() => {
     let interval: any;
@@ -1031,6 +1033,19 @@ export function WebConsole() {
             </form>
           </Card>
         </motion.div>
+      </div>
+    );
+  }
+
+  if (p2pState === 'connecting' || p2pState === 'signaling' || (p2pState === 'connected' && !isDataChannelReady)) {
+    return (
+      <div className="h-screen bg-[#0B1220] flex flex-col items-center justify-center p-6 text-[#E5E7EB] relative overflow-hidden">
+        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-[#2563EB]/10 blur-[120px] rounded-full pointer-events-none" />
+        <div className="z-10 flex flex-col items-center justify-center text-center">
+          <div className="w-16 h-16 border-4 border-[#2563EB] border-t-transparent rounded-full animate-spin mb-8 shadow-[0_0_15px_rgba(37,99,235,0.5)]"></div>
+          <h1 className="text-3xl font-bold mb-3 tracking-tight text-white">Establishing Secure Bridge...</h1>
+          <p className="text-sm text-[#9CA3AF] max-w-sm mx-auto">Creating a direct peer-to-peer connection for fast, private file transfers. No data passes through the relay.</p>
+        </div>
       </div>
     );
   }
