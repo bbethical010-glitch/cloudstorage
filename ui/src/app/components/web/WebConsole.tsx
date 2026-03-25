@@ -118,7 +118,8 @@ export function WebConsole() {
       try {
         const authStat = await fetch(`${getBaseUrl()}/api/auth/status`);
         if (authStat.ok) {
-           const { hasAccount } = await authStat.json();
+           const authText = await authStat.text();
+           const { hasAccount } = authText ? JSON.parse(authText) : { hasAccount: false };
            const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token');
            const params = new URLSearchParams(window.location.hash.split('?')[1]);
            const pwd = params.get('pwd');
@@ -273,7 +274,8 @@ export function WebConsole() {
         const res = await fetch(`${getBaseUrl()}/api/status`, { signal: controller.signal });
         clearTimeout(timeoutId);
         if (!res.ok) throw new Error();
-        const data = await res.json();
+        const statusText = await res.text();
+        const data = statusText ? JSON.parse(statusText) : {};
         if (data.status === "offline") {
           consecutiveFailures++;
         } else {
@@ -440,7 +442,10 @@ export function WebConsole() {
   const loadStorageStats = async () => {
     try {
       const res = await fetch(`${getBaseUrl()}/api/storage`, { headers: getHeaders(), cache: "no-store" });
-      if (res.ok) setStorageStats(await res.json());
+      if (res.ok) {
+        const text = await res.text();
+        if (text) setStorageStats(JSON.parse(text));
+      }
     } catch {}
   };
 
@@ -491,8 +496,10 @@ export function WebConsole() {
         return;
       }
       if (!res.ok) throw new Error("Failed to load files");
-      const data = await res.json();
-      setFiles(data);
+      const text = await res.text();
+      if (!text) { setFiles([]); return; }
+      const data = JSON.parse(text);
+      setFiles(Array.isArray(data) ? data : []);
     } catch (e: any) {
       toast.error(e.message || "Failed to load directory");
     } finally {
