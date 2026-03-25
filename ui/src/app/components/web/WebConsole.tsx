@@ -1069,6 +1069,12 @@ export function WebConsole() {
                   <span className="text-[10px] font-bold text-red-500 uppercase tracking-wider">Node Offline</span>
                </div>
             )}
+            {!isNodeOffline && p2pState === 'fallback' && (
+               <div className="hidden md:flex items-center gap-1.5 px-2 py-1 bg-[#F59E0B]/10 border border-[#F59E0B]/20 rounded-full ml-1 shrink-0" title="Direct P2P Failed. Routing through Relay.">
+                  <div className="w-2 h-2 rounded-full bg-[#F59E0B]" />
+                  <span className="text-[10px] font-bold text-[#F59E0B] uppercase tracking-wider">Relay Mode</span>
+               </div>
+            )}
           </div>
           
           <Separator orientation="vertical" className="h-6 bg-[#1F2937] hidden md:block" />

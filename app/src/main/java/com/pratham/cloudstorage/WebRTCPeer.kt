@@ -93,16 +93,16 @@ class WebRTCPeer(
             when (signalType) {
                 "offer" -> handleOffer(browserId, signalMap)
                 "ice" -> handleIceCandidate(browserId, signalMap)
-                else -> Log.w(TAG, "Unknown signal type: $signalType")
+                else -> Log.w(TAG, "[SIGNAL_DEBUG] Unknown signal type: $signalType")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse signaling message", e)
+            Log.e(TAG, "[SIGNAL_DEBUG] Failed to parse signaling message", e)
         }
     }
 
     private fun handleOffer(browserId: String, signalMap: Map<*, *>) {
         val sdp = signalMap["sdp"] as? String ?: return
-        Log.i(TAG, "Received SDP offer from browser $browserId")
+        Log.i(TAG, "[SIGNAL_DEBUG] Received SDP offer from browser $browserId")
 
         // Create a new PeerConnection for this browser
         val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
@@ -129,22 +129,29 @@ class WebRTCPeer(
             }
 
             override fun onDataChannel(dc: DataChannel) {
-                Log.i(TAG, "DataChannel opened by browser: ${dc.label()}")
+                Log.i(TAG, "[DC_DEBUG] DataChannel opened by browser: ${dc.label()}")
                 dataChannels[browserId] = dc
                 setupDataChannel(browserId, dc)
             }
 
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
-                Log.i(TAG, "ICE connection state for $browserId: $state")
+                Log.i(TAG, "[ICE_DEBUG] ICE connection state for $browserId: $state")
                 if (state == PeerConnection.IceConnectionState.DISCONNECTED ||
                     state == PeerConnection.IceConnectionState.FAILED) {
                     cleanup(browserId)
                 }
             }
 
-            override fun onSignalingChange(state: PeerConnection.SignalingState) {}
+            override fun onSignalingChange(state: PeerConnection.SignalingState) {
+                Log.i(TAG, "[SIGNAL_DEBUG] Signaling state for $browserId: $state")
+            }
             override fun onIceConnectionReceivingChange(receiving: Boolean) {}
-            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {}
+            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
+                Log.i(TAG, "[ICE_DEBUG] ICE gathering state for $browserId: $state")
+            }
+            override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
+                Log.i(TAG, "[ICE_DEBUG] PeerConnection state for $browserId: $newState")
+            }
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
             override fun onAddStream(stream: MediaStream) {}
             override fun onRemoveStream(stream: MediaStream) {}
@@ -161,7 +168,7 @@ class WebRTCPeer(
         val sessionDesc = SessionDescription(SessionDescription.Type.OFFER, sdp)
         pc.setRemoteDescription(object : SdpObserver {
             override fun onSetSuccess() {
-                Log.i(TAG, "Remote description set successfully for $browserId")
+                Log.i(TAG, "[SIGNAL_DEBUG] Remote description (offer) set successfully for $browserId")
                 // Create an SDP answer
                 pc.createAnswer(object : SdpObserver {
                     override fun onCreateSuccess(answer: SessionDescription) {
@@ -179,17 +186,17 @@ class WebRTCPeer(
                         kotlinx.coroutines.runBlocking {
                             onSignal(gson.toJson(msg))
                         }
-                        Log.i(TAG, "Sent SDP answer to browser $browserId")
+                        Log.i(TAG, "[SIGNAL_DEBUG] Sent SDP answer to browser $browserId")
                     }
                     override fun onCreateFailure(error: String) {
-                        Log.e(TAG, "Failed to create answer: $error")
+                        Log.e(TAG, "[SIGNAL_DEBUG] Failed to create answer: $error")
                     }
                     override fun onSetSuccess() {}
                     override fun onSetFailure(error: String) {}
                 }, MediaConstraints())
             }
             override fun onSetFailure(error: String) {
-                Log.e(TAG, "Failed to set remote description: $error")
+                Log.e(TAG, "[SIGNAL_DEBUG] Failed to set remote description: $error")
             }
             override fun onCreateSuccess(desc: SessionDescription) {}
             override fun onCreateFailure(error: String) {}
@@ -226,7 +233,7 @@ class WebRTCPeer(
                         handleBinaryChunk(browserId, dc, buffer.data)
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "DataChannel message error", e)
+                    Log.e(TAG, "[DC_DEBUG] DataChannel message error", e)
                 }
             }
 
@@ -245,7 +252,7 @@ class WebRTCPeer(
                     "upload-start" -> {
                         // Begin accumulating upload chunks
                         uploadBuffers[reqId] = java.io.ByteArrayOutputStream()
-                        Log.d(TAG, "Upload started: $reqId")
+                        Log.d(TAG, "[DC_DEBUG] Upload started: $reqId")
                     }
                     "upload-end" -> {
                         // Upload complete — forward accumulated body to local server
@@ -271,7 +278,7 @@ class WebRTCPeer(
 
             override fun onBufferedAmountChange(amount: Long) {}
             override fun onStateChange() {
-                Log.i(TAG, "DataChannel state: ${dc.state()}")
+                Log.i(TAG, "[DC_DEBUG] DataChannel state: ${dc.state()}")
             }
         })
     }

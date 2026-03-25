@@ -19,13 +19,14 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { P2PTransport } from './p2pTransport';
 
-export type P2PConnectionState = 'disconnected' | 'connecting' | 'signaling' | 'connected' | 'failed';
+export type P2PConnectionState = 'disconnected' | 'connecting' | 'signaling' | 'connected' | 'fallback' | 'failed';
 
 // Public STUN servers for NAT traversal — these help discover
 // the device's public IP/port mapping behind home/office routers
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' }
 ];
 
 interface UseWebRTCOptions {
@@ -59,6 +60,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
   const wsRef = useRef<WebSocket | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
   const reconnectRef = useRef<number>(0);
+  const fallbackTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   // Queue for ICE candidates received before the remote description is fully set
   const iceCandidateQueueRef = useRef<RTCIceCandidateInit[]>([]);
@@ -70,6 +72,13 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
     cleanup();
 
     setConnectionState('connecting');
+
+    // Start 8-second fallback timeout
+    fallbackTimeoutRef.current = setTimeout(() => {
+      console.warn('[WebRTC] Connection timed out (>8s). Falling back to HTTP Relay transport.');
+      setConnectionState('fallback');
+      // We don't cleanup() here; if the connection eventually succeeds, it can still seamlessly take over.
+    }, 8000);
 
     // 1. Build signaling WebSocket URL
     const wsUrl = relayUrl
@@ -133,6 +142,10 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
 
     dc.onopen = () => {
       console.log('[WebRTC] DataChannel "files" opened — P2P ready!');
+      if (fallbackTimeoutRef.current) {
+        clearTimeout(fallbackTimeoutRef.current);
+        fallbackTimeoutRef.current = null;
+      }
       setConnectionState('connected');
       setIsReady(true);
       setIsDataChannelReady(true);
@@ -266,6 +279,11 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
   function cleanup() {
     console.log('[WebRTC] Cleaning up connection resources');
     
+    if (fallbackTimeoutRef.current) {
+      clearTimeout(fallbackTimeoutRef.current);
+      fallbackTimeoutRef.current = null;
+    }
+
     // Clean up DataChannel
     if (dcRef.current) {
       dcRef.current.onopen = null;

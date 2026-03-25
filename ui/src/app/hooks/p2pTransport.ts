@@ -97,6 +97,8 @@ export class P2PTransport {
     const id = crypto.randomUUID();
     const method = options.method || 'GET';
 
+    console.log(`[REQ_DEBUG] P2P Fetch: ${method} ${path} [${id}]`);
+
     // Encode body as base64 if present
     let bodyB64: string | null = null;
     if (options.body) {
@@ -146,6 +148,7 @@ export class P2PTransport {
     }
 
     const id = crypto.randomUUID();
+    console.log(`[REQ_DEBUG] P2P Upload: ${path} [${id}]`);
 
     return new Promise<P2PResponse>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
@@ -219,6 +222,8 @@ export class P2PTransport {
           if (!req) return;
           this.pending.delete(id);
 
+          console.log(`[REQ_DEBUG] P2P Response [${id}]: ${msg.status}`);
+
           const bodyBytes = msg.body ? base64ToUint8Array(msg.body) : new Uint8Array(0);
           req.resolve(createP2PResponse(msg.status || 200, msg.headers || {}, bodyBytes));
           break;
@@ -239,6 +244,8 @@ export class P2PTransport {
           const req = this.pending.get(id);
           if (!req || !req.chunks) return;
           this.pending.delete(id);
+
+          console.log(`[REQ_DEBUG] P2P Chunked Response Assembled [${id}]: ${req.status} (Chunks: ${req.chunks.length})`);
 
           // Concatenate all chunks into a single Uint8Array
           const totalLength = req.chunks.reduce((acc, c) => acc + c.length, 0);
@@ -301,7 +308,7 @@ function createP2PResponse(
       const contentType = Object.entries(headers).find(
         ([k]) => k.toLowerCase() === 'content-type'
       )?.[1] || 'application/octet-stream';
-      return new Blob([body], { type: contentType });
+      return new Blob([body.buffer as ArrayBuffer], { type: contentType });
     },
   };
 }

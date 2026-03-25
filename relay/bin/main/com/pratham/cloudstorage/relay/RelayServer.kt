@@ -149,9 +149,16 @@ fun Application.relayModule() {
                         val type = msg["type"] as? String ?: continue
 
                         when (type) {
-                            // Forward signaling messages from Android → all connected browsers
+                            // Forward signaling messages from Android → target browser
                             "signal" -> {
-                                registry.forwardToAllBrowsers(shareCode, text)
+                                val browserId = msg["browserId"] as? String
+                                if (browserId != null) {
+                                    println("[SIGNAL_DEBUG] Relay routing from Android to browser $browserId")
+                                    registry.forwardToBrowser(shareCode, browserId, text)
+                                } else {
+                                    println("[SIGNAL_DEBUG] Relay broadcasting from Android to all browsers (no browserId)")
+                                    registry.forwardToAllBrowsers(shareCode, text)
+                                }
                             }
                             // Agent status pong — ignored
                             else -> {}
@@ -197,6 +204,7 @@ fun Application.relayModule() {
                         when (type) {
                             // Forward signaling messages from browser → Android agent
                             "signal" -> {
+                                println("[SIGNAL_DEBUG] Relay routing from browser $browserId to Android")
                                 // Inject the browserId so the Android node knows who to reply to
                                 val enriched = msg.toMutableMap()
                                 enriched["browserId"] = browserId
@@ -254,6 +262,11 @@ private class SignalingRegistry {
         browsers[shareCode]?.values?.forEach { session ->
             try { session.send(Frame.Text(message)) } catch (_: Exception) {}
         }
+    }
+
+    /** Forward a signaling message from the Android agent to a specific browser */
+    suspend fun forwardToBrowser(shareCode: String, browserId: String, message: String) {
+        try { browsers[shareCode]?.get(browserId)?.send(Frame.Text(message)) } catch (_: Exception) {}
     }
 
     /** Forward a signaling message from a browser to the Android agent */
