@@ -56,11 +56,14 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
   const wsRef = useRef<WebSocket | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
   const reconnectRef = useRef<number>(0);
+  
+  // Queue for ICE candidates received before the remote description is fully set
+  const iceCandidateQueueRef = useRef<RTCIceCandidateInit[]>([]);
 
   const connect = useCallback(() => {
     if (!enabled || !relayUrl || !shareCode) return;
 
-    // Cleanup previous connection
+    // Cleanup previous connection stringently
     cleanup();
 
     setConnectionState('connecting');
@@ -96,15 +99,17 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
 
     ws.onclose = () => {
       console.log('[WebRTC] Signaling WebSocket closed');
-      if (connectionState !== 'connected') {
-        setConnectionState('disconnected');
+      if (wsRef.current === ws) {
+        if (connectionState !== 'connected') {
+          setConnectionState('disconnected');
+        }
+        // Auto-reconnect with exponential backoff
+        const delay = Math.min(2000 * Math.pow(2, reconnectRef.current), 30000);
+        reconnectRef.current++;
+        setTimeout(() => {
+          if (enabled) connect();
+        }, delay);
       }
-      // Auto-reconnect with exponential backoff
-      const delay = Math.min(2000 * Math.pow(2, reconnectRef.current), 30000);
-      reconnectRef.current++;
-      setTimeout(() => {
-        if (enabled) connect();
-      }, delay);
     };
   }, [relayUrl, shareCode, enabled]);
 
@@ -112,6 +117,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
     // 2. Create RTCPeerConnection with STUN servers
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     pcRef.current = pc;
+    iceCandidateQueueRef.current = [];
 
     // 3. Create a DataChannel for API communication
     const dc = pc.createDataChannel('files', {
@@ -136,7 +142,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
 
     // 4. Gather ICE candidates and send them to the Android node via relay
     pc.onicecandidate = (event) => {
-      if (event.candidate) {
+      if (event.candidate && wsRef.current?.readyState === WebSocket.OPEN) {
         const signal = {
           type: 'signal',
           signal: {
@@ -172,8 +178,10 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
             sdp: offer.sdp,
           },
         };
-        ws.send(JSON.stringify(signal));
-        console.log('[WebRTC] SDP offer sent to Android node');
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(signal));
+          console.log('[WebRTC] SDP offer sent to Android node');
+        }
       });
     }).catch((err) => {
       console.error('[WebRTC] Failed to create offer:', err);
@@ -197,46 +205,100 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
       const signal = msg.signal;
 
       if (signal.type === 'answer') {
+        // STATE GUARD: Prevent DOMException when receiving duplicate answers or in wrong state
+        if (pc.signalingState !== 'have-local-offer') {
+          console.warn('[WebRTC] Ignoring unexpected answer in state:', pc.signalingState);
+          return;
+        }
+
         // Set the Android node's SDP answer as remote description
         const answer = new RTCSessionDescription({
           type: 'answer',
           sdp: signal.sdp,
         });
+        
         pc.setRemoteDescription(answer).then(() => {
           console.log('[WebRTC] Remote description (answer) set successfully');
+          // Process any queued ICE candidates that arrived before the answer
+          iceCandidateQueueRef.current.forEach(c => {
+            pc.addIceCandidate(new RTCIceCandidate(c)).catch(err => {
+              console.warn('[WebRTC] Failed to add queued ICE candidate:', err);
+            });
+          });
+          iceCandidateQueueRef.current = [];
         }).catch((err) => {
           console.error('[WebRTC] Failed to set remote description:', err);
         });
+
       } else if (signal.type === 'ice') {
-        // Add the Android node's ICE candidate for NAT traversal
-        const candidate = new RTCIceCandidate({
+        const candidateInit = {
           candidate: signal.candidate,
           sdpMid: signal.sdpMid,
           sdpMLineIndex: signal.sdpMLineIndex,
-        });
-        pc.addIceCandidate(candidate).catch((err) => {
-          console.error('[WebRTC] Failed to add ICE candidate:', err);
-        });
+        };
+
+        // ICE QUEUING: If remote description isn't set yet, queue the candidate
+        if (!pc.remoteDescription) {
+          console.log('[WebRTC] Queuing ICE candidate (remote description not set)');
+          iceCandidateQueueRef.current.push(candidateInit);
+          return;
+        }
+
+        // Add the Android node's ICE candidate for NAT traversal
+        try {
+          const candidate = new RTCIceCandidate(candidateInit);
+          pc.addIceCandidate(candidate).catch((err) => {
+            console.warn('[WebRTC] Failed to add ICE candidate:', err);
+          });
+        } catch (err) {
+          console.warn('[WebRTC] Synchronous error adding ICE candidate:', err);
+        }
       }
     }
   }
 
   function cleanup() {
-    dcRef.current?.close();
-    pcRef.current?.close();
-    wsRef.current?.close();
+    console.log('[WebRTC] Cleaning up connection resources');
+    
+    // Clean up DataChannel
+    if (dcRef.current) {
+      dcRef.current.onopen = null;
+      dcRef.current.onclose = null;
+      dcRef.current.close();
+      dcRef.current = null;
+    }
+    
+    // Clean up PeerConnection
+    if (pcRef.current) {
+      pcRef.current.onicecandidate = null;
+      pcRef.current.onconnectionstatechange = null;
+      pcRef.current.oniceconnectionstatechange = null;
+      pcRef.current.close();
+      pcRef.current = null;
+    }
+    
+    // Clean up WebSocket
+    if (wsRef.current) {
+      wsRef.current.onopen = null;
+      wsRef.current.onmessage = null;
+      wsRef.current.onerror = null;
+      wsRef.current.onclose = null;
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+
     transportRef.current.destroy();
     transportRef.current = new P2PTransport();
-    dcRef.current = null;
-    pcRef.current = null;
-    wsRef.current = null;
+    iceCandidateQueueRef.current = [];
     setIsReady(false);
   }
 
   useEffect(() => {
     if (enabled) connect();
+    // Strict Cleanup: Ensure all listeners and sockets are destroyed when hook unmounts 
+    // or dependencies change, preventing ghost connections in Strict Mode.
     return () => cleanup();
-  }, [relayUrl, shareCode, enabled]);
+  }, [relayUrl, shareCode, enabled, connect]);
 
   const reconnect = useCallback(() => {
     reconnectRef.current = 0;
