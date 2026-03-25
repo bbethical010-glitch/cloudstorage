@@ -112,6 +112,11 @@ export function WebConsole() {
     localStorage.setItem("cloud_storage_theme", theme);
   }, [theme]);
   
+  useEffect(() => {
+    console.log("WEBRTC_INIT_START");
+    console.log("WebConsole mounted, shareCode:", getShareCode());
+  }, []);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 

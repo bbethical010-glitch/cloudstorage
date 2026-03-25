@@ -43,6 +43,7 @@ interface UseWebRTCReturn {
 }
 
 export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOptions): UseWebRTCReturn {
+  console.log("useWebRTC HOOK CALLED", { enabled, shareCode });
   const [connectionState, setConnectionState] = useState<P2PConnectionState>('disconnected');
   const [isReady, setIsReady] = useState(false);
   const [isDataChannelReady, setIsDataChannelReady] = useState(false);
@@ -53,6 +54,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
   const reconnectRef = useRef<number>(0);
   
   // Strict Stage Timeouts
+  const initTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const offerTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const iceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const dcTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -62,59 +64,75 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
   const failAndFallback = useCallback((reason: string) => {
     console.warn(`[PC_DEBUG] HARD_FAIL: ${reason}. Triggering fallbackToRelay().`);
     setConnectionState('fallback');
-    // We don't fully cleanup here so we can potentially recover P2P later, 
-    // but we clear all current stage timeouts.
     clearAllTimeouts();
   }, []);
 
   const clearAllTimeouts = useCallback(() => {
+    if (initTimeoutRef.current) { clearTimeout(initTimeoutRef.current); initTimeoutRef.current = null; }
     if (offerTimeoutRef.current) { clearTimeout(offerTimeoutRef.current); offerTimeoutRef.current = null; }
     if (iceTimeoutRef.current) { clearTimeout(iceTimeoutRef.current); iceTimeoutRef.current = null; }
     if (dcTimeoutRef.current) { clearTimeout(dcTimeoutRef.current); dcTimeoutRef.current = null; }
   }, []);
 
   const connect = useCallback(() => {
-    if (!enabled || !relayUrl || !shareCode) return;
+    try {
+      if (!enabled || !relayUrl || !shareCode) return;
 
-    cleanup();
-    setConnectionState('connecting');
+      cleanup();
+      setConnectionState('connecting');
 
-    const wsUrl = relayUrl
-      .replace('https://', 'wss://')
-      .replace('http://', 'ws://') + `/signal/${shareCode.toUpperCase()}`;
-
-    console.log('[SIGNAL_DEBUG] Connecting to:', wsUrl);
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      console.log('[SIGNAL_DEBUG] WS_OPEN');
-      setConnectionState('signaling');
-      initiatePeerConnection(ws);
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        handleSignalingMessage(msg);
-      } catch (e) {
-        console.error('[SIGNAL_DEBUG] Parse error:', e);
-      }
-    };
-
-    ws.onerror = (err) => {
-      console.error('[SIGNAL_DEBUG] WS_ERROR:', err);
-      failAndFallback('SIGNAL_WS_ERROR');
-    };
-
-    ws.onclose = () => {
-      console.log('[SIGNAL_DEBUG] WS_CLOSE');
-      if (wsRef.current === ws) {
-        if (connectionState !== 'connected' && connectionState !== 'fallback') {
-          setConnectionState('disconnected');
+      // Hard fail-safe: if we don't reach 'connected' or at least 'ice-gathering' quickly
+      if (initTimeoutRef.current) clearTimeout(initTimeoutRef.current);
+      initTimeoutRef.current = setTimeout(() => {
+        if (wsRef.current?.readyState !== WebSocket.OPEN) {
+          console.error("WEBRTC_INIT_ERROR: WebSocket never opened.");
+          failAndFallback('HARD_INIT_WS_TIMEOUT');
+        } else if (pcRef.current == null) {
+           console.error("WEBRTC_INIT_ERROR: PeerConnection not initialized.");
+           failAndFallback('HARD_INIT_PC_TIMEOUT');
         }
-      }
-    };
+      }, 3000);
+
+      const wsUrl = relayUrl
+        .replace('https://', 'wss://')
+        .replace('http://', 'ws://') + `/signal/${shareCode.toUpperCase()}`;
+
+      console.log("SIGNAL_WS_CONNECTING", wsUrl);
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        console.log("SIGNAL_WS_CONNECTED");
+        setConnectionState('signaling');
+        initiatePeerConnection(ws);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          handleSignalingMessage(msg);
+        } catch (e) {
+          console.error('[SIGNAL_DEBUG] Parse error:', e);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error('[SIGNAL_DEBUG] WS_ERROR:', err);
+        failAndFallback('SIGNAL_WS_ERROR');
+      };
+
+      ws.onclose = () => {
+        console.log('[SIGNAL_DEBUG] WS_CLOSE');
+        if (wsRef.current === ws) {
+          if (connectionState !== 'connected' && connectionState !== 'fallback') {
+            setConnectionState('disconnected');
+          }
+        }
+      };
+    } catch (e) {
+      console.error("WEBRTC_INIT_ERROR", e);
+      failAndFallback('SYNC_INIT_CATCH');
+    }
   }, [relayUrl, shareCode, enabled, failAndFallback]);
 
   function initiatePeerConnection(ws: WebSocket) {
