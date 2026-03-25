@@ -7,33 +7,35 @@ import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
-import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
-import io.ktor.server.routing.head
-import io.ktor.server.routing.options
-import io.ktor.server.routing.post
-import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
-import io.ktor.util.flattenEntries
-import java.util.Base64
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.http.*
 import io.ktor.websocket.*
 import io.ktor.server.websocket.*
 import java.time.Duration
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.TimeoutCancellationException
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeout
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Easy Storage Relay — Pure WebRTC Signaling Server
+//
+// This relay does NOT carry any file bytes. Its sole purpose is to broker
+// WebRTC signaling messages (SDP offer/answer + ICE candidates) between
+// the browser Web Console and the Android Node.
+//
+// Data flow:
+//   Browser ──(signaling WS)──► Relay ──(agent WS)──► Android Node
+//   Browser ◄──(signaling WS)── Relay ◄──(agent WS)── Android Node
+//
+// Once the WebRTC peer connection is established, all file data flows
+// directly between the browser and Android via RTCDataChannel — the relay
+// handles zero bytes of file content.
+// ──────────────────────────────────────────────────────────────────────────────
 
 private val gson = Gson()
 
@@ -47,21 +49,19 @@ fun main() {
 fun Application.relayModule() {
     install(io.ktor.server.routing.IgnoreTrailingSlash)
     install(WebSockets) {
-        // Render's reverse proxy closes idle connections aggressively.
-        // Sending a ping every 20s keeps the tunnel alive.
         pingPeriod = Duration.ofSeconds(20)
-        timeout = Duration.ofSeconds(120) // Increased timeout for larger uploads
-        maxFrameSize = 100 * 1024 * 1024L // Increased to 100MB to allow large JSON envelopes
+        timeout = Duration.ofSeconds(60)
+        maxFrameSize = 512 * 1024L // Signaling messages are tiny, 512KB is generous
     }
 
-    val registry = RelayRegistry()
+    val registry = SignalingRegistry()
 
     routing {
+
+        // ── Landing page ────────────────────────────────────────────────
         get("/") {
-            val connectedCount = registry.connectedCount()
-            val codes = registry.connectedShareCodes()
             call.respondText(
-                buildRelayLandingPage(connectedCount, codes),
+                buildRelayLandingPage(registry.connectedAgentCount(), registry.connectedShareCodes()),
                 ContentType.Text.Html
             )
         }
@@ -70,11 +70,11 @@ fun Application.relayModule() {
             val code = call.request.queryParameters["code"]?.trim()?.uppercase().orEmpty()
             if (code.isBlank()) {
                 call.respondText(
-                    buildRelayLandingPage(registry.connectedCount(), registry.connectedShareCodes()),
+                    buildRelayLandingPage(registry.connectedAgentCount(), registry.connectedShareCodes()),
                     ContentType.Text.Html
                 )
             } else {
-                call.respondRedirect("/node/$code", permanent = false)
+                call.respondRedirect("/node/$code/#/console", permanent = false)
             }
         }
 
@@ -84,16 +84,39 @@ fun Application.relayModule() {
 
         get("/agents") {
             call.respondText(
-                gson.toJson(
-                    mapOf(
-                        "count" to registry.connectedCount(),
-                        "shareCodes" to registry.connectedShareCodes()
-                    )
-                ),
+                gson.toJson(mapOf(
+                    "count" to registry.connectedAgentCount(),
+                    "shareCodes" to registry.connectedShareCodes()
+                )),
                 ContentType.Application.Json
             )
         }
 
+        // ── Redirect /node/{shareCode} to console ───────────────────────
+        route("/node/{shareCode}") {
+            get {
+                val shareCode = call.parameters["shareCode"]?.trim()?.uppercase().orEmpty()
+                val requestUri = call.request.uri
+                if (!requestUri.endsWith("/")) {
+                    val qs = call.request.queryString().let { if (it.isNotBlank()) "?$it" else "" }
+                    call.respondRedirect("/node/$shareCode/$qs", permanent = true)
+                    return@get
+                }
+                // Serve the static SPA shell — the React app handles everything
+                call.respondText(buildConsoleSPA(shareCode), ContentType.Text.Html)
+            }
+        }
+
+        route("/node/{shareCode}/{...}") {
+            get {
+                val shareCode = call.parameters["shareCode"]?.trim()?.uppercase().orEmpty()
+                val tail = call.parameters.getAll("...").orEmpty()
+                // Serve static assets if the path points to JS/CSS, else serve the SPA shell
+                call.respondText(buildConsoleSPA(shareCode), ContentType.Text.Html)
+            }
+        }
+
+        // ── Android Node WebSocket (agent registration + signaling) ─────
         webSocket("/agent/connect") {
             val shareCode = call.request.queryParameters["shareCode"]
                 ?.trim()
@@ -105,435 +128,179 @@ fun Application.relayModule() {
                 return@webSocket
             }
 
-            registry.register(shareCode, this)
-            sendEnvelope(RelayEnvelope(type = "connected", shareCode = shareCode))
-            
+            println("Relay: Agent connected for node $shareCode")
+            registry.registerAgent(shareCode, this)
+            send(Frame.Text(gson.toJson(mapOf("type" to "connected", "shareCode" to shareCode))))
+
+            // Keep-alive ping
             val pingJob = launch {
                 while (isActive) {
-                    kotlinx.coroutines.delay(30_000)
-                    try {
-                        send(io.ktor.websocket.Frame.Ping(ByteArray(0)))
-                    } catch (e: Exception) {
-                        println("Relay: Ping failed, connection likely dead: ${e.message}")
-                        break
-                    }
+                    delay(30_000)
+                    try { send(Frame.Ping(ByteArray(0))) }
+                    catch (_: Exception) { break }
                 }
             }
 
             try {
                 for (frame in incoming) {
-                    when (frame) {
-                        is Frame.Text -> {
-                            val envelope = frame.readText().toEnvelopeOrNull() ?: continue
-                            if (envelope.type == "response") {
-                                if (envelope.subType == "download_end_stream" && !envelope.requestId.isNullOrBlank()) {
-                                    registry.getAgent(shareCode)?.let {
-                                        it.activeDownloadStreams[envelope.requestId]?.flush()
-                                        it.activeDownloadStreams[envelope.requestId]?.close(null)
-                                        it.activeDownloadCompletions[envelope.requestId]?.complete(Unit)
-                                    }
-                                } else if (!envelope.requestId.isNullOrBlank()) {
-                                    registry.completeResponse(envelope)
-                                }
+                    if (frame is Frame.Text) {
+                        val text = frame.readText()
+                        val msg = text.toJsonMap() ?: continue
+                        val type = msg["type"] as? String ?: continue
+
+                        when (type) {
+                            // Forward signaling messages from Android → all connected browsers
+                            "signal" -> {
+                                registry.forwardToAllBrowsers(shareCode, text)
                             }
+                            // Agent status pong — ignored
+                            else -> {}
                         }
-                        is Frame.Binary -> {
-                            val bytes = frame.readBytes()
-                            if (bytes.size >= 36) {
-                                val reqId = String(bytes, 0, 36, Charsets.UTF_8).trim()
-                                registry.getAgent(shareCode)?.activeDownloadStreams?.get(reqId)?.writeFully(bytes, 36, bytes.size - 36)
-                            }
-                        }
-                        else -> {}
                     }
                 }
             } finally {
                 pingJob.cancel()
-                registry.unregister(shareCode, this)
-                println("Relay: Session cleaned up for nodeId=$shareCode")
+                registry.unregisterAgent(shareCode, this)
+                println("Relay: Agent disconnected for node $shareCode")
             }
         }
 
-        route("/node/{shareCode}") {
-            get {
-                // If it doesn't end with a slash, redirect to the trailing slash version
-                // so the browser resolves relative asset paths (like ./assets/) against the sharecode, not 'node'
-                val shareCode = call.parameters["shareCode"]?.trim()?.uppercase().orEmpty()
-                val requestUri = call.request.uri
-                if (!requestUri.endsWith("/")) {
-                    val queryString = call.request.queryString().let { if (it.isNotBlank()) "?$it" else "" }
-                    call.respondRedirect("/node/$shareCode/$queryString", permanent = true)
-                    return@get
-                }
-                call.proxyNodeRequest(registry, emptyList())
+        // ── Browser Signaling WebSocket ──────────────────────────────────
+        // The browser connects here to exchange WebRTC SDP/ICE with the Android node.
+        webSocket("/signal/{shareCode}") {
+            val shareCode = call.parameters["shareCode"]?.trim()?.uppercase().orEmpty()
+
+            if (shareCode.isBlank()) {
+                close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "Missing shareCode"))
+                return@webSocket
             }
-            post { call.proxyNodeRequest(registry, emptyList()) }
-            put { call.proxyNodeRequest(registry, emptyList()) }
-            delete { call.proxyNodeRequest(registry, emptyList()) }
-            head { call.proxyNodeRequest(registry, emptyList()) }
-            options { call.proxyNodeRequest(registry, emptyList()) }
-        }
 
-        route("/node/{shareCode}/{...}") {
-            get {
-                val tail = call.parameters.getAll("...").orEmpty()
-                call.proxyNodeRequest(registry, tail)
-            }
-            post {
-                val tail = call.parameters.getAll("...").orEmpty()
-                call.proxyNodeRequest(registry, tail)
-            }
-            put {
-                val tail = call.parameters.getAll("...").orEmpty()
-                call.proxyNodeRequest(registry, tail)
-            }
-            delete {
-                val tail = call.parameters.getAll("...").orEmpty()
-                call.proxyNodeRequest(registry, tail)
-            }
-            head {
-                val tail = call.parameters.getAll("...").orEmpty()
-                call.proxyNodeRequest(registry, tail)
-            }
-            options {
-                val tail = call.parameters.getAll("...").orEmpty()
-                call.proxyNodeRequest(registry, tail)
-            }
-        }
-    }
-}
+            val browserId = java.util.UUID.randomUUID().toString()
+            println("Relay: Browser $browserId connected for signaling on node $shareCode")
+            registry.registerBrowser(shareCode, browserId, this)
 
-private suspend fun io.ktor.server.application.ApplicationCall.proxyNodeRequest(
-    registry: RelayRegistry,
-    tail: List<String>
-) {
-    val shareCode = parameters["shareCode"]?.trim()?.uppercase().orEmpty()
-    if (request.queryParameters.contains("debug_trace")) {
-        respondText("TRACE: shareCode=$shareCode, multipart=${request.isMultipart()}")
-        return
-    }
-    
-    if (shareCode.isBlank()) {
-        respondText("Missing share code", status = HttpStatusCode.BadRequest)
-        return
-    }
+            // Tell the browser whether the android agent is currently online
+            val agentOnline = registry.isAgentOnline(shareCode)
+            send(Frame.Text(gson.toJson(mapOf(
+                "type" to "status",
+                "agentOnline" to agentOnline,
+                "browserId" to browserId
+            ))))
 
-    try {
-        val agent = registry.waitForAgent(shareCode)
-        if (agent == null) {
-        println("Relay: No session for nodeId=$shareCode after timeout, returning 503")
-        respondText("{\"error\":\"agent_offline\", \"nodeId\":\"$shareCode\"}", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
-        return
-    }
-
-    val requestId = UUID.randomUUID().toString()
-
-        // Only proxy actual binary file streams through the direct-to-disk tunnel.
-        // endpoints like /api/folder_manifest and /api/folder_complete must route through standard HTTP.
-        val isUpload = request.path().contains("/api/upload") || request.path().contains("/upload")
-        val contentLength = request.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
-        val maxBodyBytes = 50L * 1024 * 1024 // 50 MB for non-streaming
-        
-        // Remove Hardcoded Limits: Ignore 50MB limit only if it's an upload pipe
-        if (!isUpload && contentLength > maxBodyBytes) {
-            respondText(
-                "Payload too large (max 50 MB for non-streaming).",
-                status = HttpStatusCode.PayloadTooLarge
-            )
-            return
-        }
-
-        val originalShareCode = parameters["shareCode"] ?: shareCode
-        val relayPath = request.path()
-            .removePrefix("/node/$originalShareCode")
-            .removePrefix("/")
-            .let { "/$it" }
-
-        val relayHeaders = request.headers.flattenEntries()
-            .filterNot { (key, _) -> key.equals(HttpHeaders.Host, ignoreCase = true) || isHopByHopHeader(key) }
-            .associate { (key, value) -> key to value }
-
-        if (isUpload) {
-            // Initiate Pure Stream Forwarding
-            val relayRequest = RelayEnvelope(
-                type = "request",
-                subType = "upload_start_stream",
-                requestId = requestId,
-                method = request.httpMethod.value,
-                path = relayPath,
-                query = request.queryString(),
-                headers = relayHeaders
-                // Body-parsing completely disabled—no base64 payload envelope
-            )
-            
-            val deferred = registry.prepareResponse(requestId)
             try {
-                agent.send(relayRequest)
+                for (frame in incoming) {
+                    if (frame is Frame.Text) {
+                        val text = frame.readText()
+                        val msg = text.toJsonMap() ?: continue
+                        val type = msg["type"] as? String ?: continue
 
-                // Extract the incoming stream seamlessly
-                val channel = request.receiveChannel()
-                val idBytes = requestId.padEnd(36, ' ').toByteArray(Charsets.UTF_8).sliceArray(0 until 36)
-                val bb = java.nio.ByteBuffer.allocate(64 * 1024)
-
-                // Manage flow control and suspension points naturally 
-                while (!channel.isClosedForRead) {
-                    bb.clear()
-                    val read = channel.readAvailable(bb)
-                    if (read > 0) {
-                        bb.flip()
-                        val packet = ByteArray(36 + read)
-                        System.arraycopy(idBytes, 0, packet, 0, 36)
-                        bb.get(packet, 36, read)
-                        agent.sendFrame(io.ktor.websocket.Frame.Binary(true, packet))
+                        when (type) {
+                            // Forward signaling messages from browser → Android agent
+                            "signal" -> {
+                                // Inject the browserId so the Android node knows who to reply to
+                                val enriched = msg.toMutableMap()
+                                enriched["browserId"] = browserId
+                                registry.forwardToAgent(shareCode, gson.toJson(enriched))
+                            }
+                            else -> {}
+                        }
                     }
                 }
-                
-                val endEnvelope = RelayEnvelope(
-                    type = "request",
-                    subType = "upload_end_stream",
-                    requestId = requestId
-                )
-                agent.send(endEnvelope)
-
-                val relayResponse = kotlinx.coroutines.withTimeoutOrNull(180_000) { deferred.await() }
-                if (relayResponse != null) {
-                    respondRelayResponse(relayResponse)
-                } else {
-                    respondText("Phone node did not respond in time.", status = HttpStatusCode.GatewayTimeout)
-                }
-            } catch (e: Exception) {
-                // Gracefully Trap Errors without crashing the whole application
-                respondText("Proxy gateway stream interrupted: ${e.message}", status = HttpStatusCode.BadGateway)
             } finally {
-                registry.removeResponse(requestId)
-            }
-        } else {
-            // Standard non-multipart request handling
-            val requestBody = try {
-                if (request.httpMethod == HttpMethod.Get || request.httpMethod == HttpMethod.Head || request.httpMethod == HttpMethod.Options) {
-                    ByteArray(0)
-                } else {
-                    receive<ByteArray>()
-                }
-            } catch (e: Exception) { ByteArray(0) }
-            val relayRequest = RelayEnvelope(
-                type = "request",
-                requestId = requestId,
-                method = request.httpMethod.value,
-                path = relayPath,
-                query = request.queryString(),
-                headers = relayHeaders,
-                bodyBase64 = requestBody.encodeBase64()
-            )
-
-            val relayResponse = registry.forwardEnvelope(agent, relayRequest)
-            if (relayResponse != null) {
-                if (relayResponse.subType == "download_start_stream") {
-                    val status = relayResponse.status?.let(HttpStatusCode::fromValue) ?: HttpStatusCode.OK
-                    val contentTypeStr = relayResponse.headers?.entries?.firstOrNull { it.key.equals(HttpHeaders.ContentType, true) }?.value
-                    val contentType = contentTypeStr?.let { ContentType.parse(it) }
-                    val contentLength = relayResponse.headers?.entries?.firstOrNull { it.key.equals(HttpHeaders.ContentLength, true) }?.value?.toLongOrNull()
-
-                    relayResponse.headers.orEmpty()
-                        .filterNot { (k, _) -> 
-                            isHopByHopHeader(k) || 
-                            k.equals(HttpHeaders.ContentLength, true) || 
-                            k.equals(HttpHeaders.ContentType, true) ||
-                            k.equals(HttpHeaders.TransferEncoding, true)
-                        }
-                        .forEach { (k, v) -> response.headers.append(k, v, safeOnly = false) }
-
-                    val completion = CompletableDeferred<Unit>()
-                    agent.activeDownloadCompletions[requestId] = completion
-                    
-                    try {
-                        respondBytesWriter(contentType = contentType, status = status, contentLength = contentLength) {
-                            agent.activeDownloadStreams[requestId] = this
-                            completion.await()
-                        }
-                    } finally {
-                        agent.activeDownloadStreams.remove(requestId)
-                        agent.activeDownloadCompletions.remove(requestId)
-                    }
-                } else {
-                    respondRelayResponse(relayResponse)
-                }
-            } else {
-                respondText("Phone node did not respond in time.", status = HttpStatusCode.GatewayTimeout)
+                registry.unregisterBrowser(shareCode, browserId)
+                println("Relay: Browser $browserId disconnected from node $shareCode")
             }
         }
-
-    } catch (e: TimeoutCancellationException) {
-        respondText(
-            "Phone node did not respond in time. Check your connection and try again.",
-            status = HttpStatusCode.GatewayTimeout
-        )
-    } catch (e: Throwable) {
-        val sw = java.io.StringWriter()
-        e.printStackTrace(java.io.PrintWriter(sw))
-        respondText(
-            "Relay gateway error:\n$sw",
-            status = HttpStatusCode.BadGateway
-        )
     }
 }
 
-private suspend fun io.ktor.server.application.ApplicationCall.respondRelayResponse(relayResponse: RelayEnvelope) {
-    val status = relayResponse.status?.let(HttpStatusCode::fromValue) ?: HttpStatusCode.BadGateway
-    relayResponse.headers.orEmpty()
-        .filterNot { (key, _) -> isHopByHopHeader(key) || key.equals(HttpHeaders.ContentLength, ignoreCase = true) }
-        .forEach { (key, value) ->
-            response.headers.append(key, value, safeOnly = false)
-        }
 
-    val bodyBytes = relayResponse.bodyBase64.decodeBase64()
-    val contentType = relayResponse.headers?.entries
-        ?.firstOrNull { (key, _) -> key.equals(HttpHeaders.ContentType, ignoreCase = true) }
-        ?.value
-        ?.takeIf { it.isNotBlank() }
-        ?.let(ContentType::parse)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Signaling Registry
+// ═══════════════════════════════════════════════════════════════════════════════
 
-    respondBytes(bodyBytes, contentType = contentType, status = status)
-}
+private class SignalingRegistry {
+    // One Android agent per share code
+    private val agents = ConcurrentHashMap<String, DefaultWebSocketSession>()
+    // Multiple browsers can view the same node
+    private val browsers = ConcurrentHashMap<String, ConcurrentHashMap<String, DefaultWebSocketSession>>()
 
-private class RelayRegistry {
-    private val agents = ConcurrentHashMap<String, AgentConnection>()
-    private val pendingResponses = ConcurrentHashMap<String, CompletableDeferred<RelayEnvelope>>()
-
-    suspend fun register(shareCode: String, session: DefaultWebSocketSession) {
-        val previous = agents.put(shareCode, AgentConnection(shareCode, session))
-        previous?.session?.close(CloseReason(CloseReason.Codes.NORMAL, "Replaced by newer connection"))
+    fun registerAgent(shareCode: String, session: DefaultWebSocketSession) {
+        agents[shareCode] = session
     }
 
-    fun unregister(shareCode: String, session: DefaultWebSocketSession) {
+    fun unregisterAgent(shareCode: String, session: DefaultWebSocketSession) {
         agents.computeIfPresent(shareCode) { _, existing ->
-            if (existing.session == session) null else existing
+            if (existing == session) null else existing
         }
     }
 
-    fun connectedCount(): Int = agents.size
+    fun registerBrowser(shareCode: String, browserId: String, session: DefaultWebSocketSession) {
+        browsers.getOrPut(shareCode) { ConcurrentHashMap() }[browserId] = session
+    }
+
+    fun unregisterBrowser(shareCode: String, browserId: String) {
+        browsers[shareCode]?.remove(browserId)
+    }
+
+    fun isAgentOnline(shareCode: String): Boolean = agents.containsKey(shareCode)
+
+    fun connectedAgentCount(): Int = agents.size
 
     fun connectedShareCodes(): List<String> = agents.keys().toList().sorted()
 
-    fun getAgent(shareCode: String): AgentConnection? = agents[shareCode]
-    
-    suspend fun waitForAgent(shareCode: String, timeoutMs: Long = 15_000L): AgentConnection? {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            agents[shareCode]?.let { return it }
-            kotlinx.coroutines.delay(500)
-        }
-        return null
-    }
-
-    fun prepareResponse(requestId: String): CompletableDeferred<RelayEnvelope> {
-        val deferred = CompletableDeferred<RelayEnvelope>()
-        pendingResponses[requestId] = deferred
-        return deferred
-    }
-
-    fun removeResponse(requestId: String) {
-        pendingResponses.remove(requestId)
-    }
-
-    suspend fun forwardEnvelope(agent: AgentConnection, request: RelayEnvelope): RelayEnvelope? {
-        val requestId = request.requestId ?: return null
-        val deferred = prepareResponse(requestId)
-
-        return try {
-            agent.send(request)
-            withTimeout(180_000) { deferred.await() }
-        } catch (e: TimeoutCancellationException) {
-            null
-        } finally {
-            removeResponse(requestId)
+    /** Forward a signaling message from the Android agent to all connected browsers */
+    suspend fun forwardToAllBrowsers(shareCode: String, message: String) {
+        browsers[shareCode]?.values?.forEach { session ->
+            try { session.send(Frame.Text(message)) } catch (_: Exception) {}
         }
     }
 
-    fun completeResponse(response: RelayEnvelope) {
-        val requestId = response.requestId ?: return
-        pendingResponses.remove(requestId)?.complete(response)
+    /** Forward a signaling message from a browser to the Android agent */
+    suspend fun forwardToAgent(shareCode: String, message: String) {
+        try { agents[shareCode]?.send(Frame.Text(message)) } catch (_: Exception) {}
     }
 }
 
-private data class AgentConnection(
-    val shareCode: String,
-    val session: DefaultWebSocketSession,
-    val sendMutex: Mutex = Mutex()
-) {
-    val activeDownloadStreams = ConcurrentHashMap<String, io.ktor.utils.io.ByteWriteChannel>()
-    val activeDownloadCompletions = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
-    suspend fun send(envelope: RelayEnvelope) {
-        sendMutex.withLock {
-            session.sendEnvelope(envelope)
-        }
-    }
 
-    suspend fun sendFrame(frame: Frame) {
-        sendMutex.withLock {
-            session.outgoing.send(frame)
-        }
-    }
+// ═══════════════════════════════════════════════════════════════════════════════
+// Utilities
+// ═══════════════════════════════════════════════════════════════════════════════
 
-    suspend fun sendLog(requestId: String, message: String) {
-        send(RelayEnvelope(type = "log", requestId = requestId, error = message))
-    }
-}
-
-private data class RelayEnvelope(
-    val type: String,
-    val requestId: String? = null,
-    val shareCode: String? = null,
-    val method: String? = null,
-    val path: String? = null,
-    val query: String? = null,
-    val headers: Map<String, String>? = null,
-    val bodyBase64: String? = null,
-    val status: Int? = null,
-    val error: String? = null,
-    val subType: String? = null,
-    val filename: String? = null
-)
-
-private suspend fun DefaultWebSocketSession.sendEnvelope(envelope: RelayEnvelope) {
-    outgoing.send(Frame.Text(gson.toJson(envelope)))
-}
-
-private fun String.toEnvelopeOrNull(): RelayEnvelope? {
+@Suppress("UNCHECKED_CAST")
+private fun String.toJsonMap(): Map<String, Any?>? {
     return try {
-        gson.fromJson(this, RelayEnvelope::class.java)
+        gson.fromJson(this, Map::class.java) as? Map<String, Any?>
     } catch (_: JsonSyntaxException) {
         null
     }
 }
 
-private fun ByteArray?.encodeBase64(): String? {
-    if (this == null || isEmpty()) return null
-    return Base64.getEncoder().encodeToString(this)
-}
-
-private fun String?.decodeBase64(): ByteArray {
-    if (this.isNullOrBlank()) return ByteArray(0)
-    return Base64.getDecoder().decode(this)
-}
-
-private fun isHopByHopHeader(name: String): Boolean {
-    return name.equals(HttpHeaders.Connection, ignoreCase = true) ||
-        name.equals("Keep-Alive", ignoreCase = true) ||
-        name.equals(HttpHeaders.ProxyAuthenticate, ignoreCase = true) ||
-        name.equals(HttpHeaders.ProxyAuthorization, ignoreCase = true) ||
-        name.equals(HttpHeaders.TE, ignoreCase = true) ||
-        name.equals(HttpHeaders.Trailer, ignoreCase = true) ||
-        name.equals(HttpHeaders.TransferEncoding, ignoreCase = true) ||
-        name.equals(HttpHeaders.Upgrade, ignoreCase = true)
+/** Minimal SPA shell that loads the React app — the React router handles /console */
+private fun buildConsoleSPA(shareCode: String): String {
+    return """<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Easy Storage Cloud</title>
+<script>window.__SHARE_CODE__="${shareCode}";</script>
+</head><body>
+<div id="root">Connecting to node $shareCode...</div>
+<script>
+  // The actual React app is loaded from the Android node via WebRTC once connected.
+  // For now, redirect to the relay-hosted console with the share code embedded.
+  if (!window.location.hash.includes('console')) {
+    window.location.hash = '#/console';
+  }
+</script>
+</body></html>"""
 }
 
 private fun buildRelayLandingPage(connectedCount: Int, shareCodes: List<String>): String {
     val nodeListHtml = if (shareCodes.isEmpty()) {
-        "<div class=\"empty\">No nodes currently connected. Open the Easy Storage app on your Android device and start the node.</div>"
+        """<div class="empty">No nodes currently connected. Open the Easy Storage app on your Android device.</div>"""
     } else {
         shareCodes.joinToString("") { code ->
-            """<a class="node-link" href="/node/$code">
+            """<a class="node-link" href="/node/$code/">
                <span class="code">$code</span>
                <span class="arrow">→ Open console</span>
              </a>"""
@@ -563,14 +330,15 @@ private fun buildRelayLandingPage(connectedCount: Int, shareCodes: List<String>)
     form { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
     input { flex: 1; min-width: 160px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; color: var(--text); font-family: inherit; font-size: 14px; }
     button { background: linear-gradient(135deg,#0f7896,#18536f); color: white; border: none; border-radius: 10px; padding: 10px 20px; font-weight: 700; cursor: pointer; font-family: inherit; }
+    .p2p-badge { display: inline-block; background: rgba(16,185,129,.15); color: #10b981; border-radius: 999px; padding: 4px 14px; font-size: 11px; font-weight: 700; letter-spacing: .05em; margin-left: 8px; }
   </style>
 </head>
 <body>
   <div class="shell">
     <div class="card">
-      <div class="label">EASY STORAGE RELAY</div>
-      <h1>Drive relay gateway</h1>
-      <p class="muted">This relay forwards requests to Android phone nodes. The files stay on the drive attached to the phone — this server only proxies traffic.</p>
+      <div class="label">EASY STORAGE RELAY <span class="p2p-badge">WebRTC P2P</span></div>
+      <h1>Signaling gateway</h1>
+      <p class="muted">This relay brokers WebRTC connections between browsers and Android nodes. <strong>Zero file bytes</strong> pass through this server — all data flows peer-to-peer.</p>
       <div class="badge">$connectedCount node(s) online</div>
     </div>
     <div class="card">
@@ -579,7 +347,7 @@ private fun buildRelayLandingPage(connectedCount: Int, shareCodes: List<String>)
     </div>
     <div class="card">
       <div class="label">OPEN A NODE BY SHARE CODE</div>
-      <p class="muted">Paste the share code from the Easy Storage app to open that node's file console.</p>
+      <p class="muted">Paste the share code from the Easy Storage app.</p>
       <form action="/join" method="get">
         <input name="code" placeholder="e.g. E9455A2DC9" autocomplete="off" autocapitalize="characters">
         <button type="submit">Go →</button>

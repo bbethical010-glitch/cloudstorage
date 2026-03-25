@@ -1,4 +1,6 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { useWebRTC } from '../../hooks/useWebRTC';
+import type { P2PResponse } from '../../hooks/p2pTransport';
 import { motion, AnimatePresence } from "motion/react";
 import {
   HardDrive,
@@ -116,7 +118,7 @@ export function WebConsole() {
   useEffect(() => {
     const checkStatus = async () => {
       try {
-        const authStat = await fetch(`${getBaseUrl()}/api/auth/status`);
+        const authStat = await apiFetch('/api/auth/status');
         if (authStat.ok) {
            const authText = await authStat.text();
            const { hasAccount } = authText ? JSON.parse(authText) : { hasAccount: false };
@@ -125,7 +127,7 @@ export function WebConsole() {
            const pwd = params.get('pwd');
            
            if (token || pwd) {
-               const verify = await fetch(`${getBaseUrl()}/api/storage`, { headers: { Authorization: `Bearer ${pwd || token}` }});
+               const verify = await apiFetch('/api/storage', { headers: { Authorization: `Bearer ${pwd || token}` } as any});
                if (verify.ok) {
                    setIsAuthenticated(true);
                    setIsNodeOffline(false);
@@ -252,12 +254,51 @@ export function WebConsole() {
     return '';
   };
 
+  // Extract the share code from the URL for WebRTC signaling
+  const getShareCode = () => {
+    const path = window.location.pathname;
+    const match = path.match(/\/node\/([A-Z0-9]+)/i);
+    return match?.[1]?.toUpperCase() || '';
+  };
+
+  // Extract relay base URL (the origin of the relay server)
+  const getRelayUrl = () => {
+    return window.location.origin;
+  };
+
   const getHeaders = () => {
     const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token') || '';
     const params = new URLSearchParams(window.location.hash.split('?')[1]);
     const pwd = params.get('pwd') || token;
     return { 'Authorization': `Bearer ${pwd}` };
   };
+
+  // ── WebRTC P2P Connection ──────────────────────────────────────────────
+  // Establishes a direct peer-to-peer connection to the Android node.
+  // When connected, API requests bypass the relay entirely — file bytes
+  // flow directly between this browser and the Android device.
+  const { connectionState: p2pState, transport: p2pTransport, isReady: p2pReady, reconnect: p2pReconnect } = useWebRTC({
+    relayUrl: getRelayUrl(),
+    shareCode: getShareCode(),
+    enabled: true,
+  });
+
+  /**
+   * Unified API fetch — uses P2P DataChannel when connected, falls back to relay.
+   * This is the primary replacement for all fetch(getBaseUrl() + endpoint) calls.
+   */
+  const apiFetch = useCallback(async (endpoint: string, options: RequestInit = {}): Promise<Response | P2PResponse> => {
+    if (p2pReady && p2pTransport?.ready) {
+      // Route through the P2P DataChannel — zero relay bandwidth
+      return p2pTransport.fetch(endpoint, {
+        method: options.method || 'GET',
+        headers: options.headers as Record<string, string> || {},
+        body: options.body as string | null,
+      });
+    }
+    // Fallback: route through the relay server
+    return fetch(`${getBaseUrl()}${endpoint}`, options);
+  }, [p2pReady, p2pTransport]);
 
   useEffect(() => {
     loadFiles(currentPath);
@@ -271,7 +312,7 @@ export function WebConsole() {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
-        const res = await fetch(`${getBaseUrl()}/api/status`, { signal: controller.signal });
+        const res = await apiFetch('/api/status');
         clearTimeout(timeoutId);
         if (!res.ok) throw new Error();
         const statusText = await res.text();
@@ -441,7 +482,7 @@ export function WebConsole() {
 
   const loadStorageStats = async () => {
     try {
-      const res = await fetch(`${getBaseUrl()}/api/storage`, { headers: getHeaders(), cache: "no-store" });
+      const res = await apiFetch('/api/storage', { headers: getHeaders() as any });
       if (res.ok) {
         const text = await res.text();
         if (text) setStorageStats(JSON.parse(text));
@@ -476,8 +517,8 @@ export function WebConsole() {
     try {
       const timestamp = Date.now();
       const endpoint = activeTab === "Trash" ? `/api/trash?t=${timestamp}` : `/api/files?path=${encodeURIComponent(path)}&t=${timestamp}`;
-      const res = await fetch(`${getBaseUrl()}${endpoint}`, { 
-        headers: { ...getHeaders(), 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' } 
+      const res = await apiFetch(endpoint, { 
+        headers: { ...getHeaders(), 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' } as any
       });
 
       if (res.status === 502 || res.status === 503) {
@@ -537,10 +578,10 @@ export function WebConsole() {
     formData.append("path", currentPath);
     formData.append("name", name);
     try {
-      const res = await fetch(`${getBaseUrl()}/api/folder`, {
+      const res = await apiFetch('/api/folder', {
         method: 'POST',
-        headers: { ...getHeaders(), 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formData
+        headers: { ...getHeaders(), 'Content-Type': 'application/x-www-form-urlencoded' } as any,
+        body: formData.toString()
       });
       if (res.ok) {
         toast.success("Folder created!");
@@ -599,9 +640,8 @@ export function WebConsole() {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000);
-      const statusRes = await fetch(`${getBaseUrl()}/api/status`, {
+      const statusRes = await apiFetch('/api/status', {
         method: 'GET',
-        signal: controller.signal
       });
       clearTimeout(timeoutId);
       if (!statusRes.ok) {
@@ -625,9 +665,9 @@ export function WebConsole() {
 
     if (manifest.length > 0) {
       try {
-        const res = await fetch(`${getBaseUrl()}/api/folder_manifest?path=${encodeURIComponent(currentPath)}`, {
+        const res = await apiFetch(`/api/folder_manifest?path=${encodeURIComponent(currentPath)}`, {
           method: 'POST',
-          headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+          headers: { ...getHeaders(), 'Content-Type': 'application/json' } as any,
           body: JSON.stringify(manifest)
         });
         if (!res.ok) {
@@ -734,9 +774,9 @@ export function WebConsole() {
         const firstRel = files.find(f => f.webkitRelativePath)?.webkitRelativePath || "";
         const rootFolder = firstRel.split('/')[0] || "folder";
         try {
-            const response = await fetch(`${getBaseUrl()}/api/folder_complete?path=${encodeURIComponent(currentPath)}&folder=${encodeURIComponent(rootFolder)}`, {
+            const response = await apiFetch(`/api/folder_complete?path=${encodeURIComponent(currentPath)}&folder=${encodeURIComponent(rootFolder)}`, {
                 method: 'POST',
-                headers: getHeaders()
+                headers: getHeaders() as any
             });
             const data = await response.json();
             if (data.sanitizedNames && Object.keys(data.sanitizedNames).length > 0) {
@@ -790,10 +830,10 @@ export function WebConsole() {
     formData.append("path", currentPath);
     formData.append("name", file.name);
     try {
-      const res = await fetch(`${getBaseUrl()}/api/delete`, {
+      const res = await apiFetch('/api/delete', {
         method: 'POST',
-        headers: { ...getHeaders(), 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formData
+        headers: { ...getHeaders(), 'Content-Type': 'application/x-www-form-urlencoded' } as any,
+        body: formData.toString()
       });
       if (res.ok) {
         toast.success("Moved to Trash");
@@ -813,7 +853,7 @@ export function WebConsole() {
       .map(f => ({ path: currentPath, name: f.name }));
       
     try {
-      const res = await fetch(`${getBaseUrl()}/api/bulk_action`, {
+      const res = await apiFetch('/api/bulk_action', {
         method: 'POST',
         headers: { ...getHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, destinationPath: destPath, items })
@@ -864,10 +904,10 @@ export function WebConsole() {
     formData.append("oldName", file.name);
     formData.append("newName", newName);
     try {
-      const res = await fetch(`${getBaseUrl()}/api/rename`, {
+      const res = await apiFetch('/api/rename', {
         method: 'POST',
-        headers: { ...getHeaders(), 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formData
+        headers: { ...getHeaders(), 'Content-Type': 'application/x-www-form-urlencoded' } as any,
+        body: formData.toString()
       });
       if (res.ok) {
         toast.success("File renamed");
@@ -907,9 +947,9 @@ export function WebConsole() {
     setAuthError('');
     try {
       const endpoint = authMode === 'signup' ? '/api/auth/signup' : '/api/auth/login';
-      const res = await fetch(`${getBaseUrl()}${endpoint}`, {
+      const res = await apiFetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' } as any,
         body: JSON.stringify({ email: authEmail, password: authPassword })
       });
       
@@ -931,7 +971,7 @@ export function WebConsole() {
 
   const handleLogout = async () => {
     try {
-      await fetch(`${getBaseUrl()}/api/auth/logout`, { method: 'POST', headers: getHeaders() });
+      await apiFetch('/api/auth/logout', { method: 'POST', headers: getHeaders() as any });
     } catch (e) {}
     localStorage.removeItem('cloud_storage_token');
     localStorage.removeItem('cloud_storage_android_token');
