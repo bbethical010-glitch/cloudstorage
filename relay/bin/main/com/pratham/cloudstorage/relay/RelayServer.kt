@@ -92,7 +92,7 @@ fun Application.relayModule() {
             )
         }
 
-        // ── Redirect /node/{shareCode} to console ───────────────────────
+        // ── Serve React App for Node ────────────────────────────────────────
         route("/node/{shareCode}") {
             get {
                 val shareCode = call.parameters["shareCode"]?.trim()?.uppercase().orEmpty()
@@ -102,17 +102,33 @@ fun Application.relayModule() {
                     call.respondRedirect("/node/$shareCode/$qs", permanent = true)
                     return@get
                 }
-                // Serve the static SPA shell — the React app handles everything
-                call.respondText(buildConsoleSPA(shareCode), ContentType.Text.Html)
+                
+                val indexUrl = this::class.java.classLoader.getResource("web/index.html")
+                if (indexUrl != null) {
+                    call.respondText(indexUrl.readText(), ContentType.Text.Html)
+                } else {
+                    call.respondText("UI bundle not found in resources/web", status = HttpStatusCode.NotFound)
+                }
             }
         }
 
         route("/node/{shareCode}/{...}") {
             get {
-                val shareCode = call.parameters["shareCode"]?.trim()?.uppercase().orEmpty()
-                val tail = call.parameters.getAll("...").orEmpty()
-                // Serve static assets if the path points to JS/CSS, else serve the SPA shell
-                call.respondText(buildConsoleSPA(shareCode), ContentType.Text.Html)
+                val tail = call.parameters.getAll("...").orEmpty().joinToString("/")
+                val resourceUrl = this::class.java.classLoader.getResource("web/$tail")
+                
+                if (resourceUrl != null) {
+                    val ext = tail.substringAfterLast('.', "")
+                    val contentType = ContentType.defaultForFileExtension(ext)
+                    call.respondBytes(resourceUrl.readBytes(), contentType)
+                } else {
+                    val indexUrl = this::class.java.classLoader.getResource("web/index.html")
+                    if (indexUrl != null) {
+                        call.respondText(indexUrl.readText(), ContentType.Text.Html)
+                    } else {
+                        call.respondText("Not found", status = HttpStatusCode.NotFound)
+                    }
+                }
             }
         }
 
@@ -299,24 +315,6 @@ private fun String.toJsonMap(): Map<String, Any?>? {
     }
 }
 
-/** Minimal SPA shell that loads the React app — the React router handles /console */
-private fun buildConsoleSPA(shareCode: String): String {
-    return """<!DOCTYPE html>
-<html><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Easy Storage Cloud</title>
-<script>window.__SHARE_CODE__="${shareCode}";</script>
-</head><body>
-<div id="root">Connecting to node $shareCode...</div>
-<script>
-  // The actual React app is loaded from the Android node via WebRTC once connected.
-  // For now, redirect to the relay-hosted console with the share code embedded.
-  if (!window.location.hash.includes('console')) {
-    window.location.hash = '#/console';
-  }
-</script>
-</body></html>"""
-}
 
 private fun buildRelayLandingPage(connectedCount: Int, shareCodes: List<String>): String {
     val nodeListHtml = if (shareCodes.isEmpty()) {
