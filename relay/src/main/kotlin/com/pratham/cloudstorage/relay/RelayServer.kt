@@ -120,14 +120,17 @@ fun Application.relayModule() {
                 if (resourceUrl != null) {
                     val ext = tail.substringAfterLast('.', "").lowercase()
                     val contentType = when (ext) {
-                        "js", "mjs" -> ContentType("application", "javascript")
-                        "css" -> ContentType("text", "css")
-                        "html" -> ContentType("text", "html")
-                        "json" -> ContentType("application", "json")
-                        "svg" -> ContentType("image", "svg+xml")
-                        "png" -> ContentType("image", "png")
-                        else -> ContentType.defaultForFileExtension(ext)
+                        "js" -> ContentType.Application.JavaScript
+                        "mjs" -> ContentType.Application.JavaScript
+                        "css" -> ContentType.Text.CSS
+                        "html" -> ContentType.Text.Html
+                        "json" -> ContentType.Application.Json
+                        "png" -> ContentType.Image.PNG
+                        "jpg", "jpeg" -> ContentType.Image.JPEG
+                        "svg" -> ContentType.parse("image/svg+xml")
+                        else -> ContentType.Application.OctetStream
                     }
+                    println("[STATIC_DEBUG] Serving $tail as $contentType")
                     call.respondBytes(resourceUrl.readBytes(), contentType)
                 } else {
                     val indexUrl = this::class.java.classLoader.getResource("web/index.html")
