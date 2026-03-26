@@ -10,6 +10,12 @@ export default defineConfig({
     // Tailwind is not being actively used – do not remove them
     react(),
     tailwindcss(),
+    {
+      name: 'remove-crossorigin',
+      transformIndexHtml(html) {
+        return html.replace(/ crossorigin/g, '');
+      }
+    }
   ],
   build: {
     target: 'es2015',
