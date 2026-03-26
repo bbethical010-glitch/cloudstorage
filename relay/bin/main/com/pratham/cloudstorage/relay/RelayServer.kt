@@ -121,21 +121,27 @@ fun Application.relayModule() {
                 if (resource != null) {
                     val bytes = resource.readBytes()
                     val ext = tail.substringAfterLast('.', "").lowercase()
-                    val contentType = when (ext) {
-                        "js" -> ContentType.Application.JavaScript
-                        "css" -> ContentType.Text.CSS
-                        "html" -> ContentType.Text.Html
-                        "json" -> ContentType.Application.Json
-                        "png" -> ContentType.Image.PNG
-                        "jpg", "jpeg" -> ContentType.Image.JPEG
-                        "svg" -> ContentType.parse("image/svg+xml")
+                    
+                    // RFC 9239 recommends text/javascript for all JS contexts including modules
+                    val contentType = when {
+                        tail.endsWith(".js") || ext == "js" || ext == "mjs" -> ContentType.parse("text/javascript")
+                        tail.endsWith(".css") || ext == "css" -> ContentType.Text.CSS
+                        tail.endsWith(".html") || ext == "html" -> ContentType.Text.Html
+                        ext == "json" -> ContentType.Application.Json
+                        ext == "png" -> ContentType.Image.PNG
+                        ext == "svg" -> ContentType.parse("image/svg+xml")
                         else -> ContentType.Application.OctetStream
                     }
-                    println("[STATIC_DEBUG] Serving resource: web/$tail as $contentType")
+                    
+                    println("[STATIC_DEBUG] URI='${call.request.uri}' TAIL='$tail' EXT='$ext' TYPE='$contentType' BYTES=${bytes.size}")
+                    
+                    // Force Cache-Control to ensure we aren't seeing stale responses
+                    call.response.header(HttpHeaders.CacheControl, "no-cache, no-store, must-revalidate")
                     call.respondBytes(bytes, contentType)
                 } else {
                     val indexResource = this::class.java.classLoader.getResource("web/index.html")
                     if (indexResource != null) {
+                        println("[STATIC_DEBUG] Path not found: $tail - falling back to index.html")
                         call.respondText(indexResource.readText(), ContentType.Text.Html)
                     } else {
                         call.respondText("Not found", status = HttpStatusCode.NotFound)
