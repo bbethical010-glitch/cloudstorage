@@ -15,6 +15,7 @@ import io.ktor.server.response.*
 import io.ktor.http.*
 import io.ktor.websocket.*
 import io.ktor.server.websocket.*
+import io.ktor.server.http.content.*
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.launch
@@ -103,11 +104,11 @@ fun Application.relayModule() {
                     return@get
                 }
                 
-                val indexUrl = this::class.java.classLoader.getResource("web/index.html")
-                if (indexUrl != null) {
-                    call.respondText(indexUrl.readText(), ContentType.Text.Html)
+                val indexResource = this::class.java.classLoader.getResource("web/index.html")
+                if (indexResource != null) {
+                    call.respondText(indexResource.readText(), ContentType.Text.Html)
                 } else {
-                    call.respondText("UI bundle not found in resources/web", status = HttpStatusCode.NotFound)
+                    call.respondText("UI bundle not found", status = HttpStatusCode.NotFound)
                 }
             }
         }
@@ -115,13 +116,13 @@ fun Application.relayModule() {
         route("/node/{shareCode}/{...}") {
             get {
                 val tail = call.parameters.getAll("...").orEmpty().joinToString("/")
-                val resourceUrl = this::class.java.classLoader.getResource("web/$tail")
+                val resource = this::class.java.classLoader.getResource("web/$tail")
                 
-                if (resourceUrl != null) {
+                if (resource != null) {
+                    val bytes = resource.readBytes()
                     val ext = tail.substringAfterLast('.', "").lowercase()
                     val contentType = when (ext) {
                         "js" -> ContentType.Application.JavaScript
-                        "mjs" -> ContentType.Application.JavaScript
                         "css" -> ContentType.Text.CSS
                         "html" -> ContentType.Text.Html
                         "json" -> ContentType.Application.Json
@@ -130,12 +131,12 @@ fun Application.relayModule() {
                         "svg" -> ContentType.parse("image/svg+xml")
                         else -> ContentType.Application.OctetStream
                     }
-                    println("[STATIC_DEBUG] Serving $tail as $contentType")
-                    call.respondBytes(resourceUrl.readBytes(), contentType)
+                    println("[STATIC_DEBUG] Serving resource: web/$tail as $contentType")
+                    call.respondBytes(bytes, contentType)
                 } else {
-                    val indexUrl = this::class.java.classLoader.getResource("web/index.html")
-                    if (indexUrl != null) {
-                        call.respondText(indexUrl.readText(), ContentType.Text.Html)
+                    val indexResource = this::class.java.classLoader.getResource("web/index.html")
+                    if (indexResource != null) {
+                        call.respondText(indexResource.readText(), ContentType.Text.Html)
                     } else {
                         call.respondText("Not found", status = HttpStatusCode.NotFound)
                     }
