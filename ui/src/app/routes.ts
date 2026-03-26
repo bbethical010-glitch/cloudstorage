@@ -18,6 +18,7 @@ export const router = createHashRouter([
       { path: "settings", Component: AndroidSettings },
       { path: "share", Component: ShareLinkScreen },
       { path: "console", Component: WebConsole },
+      { path: "console/:shareCode", Component: WebConsole },
     ],
   },
 ]);

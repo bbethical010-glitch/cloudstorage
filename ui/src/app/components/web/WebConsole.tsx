@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useParams } from "react-router";
 import { useWebRTC } from '../../hooks/useWebRTC';
 import type { P2PResponse } from '../../hooks/p2pTransport';
 import { motion, AnimatePresence } from "motion/react";
@@ -260,11 +261,16 @@ export function WebConsole() {
     return '';
   };
 
+  const { shareCode: paramShareCode } = useParams<{ shareCode: string }>();
+
   // Extract the share code from the URL for WebRTC signaling
   const getShareCode = () => {
+    if (paramShareCode) return paramShareCode.toUpperCase();
     const path = window.location.pathname;
-    const match = path.match(/\/node\/([A-Z0-9]+)/i);
-    return match?.[1]?.toUpperCase() || '';
+    const hash = window.location.hash;
+    const pathMatch = path.match(/\/(?:node|console)\/([A-Z0-9]+)/i);
+    const hashMatch = hash.match(/\/(?:node|console)\/([A-Z0-9]+)/i);
+    return (pathMatch?.[1] || hashMatch?.[1] || '').toUpperCase();
   };
 
   // Extract relay base URL (the origin of the relay server)
