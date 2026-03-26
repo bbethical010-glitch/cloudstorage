@@ -77,7 +77,7 @@ fun buildRelayBrowserUrl(relayBaseUrl: String, shareCode: String): String? {
     if (normalized.isBlank()) {
         return null
     }
-    return "$normalized/node/$shareCode"
+    return "$normalized/node/$shareCode/console"
 }
 
 fun buildInviteLink(shareCode: String): String {
