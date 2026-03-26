@@ -77,7 +77,7 @@ fun Application.relayModule() {
         staticResources("/", "web")
 
         // ── Catch-all SPA Fallback ────────────────────────────────────────────────
-        get("{...}") {
+        get("/{...}") {
             val path = call.request.path()
             if (!path.startsWith("/api/") && !path.startsWith("/signal/") && !path.startsWith("/agent/")) {
                 val indexResource = this::class.java.classLoader.getResource("web/index.html")
