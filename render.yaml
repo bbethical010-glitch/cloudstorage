@@ -2,7 +2,7 @@ services:
   - type: web
     name: easy-storage-relay
     runtime: docker
-    dockerContext: ./relay
+    dockerContext: .
     dockerfilePath: ./relay/Dockerfile
     healthCheckPath: /health
     region: singapore

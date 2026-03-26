@@ -59,26 +59,6 @@ fun Application.relayModule() {
 
     routing {
 
-        // ── Landing page ────────────────────────────────────────────────
-        get("/") {
-            call.respondText(
-                buildRelayLandingPage(registry.connectedAgentCount(), registry.connectedShareCodes()),
-                ContentType.Text.Html
-            )
-        }
-
-        get("/join") {
-            val code = call.request.queryParameters["code"]?.trim()?.uppercase().orEmpty()
-            if (code.isBlank()) {
-                call.respondText(
-                    buildRelayLandingPage(registry.connectedAgentCount(), registry.connectedShareCodes()),
-                    ContentType.Text.Html
-                )
-            } else {
-                call.respondRedirect("/node/$code/#/console", permanent = false)
-            }
-        }
-
         get("/health") {
             call.respondText("relay_online")
         }
@@ -93,60 +73,21 @@ fun Application.relayModule() {
             )
         }
 
-        // ── Serve React App for Node ────────────────────────────────────────
-        route("/node/{shareCode}") {
-            get {
-                val shareCode = call.parameters["shareCode"]?.trim()?.uppercase().orEmpty()
-                val requestUri = call.request.uri
-                if (!requestUri.endsWith("/")) {
-                    val qs = call.request.queryString().let { if (it.isNotBlank()) "?$it" else "" }
-                    call.respondRedirect("/node/$shareCode/$qs", permanent = true)
-                    return@get
-                }
-                
+        // ── Serve React SPA Assets ────────────────────────────────────────────────
+        staticResources("/", "web")
+
+        // ── Catch-all SPA Fallback ────────────────────────────────────────────────
+        get("{...}") {
+            val path = call.request.path()
+            if (!path.startsWith("/api/") && !path.startsWith("/signal/") && !path.startsWith("/agent/")) {
                 val indexResource = this::class.java.classLoader.getResource("web/index.html")
                 if (indexResource != null) {
                     call.respondText(indexResource.readText(), ContentType.Text.Html)
                 } else {
                     call.respondText("UI bundle not found", status = HttpStatusCode.NotFound)
                 }
-            }
-        }
-
-        route("/node/{shareCode}/{...}") {
-            get {
-                val tail = call.parameters.getAll("...").orEmpty().joinToString("/")
-                val resource = this::class.java.classLoader.getResource("web/$tail")
-                
-                if (resource != null) {
-                    val bytes = resource.readBytes()
-                    val ext = tail.substringAfterLast('.', "").lowercase()
-                    
-                    // RFC 9239 recommends text/javascript for all JS contexts including modules
-                    val contentType = when {
-                        tail.endsWith(".js") || ext == "js" || ext == "mjs" -> ContentType.parse("text/javascript")
-                        tail.endsWith(".css") || ext == "css" -> ContentType.Text.CSS
-                        tail.endsWith(".html") || ext == "html" -> ContentType.Text.Html
-                        ext == "json" -> ContentType.Application.Json
-                        ext == "png" -> ContentType.Image.PNG
-                        ext == "svg" -> ContentType.parse("image/svg+xml")
-                        else -> ContentType.Application.OctetStream
-                    }
-                    
-                    println("[STATIC_DEBUG] URI='${call.request.uri}' TAIL='$tail' EXT='$ext' TYPE='$contentType' BYTES=${bytes.size}")
-                    
-                    // Force Cache-Control to ensure we aren't seeing stale responses
-                    call.response.header(HttpHeaders.CacheControl, "no-cache, no-store, must-revalidate")
-                    call.respondBytes(bytes, contentType)
-                } else {
-                    val indexResource = this::class.java.classLoader.getResource("web/index.html")
-                    if (indexResource != null) {
-                        println("[STATIC_DEBUG] Path not found: $tail - falling back to index.html")
-                        call.respondText(indexResource.readText(), ContentType.Text.Html)
-                    } else {
-                        call.respondText("Not found", status = HttpStatusCode.NotFound)
-                    }
-                }
+            } else {
+                call.respondText("API Not found", status = HttpStatusCode.NotFound)
             }
         }
 
