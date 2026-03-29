@@ -137,19 +137,31 @@ fun Application.relayModule() {
                 if (!isOnline) {
                     println("Relay Status: Node $sc is OFFLINE. Active nodes: ${registry.connectedShareCodes()}")
                 }
-                call.respond(mapOf("online" to isOnline))
+                call.respondText(
+                    gson.toJson(mapOf("online" to isOnline)),
+                    ContentType.Application.Json
+                )
             }
 
             get("/debug/registry") {
-                call.respond(mapOf(
-                    "nodes" to registry.connectedShareCodes(),
-                    "total" to registry.connectedAgentCount(),
-                    "timestamp" to System.currentTimeMillis()
-                ))
+                call.respondText(
+                    gson.toJson(
+                        mapOf(
+                            "nodes" to registry.connectedShareCodes(),
+                            "total" to registry.connectedAgentCount(),
+                            "timestamp" to System.currentTimeMillis()
+                        )
+                    ),
+                    ContentType.Application.Json
+                )
             }
 
             get("{...}") {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "API endpoint not found"))
+                call.respondText(
+                    gson.toJson(mapOf("error" to "API endpoint not found")),
+                    ContentType.Application.Json,
+                    HttpStatusCode.NotFound
+                )
             }
         }
 
