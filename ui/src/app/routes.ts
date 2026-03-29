@@ -19,6 +19,7 @@ export const router = createHashRouter([
       { path: "share", Component: ShareLinkScreen },
       { path: "console", Component: WebConsole },
       { path: "console/:shareCode", Component: WebConsole },
+      { path: "node/:shareCode", Component: WebConsole },
     ],
   },
 ]);

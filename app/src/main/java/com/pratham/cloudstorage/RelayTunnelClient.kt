@@ -90,6 +90,16 @@ class RelayTunnelClient(
                         // Send registration handshake
                         outgoing.send(Frame.Text("""{"type":"register","nodeId":"$shareCode"}"""))
 
+                        // Backup keep-alive heartbeat loop (15s)
+                        // Using text frames is more robust across some proxies than pings
+                        val keepaliveJob = launch {
+                            while (isActive) {
+                                delay(15_000)
+                                try { outgoing.send(Frame.Text("""{"type":"heartbeat"}""")) }
+                                catch (e: Exception) { break }
+                            }
+                        }
+
                         try {
                             for (frame in incoming) {
                                 if (frame is Frame.Text) {
@@ -111,6 +121,7 @@ class RelayTunnelClient(
                                 }
                             }
                         } finally {
+                            keepaliveJob.cancel()
                             peer.destroy()
                             webRTCPeer = null
                         }

@@ -7,9 +7,7 @@ import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
-import io.ktor.server.routing.get
-import io.ktor.server.routing.route
-import io.ktor.server.routing.routing
+import io.ktor.server.routing.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.http.*
@@ -24,18 +22,6 @@ import kotlinx.coroutines.delay
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Easy Storage Relay — Pure WebRTC Signaling Server
-//
-// This relay does NOT carry any file bytes. Its sole purpose is to broker
-// WebRTC signaling messages (SDP offer/answer + ICE candidates) between
-// the browser Web Console and the Android Node.
-//
-// Data flow:
-//   Browser ──(signaling WS)──► Relay ──(agent WS)──► Android Node
-//   Browser ◄──(signaling WS)── Relay ◄──(agent WS)── Android Node
-//
-// Once the WebRTC peer connection is established, all file data flows
-// directly between the browser and Android via RTCDataChannel — the relay
-// handles zero bytes of file content.
 // ──────────────────────────────────────────────────────────────────────────────
 
 private val gson = Gson()
@@ -48,47 +34,26 @@ fun main() {
 }
 
 fun Application.relayModule() {
-    install(io.ktor.server.routing.IgnoreTrailingSlash)
+    install(IgnoreTrailingSlash)
     install(WebSockets) {
         pingPeriod = Duration.ofSeconds(20)
         timeout = Duration.ofSeconds(60)
-        maxFrameSize = 512 * 1024L // Signaling messages are tiny, 512KB is generous
+        maxFrameSize = 512 * 1024L
     }
 
     val registry = SignalingRegistry()
 
     routing {
-
-        // ── Ktor API & WebSocket Endpoints ─────────────────────────────────────
-        // (Defined FIRST to take precedence over the SPA fallback)
-
-        get("/health") {
-            call.respondText("relay_online")
+        get("/") {
+            val connectedCount = registry.connectedAgentCount()
+            val shareCodes = registry.connectedShareCodes()
+            call.respondText(buildRelayLandingPage(connectedCount, shareCodes), ContentType.Text.Html)
         }
 
-        get("/agents") {
-            call.respondText(
-                gson.toJson(mapOf(
-                    "count" to registry.connectedAgentCount(),
-                    "shareCodes" to registry.connectedShareCodes()
-                )),
-                ContentType.Application.Json
-            )
-        }
-
-        // ── Explicit SPA Routes ───────────────────────────────────────────────
-        // These ensure that deep links to nodes or the join page always serve 
-        // the main index.html for React Router to take over.
-        get("/node/{code}") { call.respond(HttpStatusCode.OK, registry.javaClass.classLoader.getResource("web/index.html")?.readBytes() ?: ByteArray(0)) }
-        get("/join") { call.respond(HttpStatusCode.OK, registry.javaClass.classLoader.getResource("web/index.html")?.readBytes() ?: ByteArray(0)) }
-
-        // ── Android Node WebSocket (agent registration + signaling) ───────
+        // ── 1. WebSockets & Signaling (High Priority) ─────────────────────────
+        
         webSocket("/agent/connect") {
-            val shareCode = call.request.queryParameters["shareCode"]
-                ?.trim()
-                ?.uppercase()
-                .orEmpty()
-
+            val shareCode = call.request.queryParameters["shareCode"]?.trim()?.uppercase().orEmpty()
             if (shareCode.isBlank()) {
                 close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "Missing shareCode"))
                 return@webSocket
@@ -98,12 +63,10 @@ fun Application.relayModule() {
             registry.registerAgent(shareCode, this)
             send(Frame.Text(gson.toJson(mapOf("type" to "connected", "shareCode" to shareCode))))
 
-            // Keep-alive ping
             val pingJob = launch {
                 while (isActive) {
-                    delay(30_000)
-                    try { send(Frame.Ping(ByteArray(0))) }
-                    catch (_: Exception) { break }
+                    delay(25_000)
+                    try { send(Frame.Ping(ByteArray(0))) } catch (_: Exception) { break }
                 }
             }
 
@@ -112,27 +75,15 @@ fun Application.relayModule() {
                     if (frame is Frame.Text) {
                         val text = frame.readText()
                         val msg = text.toJsonMap() ?: continue
-                        val type = msg["type"] as? String ?: continue
-
-                        when (type) {
-                            // Forward signaling messages from Android → target browser
+                        when (msg["type"]) {
                             "signal" -> {
                                 val browserId = msg["browserId"] as? String
-                                if (browserId != null) {
-                                    val signal = msg["signal"] as? Map<*, *>
-                                    val signalType = signal?.get("type") as? String
-                                    when (signalType) {
-                                        "answer" -> println("[SIGNAL_DEBUG] FORWARD_ANSWER to browser $browserId")
-                                        "ice" -> println("[SIGNAL_DEBUG] FORWARD_ICE to browser $browserId")
-                                    }
-                                    registry.forwardToBrowser(shareCode, browserId, text)
-                                } else {
-                                    println("[SIGNAL_DEBUG] Relay broadcasting from Android to all browsers (no browserId)")
-                                    registry.forwardToAllBrowsers(shareCode, text)
-                                }
+                                if (browserId != null) registry.forwardToBrowser(shareCode, browserId, text)
+                                else registry.forwardToAllBrowsers(shareCode, text)
                             }
-                            // Agent status pong — ignored
-                            else -> {}
+                            "heartbeat" -> {
+                                // Just a stay-alive frame from the agent, no action needed
+                            }
                         }
                     }
                 }
@@ -143,25 +94,19 @@ fun Application.relayModule() {
             }
         }
 
-        // ── Browser Signaling WebSocket ──────────────────────────────────
-        // The browser connects here to exchange WebRTC SDP/ICE with the Android node.
         webSocket("/signal/{shareCode}") {
             val shareCode = call.parameters["shareCode"]?.trim()?.uppercase().orEmpty()
-
             if (shareCode.isBlank()) {
                 close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "Missing shareCode"))
                 return@webSocket
             }
 
             val browserId = java.util.UUID.randomUUID().toString()
-            println("Relay: Browser $browserId connected for signaling on node $shareCode")
             registry.registerBrowser(shareCode, browserId, this)
 
-            // Tell the browser whether the android agent is currently online
-            val agentOnline = registry.isAgentOnline(shareCode)
             send(Frame.Text(gson.toJson(mapOf(
                 "type" to "status",
-                "agentOnline" to agentOnline,
+                "agentOnline" to registry.isAgentHealthy(shareCode),
                 "browserId" to browserId
             ))))
 
@@ -170,111 +115,110 @@ fun Application.relayModule() {
                     if (frame is Frame.Text) {
                         val text = frame.readText()
                         val msg = text.toJsonMap() ?: continue
-                        val type = msg["type"] as? String ?: continue
-
-                        when (type) {
-                            // Forward signaling messages from browser → Android agent
-                            "signal" -> {
-                                val signal = msg["signal"] as? Map<*, *>
-                                val signalType = signal?.get("type") as? String
-                                when (signalType) {
-                                    "offer" -> println("[SIGNAL_DEBUG] FORWARD_OFFER from browser $browserId")
-                                    "ice" -> println("[SIGNAL_DEBUG] FORWARD_ICE from browser $browserId")
-                                }
-                                // Inject the browserId so the Android node knows who to reply to
-                                val enriched = msg.toMutableMap()
-                                enriched["browserId"] = browserId
-                                registry.forwardToAgent(shareCode, gson.toJson(enriched))
-                            }
-                            else -> {}
+                        if (msg["type"] == "signal") {
+                            val enriched = msg.toMutableMap()
+                            enriched["browserId"] = browserId
+                            registry.forwardToAgent(shareCode, gson.toJson(enriched))
                         }
                     }
                 }
             } finally {
                 registry.unregisterBrowser(shareCode, browserId)
-                println("Relay: Browser $browserId disconnected from node $shareCode")
             }
         }
 
-        // ── React SPA Serving (Single Page Application) ─────────────────────────
-        // Handles static files and falls back to index.html for navigation.
-        singlePageApplication {
-            useResources = true
-            filesPath = "web"      // Maps to src/main/resources/web
-            defaultPage = "index.html"
-            // Ignore paths that should return 404 instead of index.html
-            ignoreFiles { it.endsWith(".ico") || it.endsWith(".txt") }
+        // ── 2. Explicit API Routes ──────────────────────────────────────────────
+        
+        route("/api") {
+            get("/node/{shareCode}/status") {
+                val sc = call.parameters["shareCode"]?.trim()?.uppercase() ?: ""
+                val isOnline = registry.isAgentHealthy(sc)
+                // Log only on changes or if offline to avoid too much spam, but enough to debug 
+                if (!isOnline) {
+                    println("Relay Status: Node $sc is OFFLINE. Active nodes: ${registry.connectedShareCodes()}")
+                }
+                call.respond(mapOf("online" to isOnline))
+            }
+
+            get("/debug/registry") {
+                call.respond(mapOf(
+                    "nodes" to registry.connectedShareCodes(),
+                    "total" to registry.connectedAgentCount(),
+                    "timestamp" to System.currentTimeMillis()
+                ))
+            }
+
+            get("{...}") {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "API endpoint not found"))
+            }
+        }
+
+        // ── 3. Proxy & Navigation Routes ────────────────────────────────────────
+        
+        get("/node/{code}") { 
+            val code = call.parameters["code"]?.uppercase() ?: ""
+            call.respondRedirect("/#/console/$code")
+        }
+        
+        get("/join") { 
+            val code = call.request.queryParameters["code"]?.trim()?.uppercase() ?: ""
+            if (code.isNotEmpty()) call.respondRedirect("/#/console/$code")
+            else call.respondRedirect("/")
+        }
+
+        // ── 4. React SPA & Static Files (Lowest Priority) ───────────────────────
+        
+        staticResources("/", "web") {
+            default("index.html")
+        }
+
+        get("{path...}") {
+            val path = call.parameters.getAll("path")?.joinToString("/") { it } ?: ""
+            if (path.startsWith("api")) {
+                 call.respond(HttpStatusCode.NotFound)
+            } else {
+                 val content = registry.javaClass.classLoader.getResource("web/index.html")?.readBytes()
+                 if (content != null) call.respondBytes(content, ContentType.Text.Html)
+                 else call.respond(HttpStatusCode.NotFound)
+            }
         }
     }
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Signaling Registry
-// ═══════════════════════════════════════════════════════════════════════════════
-
 private class SignalingRegistry {
-    // One Android agent per share code
     private val agents = ConcurrentHashMap<String, DefaultWebSocketSession>()
-    // Multiple browsers can view the same node
     private val browsers = ConcurrentHashMap<String, ConcurrentHashMap<String, DefaultWebSocketSession>>()
 
-    fun registerAgent(shareCode: String, session: DefaultWebSocketSession) {
-        agents[shareCode] = session
-    }
-
+    fun registerAgent(shareCode: String, session: DefaultWebSocketSession) { agents[shareCode] = session }
     fun unregisterAgent(shareCode: String, session: DefaultWebSocketSession) {
-        agents.computeIfPresent(shareCode) { _, existing ->
-            if (existing == session) null else existing
-        }
+        agents.computeIfPresent(shareCode) { _, existing -> if (existing == session) null else existing }
     }
-
     fun registerBrowser(shareCode: String, browserId: String, session: DefaultWebSocketSession) {
         browsers.getOrPut(shareCode) { ConcurrentHashMap() }[browserId] = session
     }
-
-    fun unregisterBrowser(shareCode: String, browserId: String) {
-        browsers[shareCode]?.remove(browserId)
+    fun unregisterBrowser(shareCode: String, browserId: String) { browsers[shareCode]?.remove(browserId) }
+    fun isAgentHealthy(shareCode: String): Boolean {
+        val session = agents[shareCode]
+        return session != null && session.isActive && !session.outgoing.isClosedForSend
     }
-
-    fun isAgentOnline(shareCode: String): Boolean = agents.containsKey(shareCode)
-
     fun connectedAgentCount(): Int = agents.size
-
     fun connectedShareCodes(): List<String> = agents.keys().toList().sorted()
 
-    /** Forward a signaling message from the Android agent to all connected browsers */
     suspend fun forwardToAllBrowsers(shareCode: String, message: String) {
-        browsers[shareCode]?.values?.forEach { session ->
-            try { session.send(Frame.Text(message)) } catch (_: Exception) {}
-        }
+        browsers[shareCode]?.values?.forEach { try { it.send(Frame.Text(message)) } catch (_: Exception) {} }
     }
-
-    /** Forward a signaling message from the Android agent to a specific browser */
     suspend fun forwardToBrowser(shareCode: String, browserId: String, message: String) {
         try { browsers[shareCode]?.get(browserId)?.send(Frame.Text(message)) } catch (_: Exception) {}
     }
-
-    /** Forward a signaling message from a browser to the Android agent */
     suspend fun forwardToAgent(shareCode: String, message: String) {
         try { agents[shareCode]?.send(Frame.Text(message)) } catch (_: Exception) {}
     }
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Utilities
-// ═══════════════════════════════════════════════════════════════════════════════
-
 @Suppress("UNCHECKED_CAST")
 private fun String.toJsonMap(): Map<String, Any?>? {
-    return try {
-        gson.fromJson(this, Map::class.java) as? Map<String, Any?>
-    } catch (_: JsonSyntaxException) {
-        null
-    }
+    return try { gson.fromJson(this, Map::class.java) as? Map<String, Any?> } catch (_: JsonSyntaxException) { null }
 }
-
 
 private fun buildRelayLandingPage(connectedCount: Int, shareCodes: List<String>): String {
     val nodeListHtml = if (shareCodes.isEmpty()) {

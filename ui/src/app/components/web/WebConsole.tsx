@@ -41,7 +41,8 @@ import {
   Menu,
   ArrowLeft,
   Sun,
-  Moon
+  Moon,
+  RefreshCw
 } from "lucide-react";
 import { Card } from "../ui/card";
 import { Button } from "../ui/button";
@@ -59,6 +60,83 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import "../../../styles/console.css";
+
+// ──────────────────────────────────────────────────────────────────────────────
+// STABILITY UTILS
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Enhanced fetch that enforces JSON response and handles common errors.
+ * Prevents "JSON Parse error: Unrecognized token '<'" by ensuring Content-Type.
+ */
+async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> {
+  const headers = { 
+    ...options.headers, 
+    'Accept': 'application/json',
+    'X-Requested-With': 'XMLHttpRequest'
+  };
+
+  const response = await fetch(url, { ...options, headers });
+  
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+
+  const contentType = response.headers.get('content-type');
+  if (!contentType || !contentType.includes('application/json')) {
+    // This is the CRITICAL fix for the route intercept issue
+    console.error("EXPECTED JSON, GOT HTML/OTHER. Route likely intercepted by SPA catch-all.", { url });
+    throw new Error("Malformed response: Expected JSON but received HTML. Ensure API routes are registered before catch-all.");
+  }
+
+  return response.json();
+}
+
+/**
+ * Hook for intelligent node status polling. 
+ * Prevents flickering to 'offline' on single-request timeouts.
+ */
+function useNodeStatus(shareCode: string, intervalMs = 5000) {
+  const [isOnline, setIsOnline] = useState(true);
+  const [lastCheck, setLastCheck] = useState(Date.now());
+  const failureCount = useRef(0);
+  const MAX_FAILURES = 2;
+
+  const checkStatus = async () => {
+    if (!shareCode) return;
+    try {
+      const data = await fetchJson<{online: boolean}>(`/api/node/${shareCode}/status`);
+      if (data.online) {
+        if (!isOnline) console.log("🟢 Node back online");
+        setIsOnline(true);
+        failureCount.current = 0;
+      } else {
+        failureCount.current++;
+        if (failureCount.current >= MAX_FAILURES) {
+          if (isOnline) console.warn("🔴 Node reported offline by registry");
+          setIsOnline(false);
+        }
+      }
+    } catch (err) {
+      failureCount.current++;
+      if (failureCount.current >= MAX_FAILURES) {
+        if (isOnline) console.error("💥 Node status check failed repeatedly", err);
+        setIsOnline(false);
+      }
+    }
+    setLastCheck(Date.now());
+  };
+
+  useEffect(() => {
+    if (!shareCode) return;
+    checkStatus();
+    const timer = setInterval(checkStatus, intervalMs);
+    return () => clearInterval(timer);
+  }, [shareCode, intervalMs]);
+
+  return { isOnline, checkStatus, lastCheck };
+}
 
 interface FileNode {
   id: string; // Used as the full uri
@@ -93,69 +171,73 @@ export function WebConsole() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareConfig, setShareConfig] = useState({ expiry: '24h', readOnly: true });
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
+  const { shareCode: paramShareCode } = useParams<{ shareCode: string }>();
+
+  const getShareCode = () => {
+    if (paramShareCode) return paramShareCode.toUpperCase();
+    const searchParams = new URLSearchParams(window.location.search);
+    const queryCode = searchParams.get('code') || searchParams.get('shareCode');
+    if (queryCode) return queryCode.toUpperCase();
+    const path = window.location.pathname;
+    const hash = window.location.hash;
+    const pathMatch = path.match(/\/(?:node|console)\/([A-Z0-9]{5,20})/i);
+    const hashMatch = hash.match(/\/(?:node|console|#\/console)\/([A-Z0-9]{5,20})/i);
+    return (pathMatch?.[1] || hashMatch?.[1] || '').toUpperCase();
+  };
+
+  const getBaseUrl = () => '';
+  const getRelayUrl = () => window.location.origin;
+
+  const shareCode = getShareCode();
+  const { isOnline: isNodeOnline, checkStatus: refreshNodeStatus, lastCheck } = useNodeStatus(shareCode);
+  
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup' | 'none'>('none');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
-  
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     return (localStorage.getItem("cloud_storage_theme") as "dark" | "light") || "dark";
   });
 
   useEffect(() => {
     const root = document.documentElement;
-    if (theme === "light") {
-      root.classList.add("light");
-    } else {
-      root.classList.remove("light");
-    }
+    if (theme === "light") root.classList.add("light");
+    else root.classList.remove("light");
     localStorage.setItem("cloud_storage_theme", theme);
   }, [theme]);
-  
-  useEffect(() => {
-    console.log("WEBRTC_INIT_START");
-    console.log("WebConsole mounted, shareCode:", getShareCode());
-  }, []);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const folderInputRef = useRef<HTMLInputElement>(null);
+  // Update internal offline state from hook
+  useEffect(() => {
+    setIsNodeOffline(!isNodeOnline);
+  }, [isNodeOnline]);
 
   useEffect(() => {
-    const checkStatus = async () => {
+    const checkAuth = async () => {
       try {
-        const authStat = await apiFetch('/api/auth/status');
-        if (authStat.ok) {
-           const authText = await authStat.text();
-           const { hasAccount } = authText ? JSON.parse(authText) : { hasAccount: false };
-           const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token');
-           const params = new URLSearchParams(window.location.hash.split('?')[1]);
-           const pwd = params.get('pwd');
-           
-           if (token || pwd) {
-               const verify = await apiFetch('/api/storage', { headers: { Authorization: `Bearer ${pwd || token}` } as any});
-               if (verify.ok) {
-                   setIsAuthenticated(true);
-                   setIsNodeOffline(false);
-                   setAuthMode('none');
-                   return;
-               }
-           }
-           
-           setIsAuthenticated(false);
-           setAuthMode(hasAccount ? 'login' : 'signup');
-           setIsNodeOffline(false);
-        } else if (authStat.status === 502 || authStat.status === 503 || authStat.status === 404) {
-           setIsNodeOffline(true);
+        const data = await fetchJson<{hasAccount: boolean}>('/api/auth/status');
+        const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token');
+        const params = new URLSearchParams(window.location.hash.split('?')[1]);
+        const pwd = params.get('pwd') || token;
+
+        if (pwd) {
+          const verify = await fetch('/api/storage', { headers: { Authorization: `Bearer ${pwd}` } });
+          if (verify.ok) {
+            setIsAuthenticated(true);
+            setAuthMode('none');
+            return;
+          }
         }
+        setIsAuthenticated(false);
+        setAuthMode(data.hasAccount ? 'login' : 'signup');
       } catch (e) {
-        setIsNodeOffline(true);
+        console.error("Auth check failed:", e);
       }
     };
-    checkStatus();
-    const interval = setInterval(checkStatus, 20000);
-    return () => clearInterval(interval);
+    checkAuth();
   }, []);
 
   const SidebarContent = () => (
@@ -249,29 +331,6 @@ export function WebConsole() {
       return sortDirection === "asc" ? val : -val;
     });
 
-  const getBaseUrl = () => {
-    // We always want to hit the root relay APIs (e.g. /api/status)
-    // rather than relative paths like /node/XYZ/api/status.
-    return '';
-  };
-
-  const { shareCode: paramShareCode } = useParams<{ shareCode: string }>();
-
-  // Extract the share code from the URL for WebRTC signaling
-  const getShareCode = () => {
-    if (paramShareCode) return paramShareCode.toUpperCase();
-    const path = window.location.pathname;
-    const hash = window.location.hash;
-    const pathMatch = path.match(/\/(?:node|console)\/([A-Z0-9]+)/i);
-    const hashMatch = hash.match(/\/(?:node|console)\/([A-Z0-9]+)/i);
-    return (pathMatch?.[1] || hashMatch?.[1] || '').toUpperCase();
-  };
-
-  // Extract relay base URL (the origin of the relay server)
-  const getRelayUrl = () => {
-    return window.location.origin;
-  };
-
   const getHeaders = () => {
     const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token') || '';
     const params = new URLSearchParams(window.location.hash.split('?')[1]);
@@ -281,9 +340,6 @@ export function WebConsole() {
 
   // ── WebRTC P2P Connection ──────────────────────────────────────────────
   // Establishes a direct peer-to-peer connection to the Android node.
-  // When connected, API requests bypass the relay entirely — file bytes
-  // flow directly between this browser and the Android device.
-  const shareCode = getShareCode();
   if (!shareCode) {
     console.error("NO SHARE CODE");
   } else {
@@ -950,15 +1006,6 @@ export function WebConsole() {
     setCurrentPath(segments.join('/'));
   };
 
-  if (isNodeOffline) {
-    return (
-      <div className="h-screen bg-[#0B1220] flex flex-col items-center justify-center text-center p-6 text-[#E5E7EB]">
-         <Cloud className="w-24 h-24 mb-6 opacity-20 text-red-500 animate-pulse" />
-         <h1 className="text-4xl font-bold mb-4">Node is offline</h1>
-         <p className="text-lg text-[#9CA3AF]">Start the node from your device to access files.</p>
-      </div>
-    );
-  }
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1083,9 +1130,9 @@ export function WebConsole() {
   }
 
   return (
-    <div className="h-screen bg-[#0B1220] text-[#E5E7EB] flex flex-col overflow-hidden font-sans selection:bg-[#2563EB]/30">
-      {/* Top Bar - Refined */}
-      <div className="h-14 border-b border-[#1F2937] flex items-center justify-between px-4 md:px-6 bg-[#0B1220] shrink-0 z-20">
+    <div className="console-layout bg-[#0B1220] text-[#E5E7EB] font-sans selection:bg-[#2563EB]/30">
+      {/* Top Bar - Responsive Header */}
+      <header className="console-header col-span-full">
         <div className="flex items-center gap-3 md:gap-6 min-w-0">
           <Button variant="ghost" size="icon" className="md:hidden text-[#E5E7EB] shrink-0" onClick={() => setIsMobileMenuOpen(true)}>
             <Menu className="w-5 h-5" />
@@ -1174,7 +1221,7 @@ export function WebConsole() {
              </DropdownMenu>
           </div>
         </div>
-      </div>
+      </header>
 
       {/* Mobile Sidebar Overlay */}
       <AnimatePresence>
@@ -1196,15 +1243,11 @@ export function WebConsole() {
         )}
       </AnimatePresence>
 
-      {/* Main Content Areas */}
-      <div className="flex-1 w-full relative overflow-hidden grid grid-cols-1 md:grid-cols-[240px_minmax(400px,1fr)_320px]">
-        {/* Sidebar - Pro Style */}
-        <div className="hidden md:block bg-[#0B1220] border-r border-[#1F2937] overflow-y-auto" style={{ minWidth: 240, width: 240 }}>
-          <SidebarContent />
-        </div>
-
-        {/* File Browser Area */}
-        <div className="bg-[#0B1220] flex flex-col relative min-w-0 overflow-x-hidden overflow-y-hidden"
+      {/* Sidebar - Desktop */}
+      <aside className="console-sidebar hidden md:block overflow-y-auto">
+        <SidebarContent />
+      </aside>
+      <main className="console-main flex flex-col relative min-w-0"
           onDragOver={(e) => { e.preventDefault(); setIsDragging(true); e.dataTransfer.dropEffect = "copy"; }}
           onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
           onDrop={async (e) => {
@@ -1239,6 +1282,39 @@ export function WebConsole() {
                 </div>
                 <h2 className="text-3xl font-bold text-white tracking-tight">Drop files here</h2>
                 <p className="mt-2 text-[#9CA3AF]">Upload instantly to {currentPath ? `/${currentPath}` : 'Drive root'}</p>
+              </motion.div>
+            )}
+
+            {isNodeOffline && (
+              <motion.div 
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                className="absolute inset-0 z-[60] bg-[#0B1220]/95 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center"
+              >
+                <div className="relative mb-8">
+                  <div className="w-24 h-24 bg-red-500/10 rounded-full flex items-center justify-center">
+                    <Cloud className="w-12 h-12 text-red-500/40" />
+                  </div>
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="w-16 h-16 border-4 border-red-500/20 border-t-red-500 rounded-full animate-spin" />
+                  </div>
+                </div>
+                <h2 className="text-3xl font-bold text-white tracking-tight mb-3">Node is Offline</h2>
+                <p className="text-[#9CA3AF] max-w-xs mx-auto mb-8">
+                  The storage node on your device (<b>{shareCode}</b>) is currently unreachable. 
+                  Ensure the phone is active and the app is running.
+                </p>
+                <div className="flex flex-col gap-3 w-full max-w-xs px-6">
+                  <Button 
+                    onClick={() => refreshNodeStatus()}
+                    className="bg-[#2563EB] hover:bg-[#1d4ed8] text-white font-bold h-12 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-blue-500/20"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    Retry Connection
+                  </Button>
+                  <p className="text-[10px] text-[#4B5563] uppercase tracking-[0.2em] font-bold mt-2">
+                    Last sync check: {new Date(lastCheck).toLocaleTimeString()}
+                  </p>
+                </div>
               </motion.div>
             )}
           </AnimatePresence>
@@ -1277,19 +1353,12 @@ export function WebConsole() {
                 </div>
             </div>
 
-            {/* List Header */}
             {viewMode === 'list' && (
-              <div className="hidden md:flex items-center px-4 py-3 bg-[#0B1220] border-b border-[#1F2937] text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] shrink-0">
+              <div className="hidden md:flex items-center px-4 py-3 border-b border-[#1F2937] text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] shrink-0">
                 <div style={{ width: 40 }} className="shrink-0" />
-                <div className="flex-1 min-w-[200px] flex items-center gap-2 cursor-pointer hover:text-white transition-colors" onClick={() => toggleSort('name')}>
-                  Name {sortField === 'name' && (sortDirection === 'asc' ? <ChevronUp className="w-3 h-3"/> : <ChevronDown className="w-3 h-3"/>)}
-                </div>
-                <div style={{ width: 100 }} className="shrink-0 cursor-pointer hover:text-white transition-colors flex items-center gap-2 whitespace-nowrap" onClick={() => toggleSort('size')}>
-                  Size {sortField === 'size' && (sortDirection === 'asc' ? <ChevronUp className="w-3 h-3"/> : <ChevronDown className="w-3 h-3"/>)}
-                </div>
-                <div style={{ width: 140 }} className="shrink-0 text-right cursor-pointer hover:text-white transition-colors flex items-center justify-end gap-2 whitespace-nowrap pr-10" onClick={() => toggleSort('lastModified')}>
-                  Modified {sortField === 'lastModified' && (sortDirection === 'asc' ? <ChevronUp className="w-3 h-3"/> : <ChevronDown className="w-3 h-3"/>)}
-                </div>
+                <div className="flex-1 min-w-[200px] flex items-center gap-2">Name</div>
+                <div style={{ width: 100 }} className="shrink-0">Size</div>
+                <div style={{ width: 140 }} className="shrink-0 text-right pr-10">Modified</div>
               </div>
             )}
 
@@ -1304,7 +1373,11 @@ export function WebConsole() {
                  <div className="flex flex-col items-center justify-center p-20 text-[#4B5563]">
                     <div className="w-24 h-24 mb-6 opacity-20"><Cloud className="w-full h-full"/></div>
                     <h3 className="text-xl font-bold text-[#E5E7EB]">{searchQuery ? "No matches found" : "Nothing here yet"}</h3>
-                    <p className="mt-2 text-sm text-center max-w-sm">{searchQuery ? "Try adjusting your search terms." : "Upload files or create folders to populate your storage space. Drag and drop works anywhere in this area."}</p>
+                    <p className="mt-2 text-sm text-center max-w-sm">
+                      {searchQuery 
+                        ? "Try adjusting your search or filters to find what you're looking for." 
+                        : "Upload files or create folders to populate your storage space. Drag and drop works anywhere."}
+                    </p>
                  </div>
               ) : (
                   <div className={viewMode === 'list' ? "divide-y divide-[#1F2937]/50" : "grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-4 p-4"}>
@@ -1325,18 +1398,18 @@ export function WebConsole() {
                           </div>
                           {selectedFile?.id === file.id && <div className="absolute left-0 top-1.5 bottom-1.5 w-1 bg-[#2563EB] rounded-r-full" />}
                           
-                          {/* NAME column — takes all remaining space */}
+                          {/* NAME column */}
                           <div className="flex-1 min-w-0 flex items-center gap-3 pr-4">
                             <div className="transition-transform group-hover:scale-110 duration-200 shrink-0">
-                              {getFileIcon(file.name, file.isDirectory, "w-5 h-5")}
+                               {getFileIcon(file.name, file.isDirectory, "w-5 h-5")}
                             </div>
                             <span className="truncate font-medium group-hover:text-[#2563EB] transition-colors">{file.name}</span>
                           </div>
 
-                          {/* SIZE column — fixed width */}
+                          {/* SIZE column */}
                           <div style={{ width: 100 }} className="hidden md:flex shrink-0 font-mono text-xs text-[#4B5563] items-center whitespace-nowrap">{formatSize(file.size)}</div>
 
-                          {/* MODIFIED column — fixed width */}
+                          {/* MODIFIED column */}
                           <div style={{ width: 140 }} className="hidden md:flex shrink-0 text-[#4B5563] items-center justify-end text-xs font-mono whitespace-nowrap pr-10">{formatDate(file.lastModified)}</div>
                           
                           {/* Actions menu */}
@@ -1389,20 +1462,23 @@ export function WebConsole() {
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: 50, scale: 0.95 }}
                   className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 bg-[#1F2937]/90 backdrop-blur-xl border border-[#374151] shadow-2xl rounded-2xl p-2 px-4 shadow-black/50"
+                  onClick={e => e.stopPropagation()}
                 >
                   <div className="flex items-center gap-2 px-2 border-r border-[#374151]">
                      <div className="w-6 h-6 rounded-full bg-[#2563EB] flex items-center justify-center text-xs font-bold">{selectedFiles.size}</div>
                      <span className="text-sm font-medium pr-2 text-white">{selectedFiles.size === 1 ? 'item' : 'items'} selected</span>
                   </div>
-                  <Button variant="ghost" className="h-9 hover:bg-[#374151] hover:text-white text-[#E5E7EB]" onClick={handleBulkDownload}>
-                    <Download className="w-4 h-4 mr-2" /> Download
-                  </Button>
-                  <Button variant="ghost" className="h-9 hover:bg-[#374151] hover:text-white text-[#E5E7EB]" onClick={handleBulkMove}>
-                    <Move className="w-4 h-4 mr-2" /> Move
-                  </Button>
-                  <Button variant="ghost" className="h-9 hover:bg-red-500/20 hover:text-red-400 text-red-500 transition-colors" onClick={handleBulkDelete}>
-                    <Trash2 className="w-4 h-4 mr-2" /> Delete
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    <Button variant="ghost" className="h-9 hover:bg-[#374151] hover:text-white text-[#E5E7EB]" onClick={handleBulkDownload}>
+                      <Download className="w-4 h-4 mr-2" /> Download
+                    </Button>
+                    <Button variant="ghost" className="h-9 hover:bg-[#374151] hover:text-white text-[#E5E7EB]" onClick={handleBulkMove}>
+                      <Move className="w-4 h-4 mr-2" /> Move
+                    </Button>
+                    <Button variant="ghost" className="h-9 hover:bg-red-500/20 hover:text-red-400 text-red-500 transition-colors" onClick={handleBulkDelete}>
+                      <Trash2 className="w-4 h-4 mr-2" /> Delete
+                    </Button>
+                  </div>
                   <div className="w-px h-6 bg-[#374151] mx-1" />
                   <Button variant="ghost" size="icon" className="h-9 w-9 hover:bg-[#374151] text-[#9CA3AF]" onClick={clearSelection}>
                     <X className="w-4 h-4" />
@@ -1411,13 +1487,12 @@ export function WebConsole() {
               )}
             </AnimatePresence>
           </div>
-        </div>
+      </main>
 
-        {/* Info & Preview Panel */}
-        <div className="hidden md:flex flex-col bg-[#0B1220] border-l border-[#1F2937] overflow-y-auto" style={{ minWidth: 320, width: 320 }}>
+      {/* Info & Preview Panel - Desktop Only */}
+      <aside className="hidden lg:block border-l border-[#1F2937] overflow-y-auto shrink-0" style={{ minWidth: 320, width: 320 }}>
           <PreviewContent />
-        </div>
-      </div>
+      </aside>
 
       {/* Mobile Preview Modal */}
       <AnimatePresence>
@@ -1546,8 +1621,8 @@ export function WebConsole() {
                 </div>
 
                 <div className="flex justify-end gap-3 mt-2">
-                  <Button variant="ghost" className="text-gray-400 hover:text-white" onClick={() => setShowShareModal(false)}>Cancel</Button>
-                  <Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => { setShowShareModal(false); toast.success("Share link configured & copied!"); }}>Copy Link</Button>
+                   <Button variant="ghost" className="text-gray-400 hover:text-white" onClick={() => setShowShareModal(false)}>Cancel</Button>
+                   <Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => { setShowShareModal(false); toast.success("Share link configured & copied!"); }}>Copy Link</Button>
                 </div>
               </Card>
             </motion.div>
