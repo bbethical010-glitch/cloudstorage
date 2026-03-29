@@ -10,7 +10,7 @@ export function Root() {
 
   useEffect(() => {
     if (!window.Android) {
-      if (location.pathname !== "/console") {
+      if (!location.pathname.startsWith("/console") && !location.pathname.startsWith("/node")) {
         navigate("/console", { replace: true });
       }
     } else {

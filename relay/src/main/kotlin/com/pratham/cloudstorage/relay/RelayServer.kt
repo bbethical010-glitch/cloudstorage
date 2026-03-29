@@ -44,7 +44,7 @@ fun Application.relayModule() {
     val registry = SignalingRegistry()
 
     routing {
-        get("/") {
+        get("/nodes") {
             val connectedCount = registry.connectedAgentCount()
             val shareCodes = registry.connectedShareCodes()
             call.respondText(buildRelayLandingPage(connectedCount, shareCodes), ContentType.Text.Html)
