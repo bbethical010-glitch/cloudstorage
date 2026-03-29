@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useParams } from "react-router";
 import { useWebRTC } from '../../hooks/useWebRTC';
 import type { P2PResponse } from '../../hooks/p2pTransport';
@@ -210,10 +210,14 @@ export function WebConsole() {
     localStorage.setItem("cloud_storage_theme", theme);
   }, [theme]);
 
-  // Update internal offline state from hook
   useEffect(() => {
+    if (isDirectNodeOnline || isRelayMode) {
+      setIsNodeOffline(false);
+      return;
+    }
+
     setIsNodeOffline(!isNodeOnline);
-  }, [isNodeOnline]);
+  }, [isDirectNodeOnline, isNodeOnline, isRelayMode]);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -231,6 +235,7 @@ export function WebConsole() {
             return;
           }
         }
+
         setIsAuthenticated(false);
         setAuthMode(data.hasAccount ? 'login' : 'signup');
       } catch (e) {
@@ -354,20 +359,61 @@ export function WebConsole() {
   console.log("HOOK_RESULT", webrtc);
 
   const { connectionState: p2pState, transport: p2pTransport, isReady: p2pReady, isDataChannelReady, reconnect: p2pReconnect } = webrtc;
+  const isDirectNodeOnline = p2pState === 'connected' && isDataChannelReady;
+  const isRelayMode = p2pState === 'fallback';
+  const isP2PTransitioning =
+    p2pState === 'connecting' ||
+    p2pState === 'signaling' ||
+    p2pState === 'ice-gathering' ||
+    p2pState === 'dc-opening' ||
+    (p2pState === 'connected' && !isDataChannelReady);
+  const shouldUseP2PTransport = isDirectNodeOnline && p2pReady && Boolean(p2pTransport?.ready);
+  const shouldShowOfflineState = isNodeOffline && !isDirectNodeOnline && !isRelayMode && !isP2PTransitioning;
+  const connectionIndicator = useMemo(() => {
+    if (isDirectNodeOnline) {
+      return {
+        label: 'Node Online',
+        dotClassName: 'bg-[#10B981]',
+        containerClassName: 'bg-[#10B981]/10 border-[#10B981]/20 text-[#10B981]',
+      };
+    }
+
+    if (isRelayMode) {
+      return {
+        label: 'Relay Mode',
+        dotClassName: 'bg-[#F59E0B]',
+        containerClassName: 'bg-[#F59E0B]/10 border-[#F59E0B]/20 text-[#F59E0B]',
+      };
+    }
+
+    if (shouldShowOfflineState) {
+      return {
+        label: 'Node Offline',
+        dotClassName: 'bg-red-500',
+        containerClassName: 'bg-red-500/10 border-red-500/20 text-red-500',
+      };
+    }
+
+    return {
+      label: 'Connecting',
+      dotClassName: 'bg-[#2563EB] animate-pulse',
+      containerClassName: 'bg-[#2563EB]/10 border-[#2563EB]/20 text-[#60A5FA]',
+    };
+  }, [isDirectNodeOnline, isRelayMode, shouldShowOfflineState]);
 
   useEffect(() => {
-    if ((p2pState === 'connected' && isDataChannelReady) || p2pState === 'fallback') {
+    if (isDirectNodeOnline || isRelayMode) {
       loadFiles(currentPath);
       loadStorageStats();
     }
-  }, [currentPath, activeTab, p2pState, isDataChannelReady]);
+  }, [currentPath, activeTab, isDirectNodeOnline, isRelayMode]);
 
   /**
    * Unified API fetch — uses P2P DataChannel when connected, falls back to relay.
    * This is the primary replacement for all fetch(getBaseUrl() + endpoint) calls.
    */
   const apiFetch = useCallback(async (endpoint: string, options: RequestInit = {}): Promise<Response | P2PResponse> => {
-    if (p2pReady && isDataChannelReady && p2pTransport?.ready) {
+    if (shouldUseP2PTransport && p2pTransport) {
       // Route through the P2P DataChannel — zero relay bandwidth
       return p2pTransport.fetch(endpoint, {
         method: options.method || 'GET',
@@ -377,12 +423,18 @@ export function WebConsole() {
     }
     // Fallback: route through the relay server
     return fetch(`${getBaseUrl()}${endpoint}`, options);
-  }, [p2pReady, p2pTransport]);
+  }, [p2pTransport, shouldUseP2PTransport]);
 
   useEffect(() => {
     let interval: any;
     let consecutiveFailures = 0;
     const checkStatus = async () => {
+      if (isDirectNodeOnline || isRelayMode) {
+        consecutiveFailures = 0;
+        setIsNodeOffline(false);
+        return;
+      }
+
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
@@ -405,7 +457,7 @@ export function WebConsole() {
     checkStatus();
     interval = setInterval(checkStatus, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [apiFetch, isDirectNodeOnline, isRelayMode]);
 
   const PreviewContent = () => (
     <AnimatePresence mode="wait">
@@ -1006,6 +1058,38 @@ export function WebConsole() {
     setCurrentPath(segments.join('/'));
   };
 
+  if (shouldShowOfflineState) {
+    return (
+      <div className="min-h-screen bg-[#0B1220] flex items-center justify-center p-4 sm:p-6 text-[#E5E7EB]">
+        <Card className="w-full max-w-lg bg-[#111827]/90 border-[#1F2937] rounded-[2rem] p-6 sm:p-8 shadow-2xl text-center">
+          <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full border border-red-500/20 bg-red-500/10">
+            <Cloud className="w-10 h-10 text-red-400" />
+          </div>
+          <div className="mb-4 flex justify-center">
+            <div className="inline-flex items-center gap-2 rounded-full border border-red-500/20 bg-red-500/10 px-3 py-1 text-xs font-bold uppercase tracking-[0.2em] text-red-400">
+              <div className="h-2 w-2 rounded-full bg-red-500" />
+              Node Offline
+            </div>
+          </div>
+          <h1 className="text-3xl sm:text-4xl font-bold mb-3">Node is offline</h1>
+          <p className="mx-auto max-w-md text-sm sm:text-base leading-relaxed text-[#9CA3AF]">
+            The browser cannot reach the node yet. This screen clears automatically once the peer connection and DataChannel are both ready.
+          </p>
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+            <Button
+              onClick={p2pReconnect}
+              className="h-11 rounded-xl bg-[#2563EB] px-6 font-bold text-white hover:bg-[#1d4ed8]"
+            >
+              Retry Connection
+            </Button>
+            <div className="flex h-11 items-center justify-center rounded-xl border border-[#1F2937] bg-[#0B1220] px-4 text-xs text-[#9CA3AF]">
+              Waiting for direct bridge handshake
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1099,9 +1183,14 @@ export function WebConsole() {
       </div>
     );
   }
+  useEffect(() => {
+    if (isDirectNodeOnline || isRelayMode) {
+      loadFiles(currentPath);
+      loadStorageStats();
+    }
+  }, [currentPath, activeTab, isDirectNodeOnline, isRelayMode]);
 
-
-  if (p2pState === 'connecting' || p2pState === 'signaling' || p2pState === 'ice-gathering' || p2pState === 'dc-opening' || (p2pState === 'connected' && !isDataChannelReady)) {
+  if (isP2PTransitioning) {
     const getP2PMessage = () => {
       switch (p2pState) {
         case 'connecting': return 'Initializing P2P stack...';
@@ -1142,18 +1231,13 @@ export function WebConsole() {
               <Cloud className="w-5 h-5 text-white" />
             </div>
             <span className="font-bold tracking-tight text-lg hidden md:block">Easy Storage</span>
-            {isNodeOffline && (
-               <div className="hidden md:flex items-center gap-1.5 px-2 py-1 bg-red-500/10 border border-red-500/20 rounded-full ml-1 shrink-0">
-                  <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                  <span className="text-[10px] font-bold text-red-500 uppercase tracking-wider">Node Offline</span>
-               </div>
-            )}
-            {!isNodeOffline && p2pState === 'fallback' && (
-               <div className="hidden md:flex items-center gap-1.5 px-2 py-1 bg-[#F59E0B]/10 border border-[#F59E0B]/20 rounded-full ml-1 shrink-0" title="Direct P2P Failed. Routing through Relay.">
-                  <div className="w-2 h-2 rounded-full bg-[#F59E0B]" />
-                  <span className="text-[10px] font-bold text-[#F59E0B] uppercase tracking-wider">Relay Mode</span>
-               </div>
-            )}
+            <div
+              className={`hidden md:flex items-center gap-1.5 rounded-full border px-2.5 py-1 ml-1 shrink-0 ${connectionIndicator.containerClassName}`}
+              title={isRelayMode ? "Direct P2P failed. Routing through relay." : undefined}
+            >
+              <div className={`w-2 h-2 rounded-full ${connectionIndicator.dotClassName}`} />
+              <span className="text-[10px] font-bold uppercase tracking-wider">{connectionIndicator.label}</span>
+            </div>
           </div>
           
           <Separator orientation="vertical" className="h-6 bg-[#1F2937] hidden md:block" />
@@ -1285,7 +1369,7 @@ export function WebConsole() {
               </motion.div>
             )}
 
-            {isNodeOffline && (
+            {shouldShowOfflineState && (
               <motion.div 
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 className="absolute inset-0 z-[60] bg-[#0B1220]/95 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center"

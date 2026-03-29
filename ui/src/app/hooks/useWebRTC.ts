@@ -47,6 +47,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
   const [connectionState, setConnectionState] = useState<P2PConnectionState>(enabled ? 'connecting' : 'disconnected');
   const [isReady, setIsReady] = useState(false);
   const [isDataChannelReady, setIsDataChannelReady] = useState(false);
+  const connectionStateRef = useRef<P2PConnectionState>(enabled ? 'connecting' : 'disconnected');
   const transportRef = useRef<P2PTransport>(new P2PTransport());
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -61,12 +62,6 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
   
   const iceCandidateQueueRef = useRef<RTCIceCandidateInit[]>([]);
 
-  const failAndFallback = useCallback((reason: string) => {
-    console.warn(`[PC_DEBUG] HARD_FAIL: ${reason}. Triggering fallbackToRelay().`);
-    setConnectionState('fallback');
-    clearAllTimeouts();
-  }, []);
-
   const clearAllTimeouts = useCallback(() => {
     if (initTimeoutRef.current) { clearTimeout(initTimeoutRef.current); initTimeoutRef.current = null; }
     if (offerTimeoutRef.current) { clearTimeout(offerTimeoutRef.current); offerTimeoutRef.current = null; }
@@ -74,12 +69,23 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
     if (dcTimeoutRef.current) { clearTimeout(dcTimeoutRef.current); dcTimeoutRef.current = null; }
   }, []);
 
+  const updateConnectionState = useCallback((nextState: P2PConnectionState) => {
+    connectionStateRef.current = nextState;
+    setConnectionState(nextState);
+  }, []);
+
+  const failAndFallback = useCallback((reason: string) => {
+    console.warn(`[PC_DEBUG] HARD_FAIL: ${reason}. Triggering fallbackToRelay().`);
+    updateConnectionState('fallback');
+    clearAllTimeouts();
+  }, [clearAllTimeouts, updateConnectionState]);
+
   const connect = useCallback(() => {
     try {
       if (!enabled || !relayUrl || !shareCode) return;
 
       cleanup();
-      setConnectionState('connecting');
+      updateConnectionState('connecting');
 
       // Hard fail-safe: if we don't reach 'connected' or at least 'ice-gathering' quickly
       if (initTimeoutRef.current) clearTimeout(initTimeoutRef.current);
@@ -103,7 +109,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
 
       ws.onopen = () => {
         console.log("SIGNAL_WS_CONNECTED");
-        setConnectionState('signaling');
+        updateConnectionState('signaling');
         initiatePeerConnection(ws);
       };
 
@@ -124,8 +130,9 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
       ws.onclose = () => {
         console.log('[SIGNAL_DEBUG] WS_CLOSE');
         if (wsRef.current === ws) {
-          if (connectionState !== 'connected' && connectionState !== 'fallback') {
-            setConnectionState('disconnected');
+          const latestState = connectionStateRef.current;
+          if (latestState !== 'connected' && latestState !== 'fallback') {
+            updateConnectionState('disconnected');
           }
         }
       };
@@ -133,7 +140,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
       console.error("WEBRTC_INIT_ERROR", e);
       failAndFallback('SYNC_INIT_CATCH');
     }
-  }, [relayUrl, shareCode, enabled, failAndFallback]);
+  }, [relayUrl, shareCode, enabled, failAndFallback, updateConnectionState]);
 
   function initiatePeerConnection(ws: WebSocket) {
     console.log('[PC_DEBUG] INITIALIZING');
@@ -150,7 +157,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
     dc.onopen = () => {
       console.log('[DC_DEBUG] DATA_CHANNEL_OPEN — P2P Live');
       clearAllTimeouts();
-      setConnectionState('connected');
+      updateConnectionState('connected');
       setIsReady(true);
       setIsDataChannelReady(true);
     };
@@ -189,7 +196,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
       if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
         console.log('[ICE_DEBUG] SUCCESS: Signaling transition to DC_OPENING');
         if (iceTimeoutRef.current) { clearTimeout(iceTimeoutRef.current); iceTimeoutRef.current = null; }
-        setConnectionState('dc-opening');
+        updateConnectionState('dc-opening');
         
         // Timeout 3: DataChannel must open within 6s of ICE success
         dcTimeoutRef.current = setTimeout(() => {
@@ -236,7 +243,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
 
         console.log('[SIGNAL_DEBUG] RECEIVED_ANSWER');
         if (offerTimeoutRef.current) { clearTimeout(offerTimeoutRef.current); offerTimeoutRef.current = null; }
-        setConnectionState('ice-gathering');
+        updateConnectionState('ice-gathering');
 
         // Timeout 2: ICE must connect within 5s of receiving answer
         iceTimeoutRef.current = setTimeout(() => {
