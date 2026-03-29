@@ -250,14 +250,8 @@ export function WebConsole() {
     });
 
   const getBaseUrl = () => {
-    const path = window.location.pathname;
-    if (path.includes('/node/')) {
-      const segments = path.split('/');
-      const nodeIdx = segments.indexOf('node');
-      if (nodeIdx !== -1 && segments.length > nodeIdx + 1) {
-        return segments.slice(0, nodeIdx + 2).join('/');
-      }
-    }
+    // We always want to hit the root relay APIs (e.g. /api/status)
+    // rather than relative paths like /node/XYZ/api/status.
     return '';
   };
 
@@ -305,6 +299,13 @@ export function WebConsole() {
 
   const { connectionState: p2pState, transport: p2pTransport, isReady: p2pReady, isDataChannelReady, reconnect: p2pReconnect } = webrtc;
 
+  useEffect(() => {
+    if ((p2pState === 'connected' && isDataChannelReady) || p2pState === 'fallback') {
+      loadFiles(currentPath);
+      loadStorageStats();
+    }
+  }, [currentPath, activeTab, p2pState, isDataChannelReady]);
+
   /**
    * Unified API fetch — uses P2P DataChannel when connected, falls back to relay.
    * This is the primary replacement for all fetch(getBaseUrl() + endpoint) calls.
@@ -321,13 +322,6 @@ export function WebConsole() {
     // Fallback: route through the relay server
     return fetch(`${getBaseUrl()}${endpoint}`, options);
   }, [p2pReady, p2pTransport]);
-
-  useEffect(() => {
-    if (p2pState === 'connected' && isDataChannelReady) {
-      loadFiles(currentPath);
-      loadStorageStats();
-    }
-  }, [currentPath, activeTab, p2pState, isDataChannelReady]);
 
   useEffect(() => {
     let interval: any;
@@ -1059,12 +1053,6 @@ export function WebConsole() {
     );
   }
 
-  useEffect(() => {
-    if ((p2pState === 'connected' && isDataChannelReady) || p2pState === 'fallback') {
-      loadFiles(currentPath);
-      loadStorageStats();
-    }
-  }, [currentPath, activeTab, p2pState, isDataChannelReady]);
 
   if (p2pState === 'connecting' || p2pState === 'signaling' || p2pState === 'ice-gathering' || p2pState === 'dc-opening' || (p2pState === 'connected' && !isDataChannelReady)) {
     const getP2PMessage = () => {

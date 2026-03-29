@@ -76,15 +76,11 @@ fun Application.relayModule() {
             )
         }
 
-        // ── React SPA Serving (Single Page Application) ─────────────────────────
-        // Handles static files and falls back to index.html for navigation.
-        singlePageApplication {
-            useResources = true
-            filesPath = "web"      // Maps to src/main/resources/web
-            defaultPage = "index.html"
-            // Ignore paths that should return 404 instead of index.html
-            ignoreFiles { it.endsWith(".ico") || it.endsWith(".txt") }
-        }
+        // ── Explicit SPA Routes ───────────────────────────────────────────────
+        // These ensure that deep links to nodes or the join page always serve 
+        // the main index.html for React Router to take over.
+        get("/node/{code}") { call.respond(HttpStatusCode.OK, registry.javaClass.classLoader.getResource("web/index.html")?.readBytes() ?: ByteArray(0)) }
+        get("/join") { call.respond(HttpStatusCode.OK, registry.javaClass.classLoader.getResource("web/index.html")?.readBytes() ?: ByteArray(0)) }
 
         // ── Android Node WebSocket (agent registration + signaling) ───────
         webSocket("/agent/connect") {
@@ -198,6 +194,16 @@ fun Application.relayModule() {
                 registry.unregisterBrowser(shareCode, browserId)
                 println("Relay: Browser $browserId disconnected from node $shareCode")
             }
+        }
+
+        // ── React SPA Serving (Single Page Application) ─────────────────────────
+        // Handles static files and falls back to index.html for navigation.
+        singlePageApplication {
+            useResources = true
+            filesPath = "web"      // Maps to src/main/resources/web
+            defaultPage = "index.html"
+            // Ignore paths that should return 404 instead of index.html
+            ignoreFiles { it.endsWith(".ico") || it.endsWith(".txt") }
         }
     }
 }
