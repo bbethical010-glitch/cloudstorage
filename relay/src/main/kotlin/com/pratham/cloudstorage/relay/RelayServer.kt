@@ -59,6 +59,9 @@ fun Application.relayModule() {
 
     routing {
 
+        // ── Ktor API & WebSocket Endpoints ─────────────────────────────────────
+        // (Defined FIRST to take precedence over the SPA fallback)
+
         get("/health") {
             call.respondText("relay_online")
         }
@@ -73,25 +76,17 @@ fun Application.relayModule() {
             )
         }
 
-        // ── Serve React SPA Assets ────────────────────────────────────────────────
-        staticResources("/", "web")
-
-        // ── Catch-all SPA Fallback ────────────────────────────────────────────────
-        get("/{...}") {
-            val path = call.request.path()
-            if (!path.startsWith("/api/") && !path.startsWith("/signal/") && !path.startsWith("/agent/")) {
-                val indexResource = this::class.java.classLoader.getResource("web/index.html")
-                if (indexResource != null) {
-                    call.respondText(indexResource.readText(), ContentType.Text.Html)
-                } else {
-                    call.respondText("UI bundle not found", status = HttpStatusCode.NotFound)
-                }
-            } else {
-                call.respondText("API Not found", status = HttpStatusCode.NotFound)
-            }
+        // ── React SPA Serving (Single Page Application) ─────────────────────────
+        // Handles static files and falls back to index.html for navigation.
+        singlePageApplication {
+            useResources = true
+            filesPath = "web"      // Maps to src/main/resources/web
+            defaultPage = "index.html"
+            // Ignore paths that should return 404 instead of index.html
+            ignoreFiles { it.endsWith(".ico") || it.endsWith(".txt") }
         }
 
-        // ── Android Node WebSocket (agent registration + signaling) ─────
+        // ── Android Node WebSocket (agent registration + signaling) ───────
         webSocket("/agent/connect") {
             val shareCode = call.request.queryParameters["shareCode"]
                 ?.trim()
