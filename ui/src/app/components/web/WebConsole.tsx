@@ -193,6 +193,28 @@ export function WebConsole() {
 
   const shareCode = getShareCode();
   const { isOnline: isNodeOnline, checkStatus: refreshNodeStatus, lastCheck } = useNodeStatus(shareCode);
+  const webrtc = useWebRTC({
+    relayUrl: getRelayUrl(),
+    shareCode: shareCode,
+    enabled: !!shareCode,
+  });
+  console.log("HOOK_RESULT", webrtc);
+
+  const {
+    connectionState: p2pState,
+    transport: p2pTransport,
+    isReady: p2pReady,
+    isDataChannelReady,
+    reconnect: p2pReconnect,
+  } = webrtc;
+  const isDirectNodeOnline = p2pState === 'connected' && isDataChannelReady;
+  const isRelayMode = p2pState === 'fallback';
+  const isP2PTransitioning =
+    p2pState === 'connecting' ||
+    p2pState === 'signaling' ||
+    p2pState === 'ice-gathering' ||
+    p2pState === 'dc-opening' ||
+    (p2pState === 'connected' && !isDataChannelReady);
   
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup' | 'none'>('none');
@@ -351,22 +373,6 @@ export function WebConsole() {
     console.log("SHARE_CODE:", shareCode);
   }
 
-  const webrtc = useWebRTC({
-    relayUrl: getRelayUrl(),
-    shareCode: shareCode,
-    enabled: !!shareCode,
-  });
-  console.log("HOOK_RESULT", webrtc);
-
-  const { connectionState: p2pState, transport: p2pTransport, isReady: p2pReady, isDataChannelReady, reconnect: p2pReconnect } = webrtc;
-  const isDirectNodeOnline = p2pState === 'connected' && isDataChannelReady;
-  const isRelayMode = p2pState === 'fallback';
-  const isP2PTransitioning =
-    p2pState === 'connecting' ||
-    p2pState === 'signaling' ||
-    p2pState === 'ice-gathering' ||
-    p2pState === 'dc-opening' ||
-    (p2pState === 'connected' && !isDataChannelReady);
   const shouldUseP2PTransport = isDirectNodeOnline && p2pReady && Boolean(p2pTransport?.ready);
   const shouldShowOfflineState = isNodeOffline && !isDirectNodeOnline && !isRelayMode && !isP2PTransitioning;
   const connectionIndicator = useMemo(() => {
@@ -1183,13 +1189,6 @@ export function WebConsole() {
       </div>
     );
   }
-  useEffect(() => {
-    if (isDirectNodeOnline || isRelayMode) {
-      loadFiles(currentPath);
-      loadStorageStats();
-    }
-  }, [currentPath, activeTab, isDirectNodeOnline, isRelayMode]);
-
   if (isP2PTransitioning) {
     const getP2PMessage = () => {
       switch (p2pState) {
