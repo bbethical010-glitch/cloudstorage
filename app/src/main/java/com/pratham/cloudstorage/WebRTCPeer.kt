@@ -43,7 +43,6 @@ import kotlinx.coroutines.launch
 
 private const val TAG = "WebRTCPeer"
 private const val CHUNK_SIZE = 64 * 1024 // 64KB chunks prevent DataChannel memory overflow
-private const val LOCAL_SERVER_PORT = 8970
 
 class WebRTCPeer(
     private val context: Context,
@@ -289,7 +288,7 @@ class WebRTCPeer(
      * and stream the response back over the DataChannel using chunked binary protocol.
      *
      * This is the core of the P2P architecture — the browser's request goes:
-     * Browser DataChannel → this method → localhost:8970 → ContentResolver → response chunks → DataChannel → Browser
+     * Browser DataChannel → this method → localhost:8080 → ContentResolver → response chunks → DataChannel → Browser
      *
      * Memory safety: Large files are streamed in 64KB chunks. We never hold
      * the entire file in memory, preventing OOM on the Android device.
@@ -306,7 +305,7 @@ class WebRTCPeer(
         }?.toMap() ?: emptyMap()
 
         val querySuffix = if (query.isNotBlank()) "?$query" else ""
-        val url = "http://127.0.0.1:$LOCAL_SERVER_PORT$path$querySuffix"
+        val url = "http://127.0.0.1:$DEFAULT_PORT$path$querySuffix"
 
         try {
             localClient.prepareRequest(url) {
@@ -417,7 +416,7 @@ class WebRTCPeer(
         }?.toMap() ?: emptyMap()
 
         val querySuffix = if (query.isNotBlank()) "?$query" else ""
-        val url = "http://127.0.0.1:$LOCAL_SERVER_PORT$path$querySuffix"
+        val url = "http://127.0.0.1:$DEFAULT_PORT$path$querySuffix"
 
         try {
             localClient.prepareRequest(url) {

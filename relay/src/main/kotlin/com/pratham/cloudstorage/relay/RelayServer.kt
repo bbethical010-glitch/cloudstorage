@@ -153,11 +153,11 @@ fun Application.relayModule() {
                 if (!isOnline) {
                     println("Relay Status: Node $sc is OFFLINE. Active nodes: ${registry.connectedShareCodes()}")
                 }
-                call.respond(mapOf("online" to isOnline))
+                call.respondJson(mapOf("online" to isOnline))
             }
 
             get("/debug/registry") {
-                call.respond(mapOf(
+                call.respondJson(mapOf(
                     "nodes" to registry.connectedShareCodes(),
                     "total" to registry.connectedAgentCount(),
                     "timestamp" to System.currentTimeMillis()
@@ -303,25 +303,25 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyApiRequest(
             ?.takeIf { it.isNotBlank() }
 
     if (nodeId.isNullOrBlank()) {
-        respond(HttpStatusCode.BadRequest, mapOf("error" to "missing_node_id"))
+        respondJson(mapOf("error" to "missing_node_id"), HttpStatusCode.BadRequest)
         return
     }
 
     val agent = registry.getAgent(nodeId)
     if (agent == null) {
         if (request.path().endsWith("/storage")) {
-            respond(
-                HttpStatusCode.ServiceUnavailable,
+            respondJson(
                 mapOf(
                     "error" to "node_offline",
                     "total" to 0L,
                     "used" to 0L,
                     "free" to 0L,
                     "healthPercent" to 0
-                )
+                ),
+                HttpStatusCode.ServiceUnavailable
             )
         } else {
-            respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "node_offline"))
+            respondJson(mapOf("error" to "node_offline"), HttpStatusCode.ServiceUnavailable)
         }
         return
     }
@@ -351,7 +351,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyApiRequest(
 
     val relayResponse = registry.forwardEnvelope(agent, relayRequest)
     if (relayResponse == null) {
-        respond(HttpStatusCode.GatewayTimeout, mapOf("error" to "node_timeout"))
+        respondJson(mapOf("error" to "node_timeout"), HttpStatusCode.GatewayTimeout)
         return
     }
 
@@ -410,6 +410,17 @@ private fun isHopByHopHeader(name: String): Boolean {
         name.equals(HttpHeaders.Trailer, ignoreCase = true) ||
         name.equals(HttpHeaders.TransferEncoding, ignoreCase = true) ||
         name.equals(HttpHeaders.Upgrade, ignoreCase = true)
+}
+
+private suspend fun io.ktor.server.application.ApplicationCall.respondJson(
+    payload: Any,
+    status: HttpStatusCode = HttpStatusCode.OK
+) {
+    respondText(
+        gson.toJson(payload),
+        ContentType.Application.Json,
+        status
+    )
 }
 
 private fun buildRelayLandingPage(connectedCount: Int, shareCodes: List<String>): String {
