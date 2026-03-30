@@ -46,6 +46,8 @@ import io.ktor.utils.io.core.readAvailable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import io.ktor.server.plugins.contentnegotiation.*
+import io.ktor.serialization.gson.*
 
 class ServerService : Service() {
 
@@ -134,6 +136,12 @@ class ServerService : Service() {
                     exposeHeader(io.ktor.http.HttpHeaders.ContentRange)
                     exposeHeader(io.ktor.http.HttpHeaders.AcceptRanges)
                     anyHost() // Allow Web Console origin
+                }
+
+                install(ContentNegotiation) {
+                    gson {
+                        setPrettyPrinting()
+                    }
                 }
 
                 routing {

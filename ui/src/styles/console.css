@@ -172,7 +172,8 @@ body,
 
 @media (min-width: 769px) {
   .file-table-grid {
-    grid-template-columns: 48px 1fr 120px 180px 48px;
+    grid-template-columns: 48px minmax(200px, 1fr) 100px 160px 48px;
+    table-layout: fixed;
   }
 }
 

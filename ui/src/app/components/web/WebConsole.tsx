@@ -585,27 +585,22 @@ export function WebConsole() {
     </AnimatePresence>
   );
 
-  const loadStorageStats = useCallback(async () => {
-    setDriveHealthStatus(prev => (prev === "ready" ? "ready" : "loading"));
-    setDriveHealthError("");
-
+  const loadStorageStats = useCallback(async (retryCount = 0) => {
+    if (!canUseNodeApi) return;
     try {
-      const res = await apiFetch('/api/storage', { headers: getHeaders() as any });
+      const res = await apiFetch('/api/storage', {
+        headers: getHeaders() as any
+      });
+      
       if (!res.ok) {
-        let message = `Storage stats failed (${res.status})`;
-        try {
-          const body = await res.json();
-          if (body?.error) {
-            message = String(body.error);
+          if (retryCount < 3) {
+              setTimeout(() => loadStorageStats(retryCount + 1), 2000 * (retryCount + 1));
+              return;
           }
-        } catch {
-          // ignore body parse failures for fallback messages
-        }
-        throw new Error(message);
+          throw new Error(`Storage stats failed with status ${res.status}`);
       }
 
-      const text = await res.text();
-      const data = text ? JSON.parse(text) : {};
+      const data = await res.json();
       setStorageStats({
         total: Number(data.total ?? data.totalBytes ?? 0),
         used: Number(data.used ?? data.usedBytes ?? 0),
@@ -614,10 +609,12 @@ export function WebConsole() {
       setDriveHealthStatus("ready");
     } catch (err: any) {
       console.error("Storage stats failed:", err?.message || err);
-      setDriveHealthStatus("error");
-      setDriveHealthError(err?.message || "Unable to load storage stats");
+      if (retryCount >= 3) {
+        setDriveHealthStatus("error");
+        setDriveHealthError(err?.message || "Unable to load storage stats");
+      }
     }
-  }, [apiFetch, getHeaders]);
+  }, [apiFetch, getHeaders, canUseNodeApi]);
 
   const clearSelection = () => {
     setSelectedFiles(new Set());
@@ -639,11 +636,10 @@ export function WebConsole() {
     setLastSelectedIndex(index);
   };
 
-  const loadFiles = useCallback(async (path: string) => {
+  const loadFiles = useCallback(async (path: string, retryCount = 0) => {
     setIsRefreshing(true);
-    setSelectedFile(null);
-    clearSelection();
-    setFilesError("");
+    if (retryCount === 0) setFilesError("");
+    
     try {
       const timestamp = Date.now();
       const endpoint = activeTab === "Trash" ? `/api/trash?t=${timestamp}` : `/api/files?path=${encodeURIComponent(path)}&t=${timestamp}`;
@@ -652,12 +648,16 @@ export function WebConsole() {
       });
 
       if (res.status === 502 || res.status === 503) {
+        // Backend/Relay unavailable - potentially transient
+        if (retryCount < 3) {
+            setTimeout(() => loadFiles(path, retryCount + 1), 1500 * (retryCount + 1));
+            return;
+        }
         const body = await res.json().catch(() => ({}));
         const reason = body.error === 'agent_offline' 
             ? 'Android Node is offline. Open the Easy Storage app on your phone.'
             : 'Relay server is unavailable. Please try again in a moment.';
         toast.error(reason, { duration: 6000 });
-        setFiles([]);
         setFilesError(reason);
         return;
       }
@@ -665,21 +665,28 @@ export function WebConsole() {
       if (res.status === 401) {
         const message = "Unauthorized: Please provide a valid ?pwd= password.";
         toast.error(message);
-        setFiles([]);
         setFilesError(message);
         return;
       }
+      
       if (!res.ok) throw new Error("Failed to load files");
-      const text = await res.text();
-      if (!text) { setFiles([]); return; }
-      const data = JSON.parse(text);
+      
+      const data = await res.json();
       setFiles(Array.isArray(data) ? data : []);
+      // Only clear selection if we actually succeeded in loading a new view
+      setSelectedFile(null);
+      clearSelection();
     } catch (e: any) {
       const message = e.message || "Failed to load directory";
-      setFiles([]);
-      setFilesError(message);
       console.error("File listing failed:", message);
-      toast.error(message);
+      
+      if (retryCount < 2) {
+          setTimeout(() => loadFiles(path, retryCount + 1), 2000);
+      } else {
+          setFilesError(message);
+          toast.error(message);
+          // Note: We intentionally DO NOT call setFiles([]) here to maintain stale data (stale-while-revalidate)
+      }
     } finally {
       setIsRefreshing(false);
     }
