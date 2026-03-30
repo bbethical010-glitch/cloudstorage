@@ -55,30 +55,32 @@ export class P2PTransport {
 
   attach(dataChannel: RTCDataChannel) {
     this.dc = dataChannel;
+    dataChannel.binaryType = 'arraybuffer';
 
-    dataChannel.onopen = () => {
+    dataChannel.addEventListener('open', () => {
       this._ready = true;
       console.log('[P2P] DataChannel open — transport ready');
-    };
+    });
 
-    dataChannel.onclose = () => {
+    dataChannel.addEventListener('close', () => {
       this._ready = false;
       console.log('[P2P] DataChannel closed');
       // Reject all pending requests
       this.pending.forEach((req) => req.reject(new Error('DataChannel closed')));
       this.pending.clear();
-    };
+    });
 
-    dataChannel.onmessage = (event: MessageEvent) => {
+    dataChannel.addEventListener('message', (event: MessageEvent) => {
       if (typeof event.data === 'string') {
         this.handleTextMessage(event.data);
       } else if (event.data instanceof ArrayBuffer) {
         this.handleBinaryChunk(event.data);
       }
-    };
+    });
 
-    // Use 'arraybuffer' for binary messages
-    dataChannel.binaryType = 'arraybuffer';
+    if (dataChannel.readyState === 'open') {
+      this._ready = true;
+    }
   }
 
   /**

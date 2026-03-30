@@ -16,7 +16,7 @@
  * that bypasses the relay entirely.
  */
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { P2PTransport } from './p2pTransport';
 
 export type P2PConnectionState = 'disconnected' | 'connecting' | 'signaling' | 'ice-gathering' | 'dc-opening' | 'connected' | 'fallback' | 'failed';
@@ -43,7 +43,6 @@ interface UseWebRTCReturn {
 }
 
 export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOptions): UseWebRTCReturn {
-  console.log("useWebRTC HOOK CALLED", { enabled, shareCode });
   const [connectionState, setConnectionState] = useState<P2PConnectionState>(enabled ? 'connecting' : 'disconnected');
   const [isReady, setIsReady] = useState(false);
   const [isDataChannelReady, setIsDataChannelReady] = useState(false);
@@ -331,11 +330,11 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
     connect();
   }, [connect]);
 
-  return {
+  return useMemo(() => ({
     connectionState,
     transport: transportRef.current,
     isReady,
     isDataChannelReady,
     reconnect,
-  };
+  }), [connectionState, isReady, isDataChannelReady, reconnect]);
 }

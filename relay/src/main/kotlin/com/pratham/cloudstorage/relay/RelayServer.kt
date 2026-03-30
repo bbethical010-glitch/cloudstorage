@@ -14,11 +14,15 @@ import io.ktor.http.*
 import io.ktor.websocket.*
 import io.ktor.server.websocket.*
 import io.ktor.server.http.content.*
+import kotlinx.coroutines.CompletableDeferred
 import java.time.Duration
+import java.util.Base64
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Easy Storage Relay — Pure WebRTC Signaling Server
@@ -38,7 +42,7 @@ fun Application.relayModule() {
     install(WebSockets) {
         pingPeriod = Duration.ofSeconds(20)
         timeout = Duration.ofSeconds(60)
-        maxFrameSize = 512 * 1024L
+        maxFrameSize = 16 * 1024 * 1024L
     }
 
     val registry = SignalingRegistry()
@@ -83,6 +87,9 @@ fun Application.relayModule() {
                             }
                             "heartbeat" -> {
                                 // Just a stay-alive frame from the agent, no action needed
+                            }
+                            "http_response" -> {
+                                registry.resolveHttpResponse(text)
                             }
                         }
                     }
@@ -156,12 +163,10 @@ fun Application.relayModule() {
                 )
             }
 
-            get("{...}") {
-                call.respondText(
-                    gson.toJson(mapOf("error" to "API endpoint not found")),
-                    ContentType.Application.Json,
-                    HttpStatusCode.NotFound
-                )
+            route("{...}") {
+                handle {
+                    proxyHttpRequest(call, registry)
+                }
             }
         }
 
@@ -200,6 +205,7 @@ fun Application.relayModule() {
 private class SignalingRegistry {
     private val agents = ConcurrentHashMap<String, DefaultWebSocketSession>()
     private val browsers = ConcurrentHashMap<String, ConcurrentHashMap<String, DefaultWebSocketSession>>()
+    private val pendingHttpResponses = ConcurrentHashMap<String, CompletableDeferred<HttpProxyResponse>>()
 
     fun registerAgent(shareCode: String, session: DefaultWebSocketSession) { agents[shareCode] = session }
     fun unregisterAgent(shareCode: String, session: DefaultWebSocketSession) {
@@ -225,11 +231,134 @@ private class SignalingRegistry {
     suspend fun forwardToAgent(shareCode: String, message: String) {
         try { agents[shareCode]?.send(Frame.Text(message)) } catch (_: Exception) {}
     }
+
+    suspend fun dispatchHttpRequest(shareCode: String, request: HttpProxyRequest): HttpProxyResponse? {
+        val deferred = CompletableDeferred<HttpProxyResponse>()
+        pendingHttpResponses[request.requestId] = deferred
+        return try {
+            forwardToAgent(shareCode, gson.toJson(request))
+            withTimeout(20_000) { deferred.await() }
+        } finally {
+            pendingHttpResponses.remove(request.requestId)
+        }
+    }
+
+    fun resolveHttpResponse(message: String) {
+        val payload = message.toJsonMap() ?: return
+        val requestId = payload["requestId"] as? String ?: return
+        val deferred = pendingHttpResponses.remove(requestId) ?: return
+        deferred.complete(
+            HttpProxyResponse(
+                requestId = requestId,
+                status = (payload["status"] as? Double)?.toInt() ?: 502,
+                headers = (payload["headers"] as? Map<*, *>)?.entries?.mapNotNull { (key, value) ->
+                    val headerName = key as? String ?: return@mapNotNull null
+                    val headerValue = value as? String ?: return@mapNotNull null
+                    headerName to headerValue
+                }?.toMap().orEmpty(),
+                body = payload["body"] as? String
+            )
+        )
+    }
 }
+
+private data class HttpProxyRequest(
+    val type: String = "http_request",
+    val requestId: String,
+    val method: String,
+    val path: String,
+    val query: String,
+    val headers: Map<String, String>,
+    val body: String? = null
+)
+
+private data class HttpProxyResponse(
+    val requestId: String,
+    val status: Int,
+    val headers: Map<String, String>,
+    val body: String? = null
+)
 
 @Suppress("UNCHECKED_CAST")
 private fun String.toJsonMap(): Map<String, Any?>? {
     return try { gson.fromJson(this, Map::class.java) as? Map<String, Any?> } catch (_: JsonSyntaxException) { null }
+}
+
+private suspend fun proxyHttpRequest(call: io.ktor.server.application.ApplicationCall, registry: SignalingRegistry) {
+    val shareCode = call.request.headers["X-Share-Code"]
+        ?.trim()
+        ?.uppercase()
+        ?.takeIf { it.isNotEmpty() }
+        ?: call.request.queryParameters["shareCode"]
+            ?.trim()
+            ?.uppercase()
+            ?.takeIf { it.isNotEmpty() }
+        ?: call.request.queryParameters["nodeId"]
+            ?.trim()
+            ?.uppercase()
+            ?.takeIf { it.isNotEmpty() }
+
+    if (shareCode == null) {
+        call.respondText(
+            gson.toJson(mapOf("error" to "missing_share_code")),
+            ContentType.Application.Json,
+            HttpStatusCode.BadRequest
+        )
+        return
+    }
+
+    if (!registry.isAgentHealthy(shareCode)) {
+        call.respondText(
+            gson.toJson(mapOf("error" to "agent_offline")),
+            ContentType.Application.Json,
+            HttpStatusCode.ServiceUnavailable
+        )
+        return
+    }
+
+    val path = call.request.uri.substringBefore('?')
+    val bodyBytes = call.receiveStream().readBytes()
+    val request = HttpProxyRequest(
+        requestId = UUID.randomUUID().toString(),
+        method = call.request.httpMethod.value,
+        path = path,
+        query = call.request.queryString(),
+        headers = call.request.headers.entries().mapNotNull { entry ->
+            val name = entry.key
+            if (name.equals(HttpHeaders.Host, true) || name.equals(HttpHeaders.ContentLength, true)) {
+                return@mapNotNull null
+            }
+            name to entry.value.joinToString(", ")
+        }.toMap(),
+        body = if (bodyBytes.isNotEmpty()) Base64.getEncoder().encodeToString(bodyBytes) else null
+    )
+
+    val response = registry.dispatchHttpRequest(shareCode, request)
+    if (response == null) {
+        call.respondText(
+            gson.toJson(mapOf("error" to "relay_timeout")),
+            ContentType.Application.Json,
+            HttpStatusCode.GatewayTimeout
+        )
+        return
+    }
+
+    response.headers.forEach { (name, value) ->
+        if (!name.equals(HttpHeaders.ContentLength, true) &&
+            !name.equals(HttpHeaders.TransferEncoding, true) &&
+            !name.equals(HttpHeaders.Connection, true)) {
+            call.response.headers.append(name, value, safeOnly = false)
+        }
+    }
+
+    val contentType = response.headers.entries.firstOrNull { (name, _) ->
+        name.equals(HttpHeaders.ContentType, true)
+    }?.value?.let {
+        runCatching { ContentType.parse(it) }.getOrDefault(ContentType.Application.OctetStream)
+    } ?: ContentType.Application.OctetStream
+    val responseBody = response.body?.let { Base64.getDecoder().decode(it) } ?: ByteArray(0)
+
+    call.respondBytes(responseBody, contentType, HttpStatusCode.fromValue(response.status))
 }
 
 private fun buildRelayLandingPage(connectedCount: Int, shareCodes: List<String>): String {

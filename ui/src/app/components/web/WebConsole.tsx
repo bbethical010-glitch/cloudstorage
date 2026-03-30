@@ -97,31 +97,36 @@ async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> 
  * Hook for intelligent node status polling. 
  * Prevents flickering to 'offline' on single-request timeouts.
  */
-function useNodeStatus(shareCode: string, intervalMs = 5000) {
+function useNodeStatus(shareCode: string, enabled: boolean, intervalMs = 5000) {
   const [isOnline, setIsOnline] = useState(true);
   const [lastCheck, setLastCheck] = useState(Date.now());
   const failureCount = useRef(0);
+  const isOnlineRef = useRef(true);
   const MAX_FAILURES = 2;
 
+  useEffect(() => {
+    isOnlineRef.current = isOnline;
+  }, [isOnline]);
+
   const checkStatus = async () => {
-    if (!shareCode) return;
+    if (!enabled || !shareCode) return;
     try {
       const data = await fetchJson<{online: boolean}>(`/api/node/${shareCode}/status`);
       if (data.online) {
-        if (!isOnline) console.log("🟢 Node back online");
+        if (!isOnlineRef.current) console.log("🟢 Node back online");
         setIsOnline(true);
         failureCount.current = 0;
       } else {
         failureCount.current++;
         if (failureCount.current >= MAX_FAILURES) {
-          if (isOnline) console.warn("🔴 Node reported offline by registry");
+          if (isOnlineRef.current) console.warn("🔴 Node reported offline by registry");
           setIsOnline(false);
         }
       }
     } catch (err) {
       failureCount.current++;
       if (failureCount.current >= MAX_FAILURES) {
-        if (isOnline) console.error("💥 Node status check failed repeatedly", err);
+        if (isOnlineRef.current) console.error("💥 Node status check failed repeatedly", err);
         setIsOnline(false);
       }
     }
@@ -129,14 +134,16 @@ function useNodeStatus(shareCode: string, intervalMs = 5000) {
   };
 
   useEffect(() => {
-    if (!shareCode) return;
+    if (!enabled || !shareCode) return;
     checkStatus();
     const timer = setInterval(checkStatus, intervalMs);
     return () => clearInterval(timer);
-  }, [shareCode, intervalMs]);
+  }, [enabled, shareCode, intervalMs]);
 
   return { isOnline, checkStatus, lastCheck };
 }
+
+type LoadState = "idle" | "loading" | "ready" | "error";
 
 interface FileNode {
   id: string; // Used as the full uri
@@ -148,7 +155,6 @@ interface FileNode {
 }
 
 export function WebConsole() {
-  console.log("WEB_CONSOLE_RENDERED");
   const [files, setFiles] = useState<FileNode[]>([]);
   const [currentPath, setCurrentPath] = useState<string>("");
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
@@ -161,6 +167,9 @@ export function WebConsole() {
   const [sanitizedUploads, setSanitizedUploads] = useState<Record<string, string>>({});
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [storageStats, setStorageStats] = useState({ total: 0, used: 0, free: 0 });
+  const [storageStatus, setStorageStatus] = useState<LoadState>("idle");
+  const [storageError, setStorageError] = useState("");
+  const [filesError, setFilesError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [sortField, setSortField] = useState<"name" | "size" | "lastModified" | "type">("name");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
@@ -192,13 +201,11 @@ export function WebConsole() {
   const getRelayUrl = () => window.location.origin;
 
   const shareCode = getShareCode();
-  const { isOnline: isNodeOnline, checkStatus: refreshNodeStatus, lastCheck } = useNodeStatus(shareCode);
   const webrtc = useWebRTC({
     relayUrl: getRelayUrl(),
     shareCode: shareCode,
     enabled: !!shareCode,
   });
-  console.log("HOOK_RESULT", webrtc);
 
   const {
     connectionState: p2pState,
@@ -215,6 +222,8 @@ export function WebConsole() {
     p2pState === 'ice-gathering' ||
     p2pState === 'dc-opening' ||
     (p2pState === 'connected' && !isDataChannelReady);
+  const shouldPollRegistry = Boolean(shareCode) && !isDirectNodeOnline && !isRelayMode && !isP2PTransitioning;
+  const { isOnline: isNodeOnline, checkStatus: refreshNodeStatus, lastCheck } = useNodeStatus(shareCode, shouldPollRegistry);
   
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup' | 'none'>('none');
@@ -241,44 +250,18 @@ export function WebConsole() {
     setIsNodeOffline(!isNodeOnline);
   }, [isDirectNodeOnline, isNodeOnline, isRelayMode]);
 
-  useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        const data = await fetchJson<{hasAccount: boolean}>('/api/auth/status');
-        const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token');
-        const params = new URLSearchParams(window.location.hash.split('?')[1]);
-        const pwd = params.get('pwd') || token;
-
-        if (pwd) {
-          const verify = await fetch('/api/storage', { headers: { Authorization: `Bearer ${pwd}` } });
-          if (verify.ok) {
-            setIsAuthenticated(true);
-            setAuthMode('none');
-            return;
-          }
-        }
-
-        setIsAuthenticated(false);
-        setAuthMode(data.hasAccount ? 'login' : 'signup');
-      } catch (e) {
-        console.error("Auth check failed:", e);
-      }
-    };
-    checkAuth();
-  }, []);
-
   const SidebarContent = () => (
     <div className="flex flex-col h-full p-4">
-      <div className="mb-8 space-y-2">
+      <div className="console-upload-group mb-6 space-y-2">
          <Button 
           onClick={() => { fileInputRef.current?.click(); setIsMobileMenuOpen(false); }}
-          className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] h-11 rounded-xl shadow-lg shadow-blue-500/10 gap-2 font-bold transition-all"
+          className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] h-10 rounded-xl shadow-lg shadow-blue-500/10 gap-2 text-sm font-bold transition-all"
          >
            <Upload className="w-5 h-5" /> Upload File
          </Button>
          <Button 
           onClick={() => { folderInputRef.current?.click(); setIsMobileMenuOpen(false); }}
-          className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] h-11 rounded-xl shadow-lg shadow-blue-500/10 gap-2 font-bold transition-all"
+          className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] h-10 rounded-xl shadow-lg shadow-blue-500/10 gap-2 text-sm font-bold transition-all"
          >
            <Folder className="w-5 h-5 fill-white/20" /> Upload Folder
          </Button>
@@ -316,18 +299,31 @@ export function WebConsole() {
             ))}
           </div>
 
-          <div className="pt-6 border-t border-[#1F2937]">
-            <h4 className="text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] px-3 mb-3">Drive Health</h4>
-            <div className="px-3 space-y-4">
-              <div className="space-y-2">
-                 <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-[#9CA3AF]">
-                  <span>{storageStats.total > 0 ? `${formatSize(storageStats.used)} / ${formatSize(storageStats.total)}` : "Analyzing..."}</span>
-                  <span className="text-[#E5E7EB]">{storageStats.total > 0 ? Math.round((storageStats.used / storageStats.total) * 100) : 0}%</span>
-                </div>
-                <Progress value={storageStats.total > 0 ? (storageStats.used / storageStats.total) * 100 : 0} className="h-1.5 bg-[#1F2937]" />
-              </div>
-            </div>
-          </div>
+	          <div className="pt-6 border-t border-[#1F2937]">
+	            <h4 className="text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] px-3 mb-3">Drive Health</h4>
+	            <div className="px-3 space-y-4">
+	              <div className="space-y-2">
+	                 <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-[#9CA3AF]">
+	                  <span>
+                      {storageStatus === "error"
+                        ? "Error"
+                        : storageStats.total > 0
+                          ? `${formatSize(storageStats.used)} / ${formatSize(storageStats.total)}`
+                          : storageStatus === "loading"
+                            ? "Analyzing..."
+                            : "Waiting..."}
+                    </span>
+	                  <span className={storageStatus === "error" ? "text-red-400" : "text-[#E5E7EB]"}>
+                      {storageStats.total > 0 ? Math.round((storageStats.used / storageStats.total) * 100) : 0}%
+                    </span>
+	                </div>
+	                <Progress value={storageStats.total > 0 ? (storageStats.used / storageStats.total) * 100 : 0} className="h-1.5 bg-[#1F2937]" />
+                  {storageStatus === "error" && (
+                    <p className="text-[10px] leading-relaxed text-red-400">{storageError}</p>
+                  )}
+	              </div>
+	            </div>
+	          </div>
         </div>
       </ScrollArea>
     </div>
@@ -358,23 +354,25 @@ export function WebConsole() {
       return sortDirection === "asc" ? val : -val;
     });
 
-  const getHeaders = () => {
+  const getAuthToken = () => {
     const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token') || '';
     const params = new URLSearchParams(window.location.hash.split('?')[1]);
-    const pwd = params.get('pwd') || token;
-    return { 'Authorization': `Bearer ${pwd}` };
+    return params.get('pwd') || token;
+  };
+
+  const getHeaders = () => {
+    const pwd = getAuthToken();
+    return {
+      ...(pwd ? { Authorization: `Bearer ${pwd}` } : {}),
+      ...(shareCode ? { 'X-Share-Code': shareCode } : {}),
+    };
   };
 
   // ── WebRTC P2P Connection ──────────────────────────────────────────────
   // Establishes a direct peer-to-peer connection to the Android node.
-  if (!shareCode) {
-    console.error("NO SHARE CODE");
-  } else {
-    console.log("SHARE_CODE:", shareCode);
-  }
-
   const shouldUseP2PTransport = isDirectNodeOnline && p2pReady && Boolean(p2pTransport?.ready);
   const shouldShowOfflineState = isNodeOffline && !isDirectNodeOnline && !isRelayMode && !isP2PTransitioning;
+  const shouldLoadRemoteData = isDirectNodeOnline || isRelayMode;
   const connectionIndicator = useMemo(() => {
     if (isDirectNodeOnline) {
       return {
@@ -408,34 +406,63 @@ export function WebConsole() {
   }, [isDirectNodeOnline, isRelayMode, shouldShowOfflineState]);
 
   useEffect(() => {
-    if (isDirectNodeOnline || isRelayMode) {
+    if (shouldLoadRemoteData) {
       loadFiles(currentPath);
       loadStorageStats();
     }
-  }, [currentPath, activeTab, isDirectNodeOnline, isRelayMode]);
+  }, [currentPath, activeTab, shouldLoadRemoteData]);
 
   /**
    * Unified API fetch — uses P2P DataChannel when connected, falls back to relay.
    * This is the primary replacement for all fetch(getBaseUrl() + endpoint) calls.
    */
   const apiFetch = useCallback(async (endpoint: string, options: RequestInit = {}): Promise<Response | P2PResponse> => {
+    const headers = {
+      ...(options.headers as Record<string, string> | undefined),
+      ...(shareCode ? { 'X-Share-Code': shareCode } : {}),
+    };
+
     if (shouldUseP2PTransport && p2pTransport) {
       // Route through the P2P DataChannel — zero relay bandwidth
       return p2pTransport.fetch(endpoint, {
         method: options.method || 'GET',
-        headers: options.headers as Record<string, string> || {},
+        headers,
         body: options.body as string | null,
       });
     }
     // Fallback: route through the relay server
-    return fetch(`${getBaseUrl()}${endpoint}`, options);
-  }, [p2pTransport, shouldUseP2PTransport]);
+    return fetch(`${getBaseUrl()}${endpoint}`, { ...options, headers });
+  }, [p2pTransport, shareCode, shouldUseP2PTransport]);
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      const pwd = getAuthToken();
+      if (pwd) {
+        setIsAuthenticated(true);
+        setAuthMode('none');
+        return;
+      }
+
+      try {
+        const data = await fetchJson<{hasAccount: boolean}>('/api/auth/status', {
+          headers: shareCode ? { 'X-Share-Code': shareCode } : undefined,
+        });
+        setIsAuthenticated(false);
+        setAuthMode(data.hasAccount ? 'login' : 'signup');
+      } catch (e) {
+        console.error("Auth check failed:", e);
+        setIsAuthenticated(false);
+        setAuthMode('login');
+      }
+    };
+    checkAuth();
+  }, [shareCode]);
 
   useEffect(() => {
     let interval: any;
     let consecutiveFailures = 0;
     const checkStatus = async () => {
-      if (isDirectNodeOnline || isRelayMode) {
+      if (shouldLoadRemoteData) {
         consecutiveFailures = 0;
         setIsNodeOffline(false);
         return;
@@ -463,7 +490,7 @@ export function WebConsole() {
     checkStatus();
     interval = setInterval(checkStatus, 5000);
     return () => clearInterval(interval);
-  }, [apiFetch, isDirectNodeOnline, isRelayMode]);
+  }, [apiFetch, shouldLoadRemoteData]);
 
   const PreviewContent = () => (
     <AnimatePresence mode="wait">
@@ -491,7 +518,7 @@ export function WebConsole() {
             {(() => {
               const ext = selectedFile.name.split('.').pop()?.toLowerCase() || '';
               const pwd = new URLSearchParams(window.location.hash.split('?')[1]).get('pwd') || '';
-              const url = `${getBaseUrl()}/api/download?path=${encodeURIComponent(currentPath)}&file=${encodeURIComponent(selectedFile.name)}&pwd=${encodeURIComponent(pwd)}`;
+              const url = `${getBaseUrl()}/api/download?path=${encodeURIComponent(currentPath)}&file=${encodeURIComponent(selectedFile.name)}&pwd=${encodeURIComponent(pwd)}&shareCode=${encodeURIComponent(shareCode)}`;
               
               if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
                 return (
@@ -613,13 +640,31 @@ export function WebConsole() {
   );
 
   const loadStorageStats = async () => {
+    setStorageStatus("loading");
+    setStorageError("");
     try {
       const res = await apiFetch('/api/storage', { headers: getHeaders() as any });
-      if (res.ok) {
-        const text = await res.text();
-        if (text) setStorageStats(JSON.parse(text));
+      if (!res.ok) {
+        const message = `Storage stats failed (${res.status})`;
+        setStorageStatus("error");
+        setStorageError(message);
+        throw new Error(message);
       }
-    } catch {}
+
+      const text = await res.text();
+      if (!text) {
+        setStorageStats({ total: 0, used: 0, free: 0 });
+        setStorageStatus("ready");
+        return;
+      }
+
+      setStorageStats(JSON.parse(text));
+      setStorageStatus("ready");
+    } catch (error: any) {
+      const message = error?.message || "Failed to load storage stats";
+      setStorageStatus("error");
+      setStorageError(message);
+    }
   };
 
   const clearSelection = () => {
@@ -645,6 +690,7 @@ export function WebConsole() {
   const loadFiles = async (path: string) => {
     setIsRefreshing(true);
     setSelectedFile(null);
+    setFilesError("");
     clearSelection();
     try {
       const timestamp = Date.now();
@@ -660,21 +706,27 @@ export function WebConsole() {
             : 'Relay server is unavailable. Please try again in a moment.';
         toast.error(reason, { duration: 6000 });
         setFiles([]);
+        setFilesError(reason);
         return;
       }
 
       if (res.status === 401) {
-        toast.error("Unauthorized: Please provide a valid ?pwd= password.");
+        const message = "Unauthorized: Please provide a valid ?pwd= password.";
+        toast.error(message);
         setFiles([]);
+        setFilesError(message);
         return;
       }
-      if (!res.ok) throw new Error("Failed to load files");
+      if (!res.ok) throw new Error(`Failed to load files (${res.status})`);
       const text = await res.text();
       if (!text) { setFiles([]); return; }
       const data = JSON.parse(text);
       setFiles(Array.isArray(data) ? data : []);
     } catch (e: any) {
-      toast.error(e.message || "Failed to load directory");
+      const message = e.message || "Failed to load directory";
+      setFiles([]);
+      setFilesError(message);
+      toast.error(message);
     } finally {
       setIsRefreshing(false);
       loadStorageStats();
@@ -944,8 +996,8 @@ export function WebConsole() {
 
   const handleDownload = (file: FileNode) => {
     const url = file.isDirectory 
-        ? `${getBaseUrl()}/api/download_folder?path=${encodeURIComponent(file.path)}&folder=${encodeURIComponent(file.name)}`
-        : `${getBaseUrl()}/api/download?path=${encodeURIComponent(file.path)}&file=${encodeURIComponent(file.name)}`;
+        ? `${getBaseUrl()}/api/download_folder?path=${encodeURIComponent(file.path)}&folder=${encodeURIComponent(file.name)}&shareCode=${encodeURIComponent(shareCode)}`
+        : `${getBaseUrl()}/api/download?path=${encodeURIComponent(file.path)}&file=${encodeURIComponent(file.name)}&shareCode=${encodeURIComponent(shareCode)}`;
     
     // Create an invisible link to trigger the download natively
     const a = document.createElement('a');
@@ -1016,7 +1068,7 @@ export function WebConsole() {
       .filter(f => selectedFiles.has(f.id))
       .map(f => ({ path: currentPath, name: f.name }));
       
-    const url = `${getBaseUrl()}/api/download_bulk?items=${encodeURIComponent(JSON.stringify(items))}`;
+    const url = `${getBaseUrl()}/api/download_bulk?items=${encodeURIComponent(JSON.stringify(items))}&shareCode=${encodeURIComponent(shareCode)}`;
     
     const a = document.createElement('a');
     a.href = url;
@@ -1226,14 +1278,14 @@ export function WebConsole() {
             <Menu className="w-5 h-5" />
           </Button>
           <div className="flex items-center gap-3 group cursor-pointer shrink-0" onClick={() => { setActiveTab("Drive"); setCurrentPath(""); }}>
-            <div className="hidden md:flex w-8 h-8 bg-gradient-to-br from-[#2563EB] to-[#A855F7] rounded-lg items-center justify-center shadow-lg shadow-blue-500/10">
-              <Cloud className="w-5 h-5 text-white" />
-            </div>
-            <span className="font-bold tracking-tight text-lg hidden md:block">Easy Storage</span>
-            <div
-              className={`hidden md:flex items-center gap-1.5 rounded-full border px-2.5 py-1 ml-1 shrink-0 ${connectionIndicator.containerClassName}`}
-              title={isRelayMode ? "Direct P2P failed. Routing through relay." : undefined}
-            >
+	            <div className="hidden md:flex w-8 h-8 bg-gradient-to-br from-[#2563EB] to-[#A855F7] rounded-lg items-center justify-center shadow-lg shadow-blue-500/10">
+	              <Cloud className="w-5 h-5 text-white" />
+	            </div>
+	            <span className="font-bold tracking-tight text-lg hidden md:block">Easy Storage</span>
+	            <div
+	              className={`node-status-indicator hidden md:flex items-center gap-1.5 rounded-full border px-2.5 py-1 ml-1 ${connectionIndicator.containerClassName}`}
+	              title={isRelayMode ? "Direct P2P failed. Routing through relay." : undefined}
+	            >
               <div className={`w-2 h-2 rounded-full ${connectionIndicator.dotClassName}`} />
               <span className="text-[10px] font-bold uppercase tracking-wider">{connectionIndicator.label}</span>
             </div>
@@ -1402,9 +1454,9 @@ export function WebConsole() {
             )}
           </AnimatePresence>
 
-          <div className="flex flex-col h-full w-full">
-            {/* Toolbar */}
-            <div className="h-14 px-6 flex items-center justify-between border-b border-[#1F2937] bg-[#0B1220]/50 backdrop-blur-sm shrink-0">
+	          <div className="flex flex-col h-full w-full">
+	            {/* Toolbar */}
+	            <div className="h-14 px-6 flex items-center justify-between border-b border-[#1F2937] bg-[#0B1220]/50 backdrop-blur-sm shrink-0">
                 <div className="flex items-center gap-4">
                   {currentPath && (
                       <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg" onClick={navigateUp}>
@@ -1433,17 +1485,23 @@ export function WebConsole() {
                         <LayoutGrid className="w-3.5 h-3.5" />
                       </Button>
                    </div>
-                </div>
-            </div>
+	                </div>
+	            </div>
 
-            {viewMode === 'list' && (
-              <div className="hidden md:flex items-center px-4 py-3 border-b border-[#1F2937] text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] shrink-0">
-                <div style={{ width: 40 }} className="shrink-0" />
-                <div className="flex-1 min-w-[200px] flex items-center gap-2">Name</div>
-                <div style={{ width: 100 }} className="shrink-0">Size</div>
-                <div style={{ width: 140 }} className="shrink-0 text-right pr-10">Modified</div>
-              </div>
-            )}
+              {filesError && (
+                <div className="mx-4 mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+                  {filesError}
+                </div>
+              )}
+
+	            {viewMode === 'list' && (
+	              <div className="hidden md:flex items-center px-4 py-3 border-b border-[#1F2937] text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] shrink-0">
+	                <div style={{ width: 40 }} className="shrink-0" />
+	                <div className="flex-1 min-w-0 flex items-center gap-2">Name</div>
+	                <div style={{ width: 88 }} className="shrink-0">Size</div>
+	                <div style={{ width: 120 }} className="shrink-0 text-right pr-10">Modified</div>
+	              </div>
+	            )}
 
             <ScrollArea className="flex-1 w-full h-[0px]">
               {isRefreshing && files.length === 0 ? (
@@ -1490,10 +1548,10 @@ export function WebConsole() {
                           </div>
 
                           {/* SIZE column */}
-                          <div style={{ width: 100 }} className="hidden md:flex shrink-0 font-mono text-xs text-[#4B5563] items-center whitespace-nowrap">{formatSize(file.size)}</div>
+	                          <div style={{ width: 88 }} className="hidden md:flex shrink-0 font-mono text-xs text-[#4B5563] items-center whitespace-nowrap">{formatSize(file.size)}</div>
 
-                          {/* MODIFIED column */}
-                          <div style={{ width: 140 }} className="hidden md:flex shrink-0 text-[#4B5563] items-center justify-end text-xs font-mono whitespace-nowrap pr-10">{formatDate(file.lastModified)}</div>
+	                          {/* MODIFIED column */}
+	                          <div style={{ width: 120 }} className="hidden md:flex shrink-0 text-[#4B5563] items-center justify-end text-xs font-mono whitespace-nowrap pr-10">{formatDate(file.lastModified)}</div>
                           
                           {/* Actions menu */}
                           <div className="absolute right-1 md:right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1573,7 +1631,7 @@ export function WebConsole() {
       </main>
 
       {/* Info & Preview Panel - Desktop Only */}
-      <aside className="hidden lg:block border-l border-[#1F2937] overflow-y-auto shrink-0" style={{ minWidth: 320, width: 320 }}>
+	          <aside className="hidden xl:block border-l border-[#1F2937] overflow-y-auto shrink-0" style={{ minWidth: 280, width: 280 }}>
           <PreviewContent />
       </aside>
 
