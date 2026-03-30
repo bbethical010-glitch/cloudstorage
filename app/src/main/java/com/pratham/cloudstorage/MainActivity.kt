@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.os.Build
 import android.widget.Toast
 import android.webkit.WebChromeClient
+import android.webkit.ValueCallback
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
@@ -90,6 +91,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var preferences: SharedPreferences
 
     private lateinit var webView: WebView
+    private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
 
     private var selectedUri by mutableStateOf<Uri?>(null)
     private var shareCode by mutableStateOf("")
@@ -152,6 +154,29 @@ class MainActivity : ComponentActivity() {
             Toast.makeText(this, "Scanned: ${result.contents}", Toast.LENGTH_LONG).show()
         }
     }
+
+    private val filePickerLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val callback = fileChooserCallback
+            fileChooserCallback = null
+
+            if (callback == null) return@registerForActivityResult
+
+            if (result.resultCode != Activity.RESULT_OK) {
+                callback.onReceiveValue(null)
+                return@registerForActivityResult
+            }
+
+            val uris = mutableListOf<Uri>()
+            result.data?.data?.let { uris.add(it) }
+            result.data?.clipData?.let { clipData ->
+                for (index in 0 until clipData.itemCount) {
+                    clipData.getItemAt(index)?.uri?.let { uris.add(it) }
+                }
+            }
+
+            callback.onReceiveValue(uris.distinct().takeIf { it.isNotEmpty() }?.toTypedArray())
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -238,6 +263,29 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     return true
+                }
+
+                override fun onShowFileChooser(
+                    webView: WebView?,
+                    filePathCallback: ValueCallback<Array<Uri>>?,
+                    fileChooserParams: FileChooserParams?
+                ): Boolean {
+                    this@MainActivity.fileChooserCallback?.onReceiveValue(null)
+                    this@MainActivity.fileChooserCallback = filePathCallback
+
+                    return try {
+                        val chooserIntent = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "*/*"
+                            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                        }
+                        filePickerLauncher.launch(chooserIntent)
+                        true
+                    } catch (e: Exception) {
+                        this@MainActivity.fileChooserCallback = null
+                        Toast.makeText(this@MainActivity, "Unable to open file picker", Toast.LENGTH_LONG).show()
+                        false
+                    }
                 }
             }
             

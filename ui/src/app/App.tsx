@@ -294,7 +294,7 @@ function Main() {
 
   return (
     <AppStateContext.Provider value={contextValue}>
-      <div className="w-full max-w-md mx-auto md:max-w-xl lg:max-w-2xl min-h-screen bg-[#0B1220] shadow-2xl shadow-blue-900/5">
+      <div className="w-full max-w-md mx-auto md:max-w-xl lg:max-w-2xl h-[100dvh] overflow-y-auto overflow-x-hidden overscroll-y-contain bg-[#0B1220] shadow-2xl shadow-blue-900/5">
         <RouterProvider router={router} />
       </div>
     </AppStateContext.Provider>

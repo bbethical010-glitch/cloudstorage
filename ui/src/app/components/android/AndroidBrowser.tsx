@@ -158,12 +158,33 @@ export function AndroidBrowser() {
           });
 
           xhr.onload = () => {
-            if (xhr.status === 200) resolve();
-            else reject(new Error(`Server error ${xhr.status}`));
+            let payload: any = {};
+            try {
+              payload = JSON.parse(xhr.responseText || "{}");
+            } catch {
+              payload = {};
+            }
+
+            if (xhr.status === 200 && payload.success !== false) {
+              resolve();
+            } else {
+              reject(new Error(payload.error || `Server error ${xhr.status}`));
+            }
           };
           xhr.onerror = () => reject(new Error('Network error'));
           xhr.send(chunk);
         });
+      }
+
+      const completeRes = await fetch(`http://127.0.0.1:8080/api/upload_complete?path=${encodeURIComponent(currentPath)}&filename=${encodeURIComponent(file.name)}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+
+      if (!completeRes.ok) {
+        throw new Error(`Finalize failed (${completeRes.status})`);
       }
 
       setUploadProgress(null);

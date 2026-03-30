@@ -1669,7 +1669,7 @@ export function WebConsole() {
       </main>
 
       {/* Info & Preview Panel - Desktop Only */}
-      <aside className="console-preview hidden xl:block">
+      <aside className="console-preview hidden lg:block">
           <PreviewContent />
       </aside>
       </div>
