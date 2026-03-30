@@ -259,6 +259,12 @@ export function WebConsole() {
     return `${url.pathname}${url.search}${url.hash}`;
   }, [shareCode]);
 
+  const getFileKindLabel = useCallback((file: FileNode) => {
+    if (file.isDirectory) return "Folder";
+    const ext = file.name.split('.').pop()?.toUpperCase();
+    return ext || "File";
+  }, []);
+
   useEffect(() => {
     const root = document.documentElement;
     if (theme === "light") root.classList.add("light");
@@ -294,35 +300,43 @@ export function WebConsole() {
   }, [buildApiUrl, getHeaders]);
 
   const SidebarContent = () => (
-    <div className="flex flex-col h-full p-4">
-      <div className="mb-8 space-y-2">
+    <div className="flex flex-col h-full px-4 py-5 gap-5">
+      <div className="console-sidebar-panel space-y-3">
+        <div className="px-1">
+          <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-[#4B5563]">Actions</p>
+          <h3 className="mt-1 text-sm font-semibold text-white">Manage Your Drive</h3>
+        </div>
+        <div className="space-y-2">
          <Button 
           onClick={() => { fileInputRef.current?.click(); setIsMobileMenuOpen(false); }}
-          className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] h-11 rounded-xl shadow-lg shadow-blue-500/10 gap-2 font-bold transition-all"
+          className="w-full justify-start bg-[#2563EB] hover:bg-[#1d4ed8] h-10 rounded-2xl shadow-lg shadow-blue-500/10 gap-2.5 font-semibold transition-all"
          >
-           <Upload className="w-5 h-5" /> Upload File
+           <Upload className="w-4 h-4" /> Upload File
          </Button>
          <Button 
           onClick={() => { folderInputRef.current?.click(); setIsMobileMenuOpen(false); }}
-          className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] h-11 rounded-xl shadow-lg shadow-blue-500/10 gap-2 font-bold transition-all"
+          className="w-full justify-start bg-[#2563EB] hover:bg-[#1d4ed8] h-10 rounded-2xl shadow-lg shadow-blue-500/10 gap-2.5 font-semibold transition-all"
          >
-           <Folder className="w-5 h-5 fill-white/20" /> Upload Folder
+           <Folder className="w-4 h-4 fill-white/20" /> Upload Folder
          </Button>
          <Button 
           variant="outline"
           onClick={() => { handleCreateFolder(); setIsMobileMenuOpen(false); }}
-          className="w-full bg-transparent border-[#1F2937] hover:bg-[#111827] h-10 rounded-xl gap-2 font-bold transition-all"
+          className="w-full justify-start bg-[#0B1220] border-[#233047] text-[#D7E0EC] hover:bg-[#111827] h-10 rounded-2xl gap-2.5 font-semibold transition-all"
          >
            <Plus className="w-4 h-4" /> New Folder
          </Button>
          <input type="file" ref={fileInputRef} className="hidden" multiple onChange={handleUpload} />
          <input type="file" ref={folderInputRef} className="hidden" multiple {...{webkitdirectory: "true", directory: "true"} as any} onChange={handleUpload} />
+        </div>
       </div>
 
       <ScrollArea className="flex-1 -mx-2 px-2">
-        <div className="space-y-6">
-          <div className="space-y-1">
-            <h4 className="text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] px-3 mb-3">Main</h4>
+        <div className="space-y-4">
+          <div className="console-sidebar-panel space-y-2">
+            <div className="px-1 pb-1">
+              <h4 className="text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.24em]">Navigation</h4>
+            </div>
             {[
               { label: "Drive", icon: HardDrive },
               { label: "Recent", icon: Clock },
@@ -332,43 +346,66 @@ export function WebConsole() {
               <button 
                 key={i}
                 onClick={() => { setActiveTab(item.label); setCurrentPath(""); setIsMobileMenuOpen(false); }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                  activeTab === item.label ? 'bg-[#2563EB]/10 text-[#2563EB]' : 'text-[#9CA3AF] hover:bg-[#111827] hover:text-[#E5E7EB]'
+                className={`w-full flex items-center gap-3 px-3 py-3 rounded-2xl text-sm font-medium transition-all ${
+                  activeTab === item.label
+                    ? 'bg-[#12274B] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
+                    : 'text-[#9CA3AF] hover:bg-[#111827] hover:text-[#E5E7EB]'
                 }`}
               >
-                <item.icon className="w-4 h-4" />
-                {item.label}
+                <span className={`flex h-8 w-8 items-center justify-center rounded-xl border ${
+                  activeTab === item.label
+                    ? 'border-[#2563EB]/40 bg-[#2563EB]/15 text-[#60A5FA]'
+                    : 'border-[#1F2937] bg-[#0B1220] text-[#6B7280]'
+                }`}>
+                  <item.icon className="w-4 h-4" />
+                </span>
+                <span className="flex-1 text-left">{item.label}</span>
+                {activeTab === item.label && <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#60A5FA]">Open</span>}
               </button>
             ))}
           </div>
 
-          <div className="pt-6 border-t border-[#1F2937]">
-            <h4 className="text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] px-3 mb-3">Drive Health</h4>
-            <div className="px-3 space-y-4">
-              <div className="space-y-2">
-                 <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-[#9CA3AF]">
-                  <span>
+          <div className="console-sidebar-panel space-y-3">
+            <div className="px-1">
+              <h4 className="text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.24em]">Storage</h4>
+              <p className="mt-1 text-sm font-semibold text-white">Drive Health</p>
+            </div>
+            <div className="px-1 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-white">
                     {driveHealthStatus === "error"
-                      ? "Error"
+                      ? "Storage Error"
                       : storageStats.total > 0
-                        ? `${formatSize(storageStats.used)} / ${formatSize(storageStats.total)}`
+                        ? `${formatSize(storageStats.used)} used of ${formatSize(storageStats.total)}`
                         : driveHealthStatus === "loading"
                           ? "Analyzing..."
                           : "Waiting..."}
-                  </span>
-                  <span className={driveHealthStatus === "error" ? "text-red-400" : "text-[#E5E7EB]"}>
+                  </p>
+                  <p className="mt-1 text-xs text-[#7C8798]">
+                    {driveHealthStatus === "error"
+                      ? driveHealthError || "Unable to read current storage health."
+                      : storageStats.total > 0
+                        ? `${formatSize(storageStats.free)} free space available`
+                        : "Storage statistics will appear here once the node responds."}
+                  </p>
+                </div>
+                <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] ${
+                  driveHealthStatus === "error"
+                    ? "bg-red-500/10 text-red-400"
+                    : "bg-[#111827] text-[#E5E7EB]"
+                }`}>
                     {driveHealthStatus === "error"
                       ? "ERROR"
                       : storageStats.total > 0
                         ? `${Math.round((storageStats.used / storageStats.total) * 100)}%`
-                        : "0%"}
-                  </span>
-                </div>
-                <Progress value={storageStats.total > 0 ? (storageStats.used / storageStats.total) * 100 : 0} className="h-1.5 bg-[#1F2937]" />
-                {driveHealthStatus === "error" && (
-                  <p className="text-[11px] leading-relaxed text-red-400">{driveHealthError}</p>
-                )}
+                        : "--"}
+                </span>
               </div>
+              <Progress value={storageStats.total > 0 ? (storageStats.used / storageStats.total) * 100 : 0} className="console-storage-progress h-2 bg-[#111827]" />
+              {driveHealthStatus === "error" && (
+                <p className="text-[11px] leading-relaxed text-red-400">{driveHealthError}</p>
+              )}
             </div>
           </div>
         </div>
@@ -1494,30 +1531,40 @@ export function WebConsole() {
 
           <div className="flex flex-col h-full w-full">
             {/* Toolbar */}
-            <div className="h-14 px-6 flex items-center justify-between border-b border-[#1F2937] bg-[#0B1220]/50 backdrop-blur-sm shrink-0">
-                <div className="flex items-center gap-4">
+            <div className="px-6 lg:px-8 py-5 flex items-center justify-between border-b border-[#1F2937] bg-[#0B1220]/70 backdrop-blur-sm shrink-0">
+                <div className="flex items-center gap-4 min-w-0">
                   {currentPath && (
                       <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg" onClick={navigateUp}>
                           <ChevronUp className="w-4 h-4"/>
                       </Button>
                   )}
-                  <h2 className="font-bold text-lg flex items-center gap-4">
-                      {activeTab} {isRefreshing && <SquareLoader size="sm" />}
-                  </h2>
-                  <Badge variant="outline" className="text-[10px] font-mono py-0 text-[#9CA3AF] border-[#1F2937]">{files.length} items</Badge>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-3">
+                      <h2 className="text-2xl font-bold tracking-tight text-white flex items-center gap-3">
+                        {activeTab}
+                        {isRefreshing && <SquareLoader size="sm" />}
+                      </h2>
+                      <Badge variant="outline" className="text-[10px] font-mono py-0.5 px-2.5 text-[#9CA3AF] border-[#1F2937] bg-[#111827]">
+                        {files.length} items
+                      </Badge>
+                    </div>
+                    <p className="mt-1 text-sm text-[#7C8798] hidden md:block">
+                      Browse, preview, and organize your storage with clearer separation between folders and files.
+                    </p>
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
-                   <div className="bg-[#111827] p-1 rounded-xl border border-[#1F2937] flex">
+                   <div className="bg-[#111827] p-1 rounded-2xl border border-[#1F2937] flex shadow-[0_10px_30px_rgba(0,0,0,0.18)]">
                       <Button 
                         variant="ghost" size="icon" 
-                        className={`h-7 w-7 rounded-sm ${viewMode === 'list' ? 'bg-[#1F2937] text-white' : 'text-[#4B5563]'}`}
+                        className={`h-8 w-8 rounded-xl ${viewMode === 'list' ? 'bg-[#1F2937] text-white' : 'text-[#4B5563]'}`}
                         onClick={() => setViewMode('list')}
                       >
                         <List className="w-3.5 h-3.5" />
                       </Button>
                       <Button 
                         variant="ghost" size="icon" 
-                        className={`h-7 w-7 rounded-sm ${viewMode === 'grid' ? 'bg-[#1F2937] text-white' : 'text-[#4B5563]'}`}
+                        className={`h-8 w-8 rounded-xl ${viewMode === 'grid' ? 'bg-[#1F2937] text-white' : 'text-[#4B5563]'}`}
                         onClick={() => setViewMode('grid')}
                       >
                         <LayoutGrid className="w-3.5 h-3.5" />
@@ -1527,7 +1574,7 @@ export function WebConsole() {
             </div>
 
             {viewMode === 'list' && (
-              <div className="hidden md:flex items-center px-4 py-3 border-b border-[#1F2937] text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] shrink-0">
+              <div className="hidden md:flex items-center px-6 lg:px-8 py-3 border-b border-[#1F2937] text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.24em] shrink-0 bg-[#0D1420]">
                 <div style={{ width: 40 }} className="shrink-0" />
                 <div className="flex-1 min-w-[200px] flex items-center gap-2">Name</div>
                 <div style={{ width: 100 }} className="shrink-0">Size</div>
@@ -1559,15 +1606,17 @@ export function WebConsole() {
                     </p>
                  </div>
               ) : (
-                  <div className={viewMode === 'list' ? "divide-y divide-[#1F2937]/50" : "grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-4 p-4"}>
+                  <div className={viewMode === 'list' ? "px-4 lg:px-6 py-4 space-y-2.5" : "grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-4 p-4 lg:p-6"}>
                     {filteredAndSortedFiles.map((file, index) => (
                       viewMode === 'list' ? (
                         <button
                           key={file.id}
                           onClick={() => file.isDirectory ? navigateTo(file.path) : setSelectedFile(file)}
-                          className={`flex items-center w-full px-4 py-3 text-left text-sm transition-all relative group min-h-[48px] ${
-                            selectedFile?.id === file.id ? 'bg-[#2563EB]/5' : 'hover:bg-[#111827]/40'
-                          } ${selectedFiles.has(file.id) ? 'bg-[#2563EB]/10' : ''}`}
+                          className={`console-file-row flex items-center w-full px-4 py-4 text-left text-sm transition-all relative group min-h-[72px] rounded-2xl border ${
+                            file.isDirectory ? 'console-file-row-folder' : 'console-file-row-file'
+                          } ${
+                            selectedFile?.id === file.id ? 'bg-[#2563EB]/8 border-[#2563EB]/30 shadow-[0_18px_40px_rgba(37,99,235,0.08)]' : 'hover:bg-[#111827]/80 hover:border-[#22324a]'
+                          } ${selectedFiles.has(file.id) ? 'bg-[#2563EB]/10 border-[#2563EB]/25' : ''}`}
                         >
                           {/* Checkbox */}
                           <div style={{ width: 40 }} className="shrink-0 flex items-center justify-center" onClick={e => e.stopPropagation()}>
@@ -1578,18 +1627,40 @@ export function WebConsole() {
                           {selectedFile?.id === file.id && <div className="absolute left-0 top-1.5 bottom-1.5 w-1 bg-[#2563EB] rounded-r-full" />}
                           
                           {/* NAME column */}
-                          <div className="flex-1 min-w-0 flex items-center gap-3 pr-4">
-                            <div className="transition-transform group-hover:scale-110 duration-200 shrink-0">
+                          <div className="flex-1 min-w-0 flex items-center gap-3.5 pr-4">
+                            <div className={`transition-transform group-hover:scale-105 duration-200 shrink-0 flex h-11 w-11 items-center justify-center rounded-2xl border ${
+                              file.isDirectory
+                                ? 'bg-[#0F2342] border-[#1E3A66]'
+                                : 'bg-[#101826] border-[#1F2937]'
+                            }`}>
                                {getFileIcon(file.name, file.isDirectory, "w-5 h-5")}
                             </div>
-                            <span className="truncate font-medium group-hover:text-[#2563EB] transition-colors">{file.name}</span>
+                            <div className="min-w-0">
+                              <div className="truncate font-semibold text-[15px] text-[#E5E7EB] group-hover:text-white transition-colors">
+                                {file.name}
+                              </div>
+                              <div className="mt-1 flex items-center gap-2 text-xs text-[#7C8798]">
+                                <span className={`rounded-full px-2 py-0.5 font-semibold uppercase tracking-[0.14em] ${
+                                  file.isDirectory
+                                    ? 'bg-[#2563EB]/12 text-[#60A5FA]'
+                                    : 'bg-[#161E2C] text-[#AAB5C4]'
+                                }`}>
+                                  {getFileKindLabel(file)}
+                                </span>
+                                {!file.isDirectory && (
+                                  <span className="truncate">
+                                    Ready to preview or download
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </div>
 
                           {/* SIZE column */}
-                          <div style={{ width: 100 }} className="hidden md:flex shrink-0 font-mono text-xs text-[#4B5563] items-center whitespace-nowrap">{formatSize(file.size)}</div>
+                          <div style={{ width: 100 }} className="hidden md:flex shrink-0 font-mono text-xs text-[#7C8798] items-center whitespace-nowrap">{formatSize(file.size)}</div>
 
                           {/* MODIFIED column */}
-                          <div style={{ width: 140 }} className="hidden md:flex shrink-0 text-[#4B5563] items-center justify-end text-xs font-mono whitespace-nowrap pr-10">{formatDate(file.lastModified)}</div>
+                          <div style={{ width: 140 }} className="hidden md:flex shrink-0 text-[#7C8798] items-center justify-end text-xs font-mono whitespace-nowrap pr-10">{formatDate(file.lastModified)}</div>
                           
                           {/* Actions menu */}
                           <div className="absolute right-1 md:right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1612,7 +1683,7 @@ export function WebConsole() {
                         <Card 
                           key={file.id} 
                           onClick={() => file.isDirectory ? navigateTo(file.path) : setSelectedFile(file)}
-                          className={`p-4 bg-[#111827]/40 border-[#1F2937] hover:border-[#2563EB]/50 transition-all cursor-pointer flex flex-col items-center justify-center group relative min-h-[140px] ${
+                          className={`p-4 bg-[#111827]/55 border-[#1F2937] hover:border-[#2563EB]/40 hover:-translate-y-0.5 transition-all cursor-pointer flex flex-col items-center justify-center group relative min-h-[156px] rounded-[24px] ${
                             selectedFile?.id === file.id ? 'ring-1 ring-[#2563EB] bg-[#2563EB]/5' : ''
                           } ${selectedFiles.has(file.id) ? 'ring-1 ring-[#2563EB] bg-[#2563EB]/10' : ''}`}
                         >
@@ -1625,7 +1696,14 @@ export function WebConsole() {
                             {getFileIcon(file.name, file.isDirectory, "w-8 h-8")}
                           </div>
                           <span className="text-[11px] font-medium w-full text-center px-1 break-words line-clamp-2 leading-tight">{file.name}</span>
-                          <p className="text-[9px] text-[#4B5563] mt-1 font-mono uppercase tracking-widest shrink-0">{formatSize(file.size)}</p>
+                          <div className="mt-2 flex flex-col items-center gap-1">
+                            <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.18em] ${
+                              file.isDirectory ? 'bg-[#2563EB]/12 text-[#60A5FA]' : 'bg-[#161E2C] text-[#AAB5C4]'
+                            }`}>
+                              {getFileKindLabel(file)}
+                            </span>
+                            <p className="text-[9px] text-[#4B5563] font-mono uppercase tracking-widest shrink-0">{formatSize(file.size)}</p>
+                          </div>
                         </Card>
                       )
                     ))}
