@@ -45,7 +45,7 @@ fun Application.relayModule() {
     install(WebSockets) {
         pingPeriod = Duration.ofSeconds(20)
         timeout = Duration.ofSeconds(60)
-        maxFrameSize = 512 * 1024L
+        maxFrameSize = 8 * 1024 * 1024L
     }
 
     val registry = SignalingRegistry()

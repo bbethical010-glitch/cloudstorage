@@ -59,7 +59,7 @@ class RelayTunnelClient(
 
     private val relayClient = HttpClient(OkHttp) {
         install(WebSockets) {
-            maxFrameSize = 512 * 1024L
+            maxFrameSize = 8 * 1024 * 1024L
         }
         engine {
             config {

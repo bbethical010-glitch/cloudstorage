@@ -221,6 +221,7 @@ class WebRTCPeer(
         dc.registerObserver(object : DataChannel.Observer {
             // Buffer for assembling upload chunks
             private val uploadBuffers = ConcurrentHashMap<String, java.io.ByteArrayOutputStream>()
+            private val uploadRequests = ConcurrentHashMap<String, Map<*, *>>()
 
             override fun onMessage(buffer: DataChannel.Buffer) {
                 try {
@@ -252,13 +253,17 @@ class WebRTCPeer(
                     "upload-start" -> {
                         // Begin accumulating upload chunks
                         uploadBuffers[reqId] = java.io.ByteArrayOutputStream()
+                        uploadRequests[reqId] = msg
                         Log.d(TAG, "[DC_DEBUG] Upload started: $reqId")
                     }
                     "upload-end" -> {
                         // Upload complete — forward accumulated body to local server
                         kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                             val body = uploadBuffers.remove(reqId)?.toByteArray() ?: ByteArray(0)
-                            forwardUploadToLocalServer(dc, msg, body)
+                            val mergedRequest = LinkedHashMap<Any?, Any?>()
+                            uploadRequests.remove(reqId)?.forEach { (key, value) -> mergedRequest[key] = value }
+                            msg.forEach { (key, value) -> mergedRequest[key] = value }
+                            forwardUploadToLocalServer(dc, mergedRequest, body)
                         }
                     }
                 }

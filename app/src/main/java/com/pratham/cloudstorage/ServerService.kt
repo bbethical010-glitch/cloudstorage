@@ -940,17 +940,30 @@ class ServerService : Service() {
                                 }
 
                                 val existingDoc = findFileReliable(targetDir, finalFileName)
-                                var existingUri: Uri? = existingDoc?.uri
+                                if (existingDoc != null && existingDoc.isDirectory) {
+                                    return@post call.respondJson(false, "Path conflict: '$finalFileName' is a directory", "PATH_CONFLICT")
+                                }
+
+                                val mimeType = android.webkit.MimeTypeMap.getSingleton()
+                                    .getMimeTypeFromExtension(finalFileName.substringAfterLast('.', ""))
+                                    ?: "application/octet-stream"
 
                                 val fileUri = if (chunkIndex == 0) {
-                                    if (existingUri != null) {
-                                        android.provider.DocumentsContract.deleteDocument(contentResolver, existingUri)
+                                    existingDoc?.uri ?: run {
+                                        val createdDoc = targetDir.createFile(mimeType, finalFileName)
+                                            ?: android.provider.DocumentsContract.createDocument(
+                                                contentResolver,
+                                                targetDir.uri,
+                                                mimeType,
+                                                finalFileName
+                                            )?.let { createdUri ->
+                                                DocumentFile.fromSingleUri(applicationContext, createdUri)
+                                            }
+
+                                        createdDoc?.uri ?: throw Exception("Failed to create file")
                                     }
-                                    val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(finalFileName.substringAfterLast('.', "")) ?: "application/octet-stream"
-                                    val newFileDoc = targetDir.createFile(mimeType, finalFileName)
-                                    newFileDoc?.uri ?: throw Exception("Failed to create file")
                                 } else {
-                                    existingUri ?: throw Exception("File not found for subsequent chunk")
+                                    existingDoc?.uri ?: throw Exception("File not found for subsequent chunk")
                                 }
 
                                 // 3. Read the chunk bytes into memory (chunkSize is ~5MB)
@@ -961,8 +974,12 @@ class ServerService : Service() {
                                 synchronized(fileLocks.getOrPut(lockKey) { Any() }) {
                                     contentResolver.openFileDescriptor(fileUri, "rw")?.use { pfd ->
                                         java.io.FileOutputStream(pfd.fileDescriptor).channel.use { channel ->
+                                            if (chunkIndex == 0) {
+                                                channel.truncate(0)
+                                            }
                                             channel.position(chunkIndex.toLong() * chunkSize)
                                             channel.write(java.nio.ByteBuffer.wrap(byteArray))
+                                            channel.force(true)
                                         }
                                     } ?: throw Exception("Failed to open file descriptor for writing")
                                 }
