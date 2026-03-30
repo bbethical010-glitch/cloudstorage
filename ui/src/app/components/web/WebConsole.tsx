@@ -42,7 +42,11 @@ import {
   ArrowLeft,
   Sun,
   Moon,
-  RefreshCw
+  RefreshCw,
+  Github,
+  Twitter,
+  Linkedin,
+  Youtube
 } from "lucide-react";
 import { Card } from "../ui/card";
 import { Button } from "../ui/button";
@@ -97,53 +101,66 @@ async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> 
  * Hook for intelligent node status polling. 
  * Prevents flickering to 'offline' on single-request timeouts.
  */
-function useNodeStatus(shareCode: string, enabled: boolean, intervalMs = 5000) {
+function useNodeStatus(shareCode: string, intervalMs = 5000) {
   const [isOnline, setIsOnline] = useState(true);
   const [lastCheck, setLastCheck] = useState(Date.now());
   const failureCount = useRef(0);
-  const isOnlineRef = useRef(true);
+  const onlineRef = useRef(true);
   const MAX_FAILURES = 2;
 
-  useEffect(() => {
-    isOnlineRef.current = isOnline;
-  }, [isOnline]);
+  const checkStatus = useCallback(async (forceTimestampUpdate = false) => {
+    if (!shareCode) return;
+    const checkedAt = Date.now();
+    let nextOnline = onlineRef.current;
 
-  const checkStatus = async () => {
-    if (!enabled || !shareCode) return;
     try {
       const data = await fetchJson<{online: boolean}>(`/api/node/${shareCode}/status`);
       if (data.online) {
-        if (!isOnlineRef.current) console.log("🟢 Node back online");
-        setIsOnline(true);
+        nextOnline = true;
         failureCount.current = 0;
       } else {
         failureCount.current++;
         if (failureCount.current >= MAX_FAILURES) {
-          if (isOnlineRef.current) console.warn("🔴 Node reported offline by registry");
-          setIsOnline(false);
+          nextOnline = false;
         }
       }
     } catch (err) {
       failureCount.current++;
       if (failureCount.current >= MAX_FAILURES) {
-        if (isOnlineRef.current) console.error("💥 Node status check failed repeatedly", err);
-        setIsOnline(false);
+        if (onlineRef.current) {
+          console.error("Node status check failed repeatedly", err);
+        }
+        nextOnline = false;
       }
     }
-    setLastCheck(Date.now());
-  };
+
+    if (nextOnline !== onlineRef.current) {
+      onlineRef.current = nextOnline;
+      setIsOnline(nextOnline);
+      setLastCheck(checkedAt);
+      return;
+    }
+
+    if (forceTimestampUpdate || !nextOnline) {
+      setLastCheck(checkedAt);
+    }
+  }, [shareCode]);
 
   useEffect(() => {
-    if (!enabled || !shareCode) return;
-    checkStatus();
-    const timer = setInterval(checkStatus, intervalMs);
+    if (!shareCode) return;
+    void checkStatus(true);
+    const timer = setInterval(() => {
+      void checkStatus();
+    }, intervalMs);
     return () => clearInterval(timer);
-  }, [enabled, shareCode, intervalMs]);
+  }, [checkStatus, intervalMs, shareCode]);
 
-  return { isOnline, checkStatus, lastCheck };
+  return {
+    isOnline,
+    checkStatus: () => checkStatus(true),
+    lastCheck,
+  };
 }
-
-type LoadState = "idle" | "loading" | "ready" | "error";
 
 interface FileNode {
   id: string; // Used as the full uri
@@ -154,7 +171,19 @@ interface FileNode {
   lastModified: number;
 }
 
+const SquareLoader = ({ size = "md", color = "var(--accent)" }: { size?: "sm" | "md" | "lg", color?: string }) => {
+  const scale = size === "sm" ? 0.3 : size === "lg" ? 1.2 : 0.8;
+  return (
+    <div className="premium-loader" style={{ transform: `rotate(45deg) scale(${scale})`, opacity: 0.8 }}>
+      {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+        <div key={i} className="loader-square" style={{ backgroundColor: color }} />
+      ))}
+    </div>
+  );
+};
+
 export function WebConsole() {
+  console.log("WEB_CONSOLE_RENDERED");
   const [files, setFiles] = useState<FileNode[]>([]);
   const [currentPath, setCurrentPath] = useState<string>("");
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
@@ -167,8 +196,8 @@ export function WebConsole() {
   const [sanitizedUploads, setSanitizedUploads] = useState<Record<string, string>>({});
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [storageStats, setStorageStats] = useState({ total: 0, used: 0, free: 0 });
-  const [storageStatus, setStorageStatus] = useState<LoadState>("idle");
-  const [storageError, setStorageError] = useState("");
+  const [driveHealthStatus, setDriveHealthStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [driveHealthError, setDriveHealthError] = useState("");
   const [filesError, setFilesError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [sortField, setSortField] = useState<"name" | "size" | "lastModified" | "type">("name");
@@ -201,29 +230,7 @@ export function WebConsole() {
   const getRelayUrl = () => window.location.origin;
 
   const shareCode = getShareCode();
-  const webrtc = useWebRTC({
-    relayUrl: getRelayUrl(),
-    shareCode: shareCode,
-    enabled: !!shareCode,
-  });
-
-  const {
-    connectionState: p2pState,
-    transport: p2pTransport,
-    isReady: p2pReady,
-    isDataChannelReady,
-    reconnect: p2pReconnect,
-  } = webrtc;
-  const isDirectNodeOnline = p2pState === 'connected' && isDataChannelReady;
-  const isRelayMode = p2pState === 'fallback';
-  const isP2PTransitioning =
-    p2pState === 'connecting' ||
-    p2pState === 'signaling' ||
-    p2pState === 'ice-gathering' ||
-    p2pState === 'dc-opening' ||
-    (p2pState === 'connected' && !isDataChannelReady);
-  const shouldPollRegistry = Boolean(shareCode) && !isDirectNodeOnline && !isRelayMode && !isP2PTransitioning;
-  const { isOnline: isNodeOnline, checkStatus: refreshNodeStatus, lastCheck } = useNodeStatus(shareCode, shouldPollRegistry);
+  const { isOnline: isNodeOnline, checkStatus: refreshNodeStatus, lastCheck } = useNodeStatus(shareCode);
   
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup' | 'none'>('none');
@@ -233,6 +240,22 @@ export function WebConsole() {
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     return (localStorage.getItem("cloud_storage_theme") as "dark" | "light") || "dark";
   });
+  const getHeaders = useCallback(() => {
+    const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token') || '';
+    const params = new URLSearchParams(window.location.hash.split('?')[1]);
+    const pwd = params.get('pwd') || token;
+    return {
+      'Authorization': `Bearer ${pwd}`,
+      ...(shareCode ? { 'X-Node-Id': shareCode } : {}),
+    };
+  }, [shareCode]);
+  const buildApiUrl = useCallback((endpoint: string) => {
+    const url = new URL(`${getBaseUrl()}${endpoint}`, window.location.origin);
+    if (shareCode && url.pathname.startsWith('/api/')) {
+      url.searchParams.set('nodeId', shareCode);
+    }
+    return `${url.pathname}${url.search}${url.hash}`;
+  }, [shareCode]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -241,27 +264,45 @@ export function WebConsole() {
     localStorage.setItem("cloud_storage_theme", theme);
   }, [theme]);
 
-  useEffect(() => {
-    if (isDirectNodeOnline || isRelayMode) {
-      setIsNodeOffline(false);
-      return;
-    }
+  /* logic moved below to use webrtc hook status */
 
-    setIsNodeOffline(!isNodeOnline);
-  }, [isDirectNodeOnline, isNodeOnline, isRelayMode]);
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const data = await fetchJson<{hasAccount: boolean}>(buildApiUrl('/api/auth/status'));
+        const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token');
+        const params = new URLSearchParams(window.location.hash.split('?')[1]);
+        const pwd = params.get('pwd') || token;
+
+        if (pwd) {
+          const verify = await fetch(buildApiUrl('/api/storage'), { headers: getHeaders() });
+          if (verify.ok) {
+            setIsAuthenticated(true);
+            setAuthMode('none');
+            return;
+          }
+        }
+        setIsAuthenticated(false);
+        setAuthMode(data.hasAccount ? 'login' : 'signup');
+      } catch (e) {
+        console.error("Auth check failed:", e);
+      }
+    };
+    void checkAuth();
+  }, [buildApiUrl, getHeaders]);
 
   const SidebarContent = () => (
     <div className="flex flex-col h-full p-4">
-      <div className="console-upload-group mb-6 space-y-2">
+      <div className="mb-8 space-y-2">
          <Button 
           onClick={() => { fileInputRef.current?.click(); setIsMobileMenuOpen(false); }}
-          className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] h-10 rounded-xl shadow-lg shadow-blue-500/10 gap-2 text-sm font-bold transition-all"
+          className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] h-11 rounded-xl shadow-lg shadow-blue-500/10 gap-2 font-bold transition-all"
          >
            <Upload className="w-5 h-5" /> Upload File
          </Button>
          <Button 
           onClick={() => { folderInputRef.current?.click(); setIsMobileMenuOpen(false); }}
-          className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] h-10 rounded-xl shadow-lg shadow-blue-500/10 gap-2 text-sm font-bold transition-all"
+          className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] h-11 rounded-xl shadow-lg shadow-blue-500/10 gap-2 font-bold transition-all"
          >
            <Folder className="w-5 h-5 fill-white/20" /> Upload Folder
          </Button>
@@ -299,31 +340,35 @@ export function WebConsole() {
             ))}
           </div>
 
-	          <div className="pt-6 border-t border-[#1F2937]">
-	            <h4 className="text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] px-3 mb-3">Drive Health</h4>
-	            <div className="px-3 space-y-4">
-	              <div className="space-y-2">
-	                 <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-[#9CA3AF]">
-	                  <span>
-                      {storageStatus === "error"
-                        ? "Error"
-                        : storageStats.total > 0
-                          ? `${formatSize(storageStats.used)} / ${formatSize(storageStats.total)}`
-                          : storageStatus === "loading"
-                            ? "Analyzing..."
-                            : "Waiting..."}
-                    </span>
-	                  <span className={storageStatus === "error" ? "text-red-400" : "text-[#E5E7EB]"}>
-                      {storageStats.total > 0 ? Math.round((storageStats.used / storageStats.total) * 100) : 0}%
-                    </span>
-	                </div>
-	                <Progress value={storageStats.total > 0 ? (storageStats.used / storageStats.total) * 100 : 0} className="h-1.5 bg-[#1F2937]" />
-                  {storageStatus === "error" && (
-                    <p className="text-[10px] leading-relaxed text-red-400">{storageError}</p>
-                  )}
-	              </div>
-	            </div>
-	          </div>
+          <div className="pt-6 border-t border-[#1F2937]">
+            <h4 className="text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] px-3 mb-3">Drive Health</h4>
+            <div className="px-3 space-y-4">
+              <div className="space-y-2">
+                 <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-[#9CA3AF]">
+                  <span>
+                    {driveHealthStatus === "error"
+                      ? "Error"
+                      : storageStats.total > 0
+                        ? `${formatSize(storageStats.used)} / ${formatSize(storageStats.total)}`
+                        : driveHealthStatus === "loading"
+                          ? "Analyzing..."
+                          : "Waiting..."}
+                  </span>
+                  <span className={driveHealthStatus === "error" ? "text-red-400" : "text-[#E5E7EB]"}>
+                    {driveHealthStatus === "error"
+                      ? "ERROR"
+                      : storageStats.total > 0
+                        ? `${Math.round((storageStats.used / storageStats.total) * 100)}%`
+                        : "0%"}
+                  </span>
+                </div>
+                <Progress value={storageStats.total > 0 ? (storageStats.used / storageStats.total) * 100 : 0} className="h-1.5 bg-[#1F2937]" />
+                {driveHealthStatus === "error" && (
+                  <p className="text-[11px] leading-relaxed text-red-400">{driveHealthError}</p>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       </ScrollArea>
     </div>
@@ -354,143 +399,44 @@ export function WebConsole() {
       return sortDirection === "asc" ? val : -val;
     });
 
-  const getAuthToken = () => {
-    const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token') || '';
-    const params = new URLSearchParams(window.location.hash.split('?')[1]);
-    return params.get('pwd') || token;
-  };
+  const webrtc = useWebRTC({
+    relayUrl: getRelayUrl(),
+    shareCode: shareCode,
+    enabled: !!shareCode,
+  });
 
-  const getHeaders = () => {
-    const pwd = getAuthToken();
-    return {
-      ...(pwd ? { Authorization: `Bearer ${pwd}` } : {}),
-      ...(shareCode ? { 'X-Share-Code': shareCode } : {}),
-    };
-  };
+  const { connectionState: p2pState, transport: p2pTransport, isReady: p2pReady, isDataChannelReady, reconnect: p2pReconnect } = webrtc;
 
-  // ── WebRTC P2P Connection ──────────────────────────────────────────────
-  // Establishes a direct peer-to-peer connection to the Android node.
-  const shouldUseP2PTransport = isDirectNodeOnline && p2pReady && Boolean(p2pTransport?.ready);
-  const shouldShowOfflineState = isNodeOffline && !isDirectNodeOnline && !isRelayMode && !isP2PTransitioning;
-  const shouldLoadRemoteData = isDirectNodeOnline || isRelayMode;
-  const connectionIndicator = useMemo(() => {
-    if (isDirectNodeOnline) {
-      return {
-        label: 'Node Online',
-        dotClassName: 'bg-[#10B981]',
-        containerClassName: 'bg-[#10B981]/10 border-[#10B981]/20 text-[#10B981]',
-      };
-    }
-
-    if (isRelayMode) {
-      return {
-        label: 'Relay Mode',
-        dotClassName: 'bg-[#F59E0B]',
-        containerClassName: 'bg-[#F59E0B]/10 border-[#F59E0B]/20 text-[#F59E0B]',
-      };
-    }
-
-    if (shouldShowOfflineState) {
-      return {
-        label: 'Node Offline',
-        dotClassName: 'bg-red-500',
-        containerClassName: 'bg-red-500/10 border-red-500/20 text-red-500',
-      };
-    }
-
-    return {
-      label: 'Connecting',
-      dotClassName: 'bg-[#2563EB] animate-pulse',
-      containerClassName: 'bg-[#2563EB]/10 border-[#2563EB]/20 text-[#60A5FA]',
-    };
-  }, [isDirectNodeOnline, isRelayMode, shouldShowOfflineState]);
-
+  // Unified "Online" Detection: Node is online if signaling OR P2P is healthy
   useEffect(() => {
-    if (shouldLoadRemoteData) {
-      loadFiles(currentPath);
-      loadStorageStats();
-    }
-  }, [currentPath, activeTab, shouldLoadRemoteData]);
+    const isOnline = isNodeOnline || (p2pState === 'connected' && isDataChannelReady);
+    setIsNodeOffline(!isOnline);
+  }, [isNodeOnline, p2pState, isDataChannelReady]);
+
+  const canUseNodeApi = (p2pState === 'connected' && isDataChannelReady) || p2pState === 'fallback';
 
   /**
    * Unified API fetch — uses P2P DataChannel when connected, falls back to relay.
    * This is the primary replacement for all fetch(getBaseUrl() + endpoint) calls.
    */
   const apiFetch = useCallback(async (endpoint: string, options: RequestInit = {}): Promise<Response | P2PResponse> => {
-    const headers = {
-      ...(options.headers as Record<string, string> | undefined),
-      ...(shareCode ? { 'X-Share-Code': shareCode } : {}),
-    };
-
-    if (shouldUseP2PTransport && p2pTransport) {
+    if (p2pReady && isDataChannelReady && p2pTransport?.ready) {
       // Route through the P2P DataChannel — zero relay bandwidth
       return p2pTransport.fetch(endpoint, {
         method: options.method || 'GET',
-        headers,
+        headers: options.headers as Record<string, string> || {},
         body: options.body as string | null,
       });
     }
     // Fallback: route through the relay server
-    return fetch(`${getBaseUrl()}${endpoint}`, { ...options, headers });
-  }, [p2pTransport, shareCode, shouldUseP2PTransport]);
-
-  useEffect(() => {
-    const checkAuth = async () => {
-      const pwd = getAuthToken();
-      if (pwd) {
-        setIsAuthenticated(true);
-        setAuthMode('none');
-        return;
-      }
-
-      try {
-        const data = await fetchJson<{hasAccount: boolean}>('/api/auth/status', {
-          headers: shareCode ? { 'X-Share-Code': shareCode } : undefined,
-        });
-        setIsAuthenticated(false);
-        setAuthMode(data.hasAccount ? 'login' : 'signup');
-      } catch (e) {
-        console.error("Auth check failed:", e);
-        setIsAuthenticated(false);
-        setAuthMode('login');
-      }
-    };
-    checkAuth();
-  }, [shareCode]);
-
-  useEffect(() => {
-    let interval: any;
-    let consecutiveFailures = 0;
-    const checkStatus = async () => {
-      if (shouldLoadRemoteData) {
-        consecutiveFailures = 0;
-        setIsNodeOffline(false);
-        return;
-      }
-
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
-        const res = await apiFetch('/api/status');
-        clearTimeout(timeoutId);
-        if (!res.ok) throw new Error();
-        const statusText = await res.text();
-        const data = statusText ? JSON.parse(statusText) : {};
-        if (data.status === "offline") {
-          consecutiveFailures++;
-        } else {
-          consecutiveFailures = 0;
-        }
-        setIsNodeOffline(consecutiveFailures >= 3);
-      } catch {
-        consecutiveFailures++;
-        setIsNodeOffline(consecutiveFailures >= 3);
-      }
-    };
-    checkStatus();
-    interval = setInterval(checkStatus, 5000);
-    return () => clearInterval(interval);
-  }, [apiFetch, shouldLoadRemoteData]);
+    return fetch(buildApiUrl(endpoint), {
+      ...options,
+      headers: {
+        ...(options.headers || {}),
+        ...(shareCode ? { 'X-Node-Id': shareCode } : {}),
+      },
+    });
+  }, [buildApiUrl, isDataChannelReady, p2pReady, p2pTransport, shareCode]);
 
   const PreviewContent = () => (
     <AnimatePresence mode="wait">
@@ -518,7 +464,7 @@ export function WebConsole() {
             {(() => {
               const ext = selectedFile.name.split('.').pop()?.toLowerCase() || '';
               const pwd = new URLSearchParams(window.location.hash.split('?')[1]).get('pwd') || '';
-              const url = `${getBaseUrl()}/api/download?path=${encodeURIComponent(currentPath)}&file=${encodeURIComponent(selectedFile.name)}&pwd=${encodeURIComponent(pwd)}&shareCode=${encodeURIComponent(shareCode)}`;
+              const url = buildApiUrl(`/api/download?path=${encodeURIComponent(currentPath)}&file=${encodeURIComponent(selectedFile.name)}&pwd=${encodeURIComponent(pwd)}`);
               
               if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
                 return (
@@ -639,33 +585,39 @@ export function WebConsole() {
     </AnimatePresence>
   );
 
-  const loadStorageStats = async () => {
-    setStorageStatus("loading");
-    setStorageError("");
+  const loadStorageStats = useCallback(async () => {
+    setDriveHealthStatus(prev => (prev === "ready" ? "ready" : "loading"));
+    setDriveHealthError("");
+
     try {
       const res = await apiFetch('/api/storage', { headers: getHeaders() as any });
       if (!res.ok) {
-        const message = `Storage stats failed (${res.status})`;
-        setStorageStatus("error");
-        setStorageError(message);
+        let message = `Storage stats failed (${res.status})`;
+        try {
+          const body = await res.json();
+          if (body?.error) {
+            message = String(body.error);
+          }
+        } catch {
+          // ignore body parse failures for fallback messages
+        }
         throw new Error(message);
       }
 
       const text = await res.text();
-      if (!text) {
-        setStorageStats({ total: 0, used: 0, free: 0 });
-        setStorageStatus("ready");
-        return;
-      }
-
-      setStorageStats(JSON.parse(text));
-      setStorageStatus("ready");
-    } catch (error: any) {
-      const message = error?.message || "Failed to load storage stats";
-      setStorageStatus("error");
-      setStorageError(message);
+      const data = text ? JSON.parse(text) : {};
+      setStorageStats({
+        total: Number(data.total ?? data.totalBytes ?? 0),
+        used: Number(data.used ?? data.usedBytes ?? 0),
+        free: Number(data.free ?? data.freeBytes ?? 0),
+      });
+      setDriveHealthStatus("ready");
+    } catch (err: any) {
+      console.error("Storage stats failed:", err?.message || err);
+      setDriveHealthStatus("error");
+      setDriveHealthError(err?.message || "Unable to load storage stats");
     }
-  };
+  }, [apiFetch, getHeaders]);
 
   const clearSelection = () => {
     setSelectedFiles(new Set());
@@ -687,11 +639,11 @@ export function WebConsole() {
     setLastSelectedIndex(index);
   };
 
-  const loadFiles = async (path: string) => {
+  const loadFiles = useCallback(async (path: string) => {
     setIsRefreshing(true);
     setSelectedFile(null);
-    setFilesError("");
     clearSelection();
+    setFilesError("");
     try {
       const timestamp = Date.now();
       const endpoint = activeTab === "Trash" ? `/api/trash?t=${timestamp}` : `/api/files?path=${encodeURIComponent(path)}&t=${timestamp}`;
@@ -717,7 +669,7 @@ export function WebConsole() {
         setFilesError(message);
         return;
       }
-      if (!res.ok) throw new Error(`Failed to load files (${res.status})`);
+      if (!res.ok) throw new Error("Failed to load files");
       const text = await res.text();
       if (!text) { setFiles([]); return; }
       const data = JSON.parse(text);
@@ -726,12 +678,44 @@ export function WebConsole() {
       const message = e.message || "Failed to load directory";
       setFiles([]);
       setFilesError(message);
+      console.error("File listing failed:", message);
       toast.error(message);
     } finally {
       setIsRefreshing(false);
-      loadStorageStats();
     }
-  };
+  }, [activeTab, apiFetch, getHeaders]);
+
+  useEffect(() => {
+    if (!canUseNodeApi) return;
+    void loadFiles(currentPath);
+    void loadStorageStats();
+  }, [activeTab, canUseNodeApi, currentPath, loadFiles, loadStorageStats]);
+
+  const handleRetryConnection = useCallback(() => {
+    refreshNodeStatus();
+    p2pReconnect();
+  }, [p2pReconnect, refreshNodeStatus]);
+
+  const nodeStatus = useMemo(() => {
+    if (isNodeOffline) {
+      return {
+        label: "Node Offline",
+        className: "is-offline",
+      };
+    }
+
+    if (p2pState === "fallback") {
+      return {
+        label: "Relay Mode",
+        className: "is-relay",
+      };
+    }
+
+    return {
+      label: "Node Online",
+      className: "is-online",
+    };
+  }, [isNodeOffline, p2pState]);
 
   const getFileIcon = (fileName: string, isDirectory: boolean, className = "w-4 h-4") => {
     if (isDirectory) return <Folder className={`${className} text-[#2563EB] fill-[#2563EB]/10`} />;
@@ -893,7 +877,7 @@ export function WebConsole() {
 
                     await new Promise((resolve, reject) => {
                         const xhr = new XMLHttpRequest();
-                        let uploadUrl = `${getBaseUrl()}/api/upload_chunk?path=${encodeURIComponent(currentPath)}&filename=${encodeURIComponent(filename)}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}`;
+                        let uploadUrl = buildApiUrl(`/api/upload_chunk?path=${encodeURIComponent(currentPath)}&filename=${encodeURIComponent(filename)}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}`);
                         if (file.webkitRelativePath) {
                             uploadUrl += `&relativePath=${encodeURIComponent(file.webkitRelativePath)}`;
                         }
@@ -995,9 +979,9 @@ export function WebConsole() {
   };
 
   const handleDownload = (file: FileNode) => {
-    const url = file.isDirectory 
-        ? `${getBaseUrl()}/api/download_folder?path=${encodeURIComponent(file.path)}&folder=${encodeURIComponent(file.name)}&shareCode=${encodeURIComponent(shareCode)}`
-        : `${getBaseUrl()}/api/download?path=${encodeURIComponent(file.path)}&file=${encodeURIComponent(file.name)}&shareCode=${encodeURIComponent(shareCode)}`;
+      const url = file.isDirectory
+        ? buildApiUrl(`/api/download_folder?path=${encodeURIComponent(file.path)}&folder=${encodeURIComponent(file.name)}`)
+        : buildApiUrl(`/api/download?path=${encodeURIComponent(file.path)}&file=${encodeURIComponent(file.name)}`);
     
     // Create an invisible link to trigger the download natively
     const a = document.createElement('a');
@@ -1068,7 +1052,7 @@ export function WebConsole() {
       .filter(f => selectedFiles.has(f.id))
       .map(f => ({ path: currentPath, name: f.name }));
       
-    const url = `${getBaseUrl()}/api/download_bulk?items=${encodeURIComponent(JSON.stringify(items))}&shareCode=${encodeURIComponent(shareCode)}`;
+    const url = buildApiUrl(`/api/download_bulk?items=${encodeURIComponent(JSON.stringify(items))}`);
     
     const a = document.createElement('a');
     a.href = url;
@@ -1116,38 +1100,6 @@ export function WebConsole() {
     setCurrentPath(segments.join('/'));
   };
 
-  if (shouldShowOfflineState) {
-    return (
-      <div className="min-h-screen bg-[#0B1220] flex items-center justify-center p-4 sm:p-6 text-[#E5E7EB]">
-        <Card className="w-full max-w-lg bg-[#111827]/90 border-[#1F2937] rounded-[2rem] p-6 sm:p-8 shadow-2xl text-center">
-          <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full border border-red-500/20 bg-red-500/10">
-            <Cloud className="w-10 h-10 text-red-400" />
-          </div>
-          <div className="mb-4 flex justify-center">
-            <div className="inline-flex items-center gap-2 rounded-full border border-red-500/20 bg-red-500/10 px-3 py-1 text-xs font-bold uppercase tracking-[0.2em] text-red-400">
-              <div className="h-2 w-2 rounded-full bg-red-500" />
-              Node Offline
-            </div>
-          </div>
-          <h1 className="text-3xl sm:text-4xl font-bold mb-3">Node is offline</h1>
-          <p className="mx-auto max-w-md text-sm sm:text-base leading-relaxed text-[#9CA3AF]">
-            The browser cannot reach the node yet. This screen clears automatically once the peer connection and DataChannel are both ready.
-          </p>
-          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
-            <Button
-              onClick={p2pReconnect}
-              className="h-11 rounded-xl bg-[#2563EB] px-6 font-bold text-white hover:bg-[#1d4ed8]"
-            >
-              Retry Connection
-            </Button>
-            <div className="flex h-11 items-center justify-center rounded-xl border border-[#1F2937] bg-[#0B1220] px-4 text-xs text-[#9CA3AF]">
-              Waiting for direct bridge handshake
-            </div>
-          </div>
-        </Card>
-      </div>
-    );
-  }
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1232,16 +1184,19 @@ export function WebConsole() {
 
               {authError && <div className="text-red-400 text-xs font-medium text-center bg-red-500/10 py-2 rounded-lg">{authError}</div>}
 
-              <Button type="submit" className="w-full h-12 bg-[#2563EB] hover:bg-[#1d4ed8] text-white font-bold rounded-xl mt-4">
-                {authMode === 'signup' ? 'Secure Node Bridge' : 'Unlock Node Bridge'}
-              </Button>
+              <button type="submit" className="w-full launch-node-btn mt-4">
+                <Cloud className="w-5 h-5" />
+                <span>{authMode === 'signup' ? 'Secure Node Bridge' : 'Unlock Node Bridge'}</span>
+              </button>
             </form>
           </Card>
         </motion.div>
       </div>
     );
   }
-  if (isP2PTransitioning) {
+
+
+  if (p2pState === 'connecting' || p2pState === 'signaling' || p2pState === 'ice-gathering' || p2pState === 'dc-opening' || (p2pState === 'connected' && !isDataChannelReady)) {
     const getP2PMessage = () => {
       switch (p2pState) {
         case 'connecting': return 'Initializing P2P stack...';
@@ -1257,7 +1212,9 @@ export function WebConsole() {
       <div className="h-screen bg-[#0B1220] flex flex-col items-center justify-center p-6 text-[#E5E7EB] relative overflow-hidden">
         <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-[#2563EB]/10 blur-[120px] rounded-full pointer-events-none" />
         <div className="z-10 flex flex-col items-center justify-center text-center">
-          <div className="w-16 h-16 border-4 border-[#2563EB] border-t-transparent rounded-full animate-spin mb-8 shadow-[0_0_15px_rgba(37,99,235,0.5)]"></div>
+        <div className="relative mb-8 h-32 flex items-center justify-center">
+            <SquareLoader size="lg" />
+        </div>
           <h1 className="text-3xl font-bold mb-3 tracking-tight text-white">{getP2PMessage()}</h1>
           <p className="text-sm text-[#9CA3AF] max-w-sm mx-auto">Creating a direct peer-to-peer connection for fast, private file transfers. No data passes through the relay.</p>
           <div className="mt-6 flex items-center gap-2 px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded-full">
@@ -1272,23 +1229,16 @@ export function WebConsole() {
   return (
     <div className="console-layout bg-[#0B1220] text-[#E5E7EB] font-sans selection:bg-[#2563EB]/30">
       {/* Top Bar - Responsive Header */}
-      <header className="console-header col-span-full">
+      <header className="console-header">
         <div className="flex items-center gap-3 md:gap-6 min-w-0">
           <Button variant="ghost" size="icon" className="md:hidden text-[#E5E7EB] shrink-0" onClick={() => setIsMobileMenuOpen(true)}>
             <Menu className="w-5 h-5" />
           </Button>
           <div className="flex items-center gap-3 group cursor-pointer shrink-0" onClick={() => { setActiveTab("Drive"); setCurrentPath(""); }}>
-	            <div className="hidden md:flex w-8 h-8 bg-gradient-to-br from-[#2563EB] to-[#A855F7] rounded-lg items-center justify-center shadow-lg shadow-blue-500/10">
-	              <Cloud className="w-5 h-5 text-white" />
-	            </div>
-	            <span className="font-bold tracking-tight text-lg hidden md:block">Easy Storage</span>
-	            <div
-	              className={`node-status-indicator hidden md:flex items-center gap-1.5 rounded-full border px-2.5 py-1 ml-1 ${connectionIndicator.containerClassName}`}
-	              title={isRelayMode ? "Direct P2P failed. Routing through relay." : undefined}
-	            >
-              <div className={`w-2 h-2 rounded-full ${connectionIndicator.dotClassName}`} />
-              <span className="text-[10px] font-bold uppercase tracking-wider">{connectionIndicator.label}</span>
+            <div className="hidden md:flex w-8 h-8 bg-gradient-to-br from-[#2563EB] to-[#A855F7] rounded-lg items-center justify-center shadow-lg shadow-blue-500/10">
+              <Cloud className="w-5 h-5 text-white" />
             </div>
+            <span className="font-bold tracking-tight text-lg hidden md:block">Easy Storage</span>
           </div>
           
           <Separator orientation="vertical" className="h-6 bg-[#1F2937] hidden md:block" />
@@ -1330,6 +1280,10 @@ export function WebConsole() {
             />
           </div>
           <div className="flex items-center gap-1 md:gap-3">
+             <div className={`node-status-indicator hidden md:flex ${nodeStatus.className}`}>
+               <span className="status-dot" />
+               <span>{nodeStatus.label}</span>
+             </div>
              <Button 
                 variant="ghost" 
                 size="icon" 
@@ -1382,6 +1336,7 @@ export function WebConsole() {
       <aside className="console-sidebar hidden md:block overflow-y-auto">
         <SidebarContent />
       </aside>
+      <div className="console-workspace">
       <main className="console-main flex flex-col relative min-w-0"
           onDragOver={(e) => { e.preventDefault(); setIsDragging(true); e.dataTransfer.dropEffect = "copy"; }}
           onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
@@ -1420,7 +1375,7 @@ export function WebConsole() {
               </motion.div>
             )}
 
-            {shouldShowOfflineState && (
+            {isNodeOffline && (
               <motion.div 
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 className="absolute inset-0 z-[60] bg-[#0B1220]/95 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center"
@@ -1430,7 +1385,7 @@ export function WebConsole() {
                     <Cloud className="w-12 h-12 text-red-500/40" />
                   </div>
                   <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="w-16 h-16 border-4 border-red-500/20 border-t-red-500 rounded-full animate-spin" />
+                     <SquareLoader color="#EF4444" size="md" />
                   </div>
                 </div>
                 <h2 className="text-3xl font-bold text-white tracking-tight mb-3">Node is Offline</h2>
@@ -1439,13 +1394,13 @@ export function WebConsole() {
                   Ensure the phone is active and the app is running.
                 </p>
                 <div className="flex flex-col gap-3 w-full max-w-xs px-6">
-                  <Button 
-                    onClick={() => refreshNodeStatus()}
-                    className="bg-[#2563EB] hover:bg-[#1d4ed8] text-white font-bold h-12 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-blue-500/20"
+                  <button 
+                    onClick={handleRetryConnection}
+                    className="launch-node-btn w-full"
                   >
-                    <RefreshCw className="w-4 h-4" />
-                    Retry Connection
-                  </Button>
+                    <RefreshCw className="w-5 h-5" />
+                    <span>Retry Connection</span>
+                  </button>
                   <p className="text-[10px] text-[#4B5563] uppercase tracking-[0.2em] font-bold mt-2">
                     Last sync check: {new Date(lastCheck).toLocaleTimeString()}
                   </p>
@@ -1454,17 +1409,17 @@ export function WebConsole() {
             )}
           </AnimatePresence>
 
-	          <div className="flex flex-col h-full w-full">
-	            {/* Toolbar */}
-	            <div className="h-14 px-6 flex items-center justify-between border-b border-[#1F2937] bg-[#0B1220]/50 backdrop-blur-sm shrink-0">
+          <div className="flex flex-col h-full w-full">
+            {/* Toolbar */}
+            <div className="h-14 px-6 flex items-center justify-between border-b border-[#1F2937] bg-[#0B1220]/50 backdrop-blur-sm shrink-0">
                 <div className="flex items-center gap-4">
                   {currentPath && (
                       <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg" onClick={navigateUp}>
                           <ChevronUp className="w-4 h-4"/>
                       </Button>
                   )}
-                  <h2 className="font-bold text-lg flex items-center gap-2">
-                      {activeTab} {isRefreshing && <div className="w-4 h-4 rounded-full border-2 border-t-transparent border-[#2563EB] animate-spin" />}
+                  <h2 className="font-bold text-lg flex items-center gap-4">
+                      {activeTab} {isRefreshing && <SquareLoader size="sm" />}
                   </h2>
                   <Badge variant="outline" className="text-[10px] font-mono py-0 text-[#9CA3AF] border-[#1F2937]">{files.length} items</Badge>
                 </div>
@@ -1485,23 +1440,23 @@ export function WebConsole() {
                         <LayoutGrid className="w-3.5 h-3.5" />
                       </Button>
                    </div>
-	                </div>
-	            </div>
-
-              {filesError && (
-                <div className="mx-4 mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-                  {filesError}
                 </div>
-              )}
+            </div>
 
-	            {viewMode === 'list' && (
-	              <div className="hidden md:flex items-center px-4 py-3 border-b border-[#1F2937] text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] shrink-0">
-	                <div style={{ width: 40 }} className="shrink-0" />
-	                <div className="flex-1 min-w-0 flex items-center gap-2">Name</div>
-	                <div style={{ width: 88 }} className="shrink-0">Size</div>
-	                <div style={{ width: 120 }} className="shrink-0 text-right pr-10">Modified</div>
-	              </div>
-	            )}
+            {viewMode === 'list' && (
+              <div className="hidden md:flex items-center px-4 py-3 border-b border-[#1F2937] text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] shrink-0">
+                <div style={{ width: 40 }} className="shrink-0" />
+                <div className="flex-1 min-w-[200px] flex items-center gap-2">Name</div>
+                <div style={{ width: 100 }} className="shrink-0">Size</div>
+                <div style={{ width: 140 }} className="shrink-0 text-right pr-10">Modified</div>
+              </div>
+            )}
+
+            {filesError && (
+              <div className="mx-4 mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+                {filesError}
+              </div>
+            )}
 
             <ScrollArea className="flex-1 w-full h-[0px]">
               {isRefreshing && files.length === 0 ? (
@@ -1548,10 +1503,10 @@ export function WebConsole() {
                           </div>
 
                           {/* SIZE column */}
-	                          <div style={{ width: 88 }} className="hidden md:flex shrink-0 font-mono text-xs text-[#4B5563] items-center whitespace-nowrap">{formatSize(file.size)}</div>
+                          <div style={{ width: 100 }} className="hidden md:flex shrink-0 font-mono text-xs text-[#4B5563] items-center whitespace-nowrap">{formatSize(file.size)}</div>
 
-	                          {/* MODIFIED column */}
-	                          <div style={{ width: 120 }} className="hidden md:flex shrink-0 text-[#4B5563] items-center justify-end text-xs font-mono whitespace-nowrap pr-10">{formatDate(file.lastModified)}</div>
+                          {/* MODIFIED column */}
+                          <div style={{ width: 140 }} className="hidden md:flex shrink-0 text-[#4B5563] items-center justify-end text-xs font-mono whitespace-nowrap pr-10">{formatDate(file.lastModified)}</div>
                           
                           {/* Actions menu */}
                           <div className="absolute right-1 md:right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1631,9 +1586,10 @@ export function WebConsole() {
       </main>
 
       {/* Info & Preview Panel - Desktop Only */}
-	          <aside className="hidden xl:block border-l border-[#1F2937] overflow-y-auto shrink-0" style={{ minWidth: 280, width: 280 }}>
+      <aside className="console-preview hidden xl:block">
           <PreviewContent />
       </aside>
+      </div>
 
       {/* Mobile Preview Modal */}
       <AnimatePresence>
@@ -1761,6 +1717,22 @@ export function WebConsole() {
                   </div>
                 </div>
 
+                <div className="mb-6">
+                  <p className="text-[10px] text-[#4B5563] uppercase tracking-[0.2em] font-bold mb-4">Quick Share</p>
+                  <div className="flex items-center gap-3">
+                    {[
+                      { icon: <Twitter className="w-5 h-5"/>, color: "from-blue-400 to-blue-600", border: "border-blue-400/30" },
+                      { icon: <Linkedin className="w-5 h-5"/>, color: "from-blue-600 to-blue-800", border: "border-blue-500/30" },
+                      { icon: <Github className="w-5 h-5"/>, color: "from-gray-700 to-gray-900", border: "border-gray-600/30" },
+                      { icon: <Youtube className="w-5 h-5"/>, color: "from-red-500 to-red-700", border: "border-red-500/30" }
+                    ].map((btn, i) => (
+                      <div key={i} className={`h-12 w-12 bg-gradient-to-br ${btn.color} border ${btn.border} flex items-center justify-center text-white squircle-icon cursor-pointer shadow-lg`}>
+                        {btn.icon}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="flex justify-end gap-3 mt-2">
                    <Button variant="ghost" className="text-gray-400 hover:text-white" onClick={() => setShowShareModal(false)}>Cancel</Button>
                    <Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => { setShowShareModal(false); toast.success("Share link configured & copied!"); }}>Copy Link</Button>
@@ -1770,6 +1742,15 @@ export function WebConsole() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* SVG Clip Path Definitions */}
+      <svg width="0" height="0" style={{ position: 'absolute' }}>
+        <defs>
+          <clipPath id="squircleClip" clipPathUnits="objectBoundingBox">
+            <path d="M 0,0.5 C 0,0 0,0 0.5,0 S 1,0 1,0.5 1,1 0.5,1 0,1 0,0.5"></path>
+          </clipPath>
+        </defs>
+      </svg>
     </div>
   );
 }

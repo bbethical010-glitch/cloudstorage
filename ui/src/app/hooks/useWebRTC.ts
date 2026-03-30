@@ -46,12 +46,12 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
   const [connectionState, setConnectionState] = useState<P2PConnectionState>(enabled ? 'connecting' : 'disconnected');
   const [isReady, setIsReady] = useState(false);
   const [isDataChannelReady, setIsDataChannelReady] = useState(false);
-  const connectionStateRef = useRef<P2PConnectionState>(enabled ? 'connecting' : 'disconnected');
   const transportRef = useRef<P2PTransport>(new P2PTransport());
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
   const reconnectRef = useRef<number>(0);
+  const connectionStateRef = useRef<P2PConnectionState>(connectionState);
   
   // Strict Stage Timeouts
   const initTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -61,6 +61,10 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
   
   const iceCandidateQueueRef = useRef<RTCIceCandidateInit[]>([]);
 
+  useEffect(() => {
+    connectionStateRef.current = connectionState;
+  }, [connectionState]);
+
   const clearAllTimeouts = useCallback(() => {
     if (initTimeoutRef.current) { clearTimeout(initTimeoutRef.current); initTimeoutRef.current = null; }
     if (offerTimeoutRef.current) { clearTimeout(offerTimeoutRef.current); offerTimeoutRef.current = null; }
@@ -68,23 +72,52 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
     if (dcTimeoutRef.current) { clearTimeout(dcTimeoutRef.current); dcTimeoutRef.current = null; }
   }, []);
 
-  const updateConnectionState = useCallback((nextState: P2PConnectionState) => {
-    connectionStateRef.current = nextState;
-    setConnectionState(nextState);
-  }, []);
-
   const failAndFallback = useCallback((reason: string) => {
     console.warn(`[PC_DEBUG] HARD_FAIL: ${reason}. Triggering fallbackToRelay().`);
-    updateConnectionState('fallback');
+    setConnectionState('fallback');
     clearAllTimeouts();
-  }, [clearAllTimeouts, updateConnectionState]);
+  }, [clearAllTimeouts]);
+
+  const cleanup = useCallback(() => {
+    clearAllTimeouts();
+
+    if (dcRef.current) {
+      dcRef.current.onopen = null;
+      dcRef.current.onclose = null;
+      dcRef.current.close();
+      dcRef.current = null;
+    }
+    
+    if (pcRef.current) {
+      pcRef.current.onicecandidate = null;
+      pcRef.current.onconnectionstatechange = null;
+      pcRef.current.oniceconnectionstatechange = null;
+      pcRef.current.close();
+      pcRef.current = null;
+    }
+    
+    if (wsRef.current) {
+      wsRef.current.onopen = null;
+      wsRef.current.onmessage = null;
+      wsRef.current.onerror = null;
+      wsRef.current.onclose = null;
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+
+    transportRef.current.destroy();
+    transportRef.current = new P2PTransport();
+    iceCandidateQueueRef.current = [];
+    setIsReady(false);
+    setIsDataChannelReady(false);
+  }, [clearAllTimeouts]);
 
   const connect = useCallback(() => {
     try {
       if (!enabled || !relayUrl || !shareCode) return;
 
       cleanup();
-      updateConnectionState('connecting');
+      setConnectionState('connecting');
 
       // Hard fail-safe: if we don't reach 'connected' or at least 'ice-gathering' quickly
       if (initTimeoutRef.current) clearTimeout(initTimeoutRef.current);
@@ -102,13 +135,11 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
         .replace('https://', 'wss://')
         .replace('http://', 'ws://') + `/signal/${shareCode.toUpperCase()}`;
 
-      console.log("SIGNAL_WS_CONNECTING", wsUrl);
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        console.log("SIGNAL_WS_CONNECTED");
-        updateConnectionState('signaling');
+        setConnectionState('signaling');
         initiatePeerConnection(ws);
       };
 
@@ -127,11 +158,9 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
       };
 
       ws.onclose = () => {
-        console.log('[SIGNAL_DEBUG] WS_CLOSE');
         if (wsRef.current === ws) {
-          const latestState = connectionStateRef.current;
-          if (latestState !== 'connected' && latestState !== 'fallback') {
-            updateConnectionState('disconnected');
+          if (connectionStateRef.current !== 'connected' && connectionStateRef.current !== 'fallback') {
+            setConnectionState('disconnected');
           }
         }
       };
@@ -139,7 +168,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
       console.error("WEBRTC_INIT_ERROR", e);
       failAndFallback('SYNC_INIT_CATCH');
     }
-  }, [relayUrl, shareCode, enabled, failAndFallback, updateConnectionState]);
+  }, [cleanup, relayUrl, shareCode, enabled, failAndFallback]);
 
   function initiatePeerConnection(ws: WebSocket) {
     console.log('[PC_DEBUG] INITIALIZING');
@@ -156,7 +185,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
     dc.onopen = () => {
       console.log('[DC_DEBUG] DATA_CHANNEL_OPEN — P2P Live');
       clearAllTimeouts();
-      updateConnectionState('connected');
+      setConnectionState('connected');
       setIsReady(true);
       setIsDataChannelReady(true);
     };
@@ -195,7 +224,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
       if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
         console.log('[ICE_DEBUG] SUCCESS: Signaling transition to DC_OPENING');
         if (iceTimeoutRef.current) { clearTimeout(iceTimeoutRef.current); iceTimeoutRef.current = null; }
-        updateConnectionState('dc-opening');
+        setConnectionState('dc-opening');
         
         // Timeout 3: DataChannel must open within 6s of ICE success
         dcTimeoutRef.current = setTimeout(() => {
@@ -242,7 +271,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
 
         console.log('[SIGNAL_DEBUG] RECEIVED_ANSWER');
         if (offerTimeoutRef.current) { clearTimeout(offerTimeoutRef.current); offerTimeoutRef.current = null; }
-        updateConnectionState('ice-gathering');
+        setConnectionState('ice-gathering');
 
         // Timeout 2: ICE must connect within 5s of receiving answer
         iceTimeoutRef.current = setTimeout(() => {
@@ -280,61 +309,29 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
     }
   }
 
-  function cleanup() {
-    console.log('[PC_DEBUG] CLEANUP');
-    clearAllTimeouts();
-
-    if (dcRef.current) {
-      dcRef.current.onopen = null;
-      dcRef.current.onclose = null;
-      dcRef.current.close();
-      dcRef.current = null;
-    }
-    
-    if (pcRef.current) {
-      pcRef.current.onicecandidate = null;
-      pcRef.current.onconnectionstatechange = null;
-      pcRef.current.oniceconnectionstatechange = null;
-      pcRef.current.close();
-      pcRef.current = null;
-    }
-    
-    if (wsRef.current) {
-      wsRef.current.onopen = null;
-      wsRef.current.onmessage = null;
-      wsRef.current.onerror = null;
-      wsRef.current.onclose = null;
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-
-    transportRef.current.destroy();
-    transportRef.current = new P2PTransport();
-    iceCandidateQueueRef.current = [];
-    setIsReady(false);
-    setIsDataChannelReady(false);
-  }
-
   useEffect(() => {
-    console.log("WEBRTC_EFFECT_RUNNING", { enabled });
     if (enabled) {
       connect();
     } else {
+      setConnectionState('disconnected');
       cleanup();
     }
     return () => cleanup();
-  }, [enabled, connect]);
+  }, [enabled, connect, cleanup]);
 
   const reconnect = useCallback(() => {
     reconnectRef.current = 0;
     connect();
   }, [connect]);
 
-  return useMemo(() => ({
-    connectionState,
-    transport: transportRef.current,
-    isReady,
-    isDataChannelReady,
-    reconnect,
-  }), [connectionState, isReady, isDataChannelReady, reconnect]);
+  return useMemo(
+    () => ({
+      connectionState,
+      transport: transportRef.current,
+      isReady,
+      isDataChannelReady,
+      reconnect,
+    }),
+    [connectionState, isReady, isDataChannelReady, reconnect]
+  );
 }

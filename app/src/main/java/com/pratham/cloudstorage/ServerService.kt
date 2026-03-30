@@ -242,6 +242,7 @@ class ServerService : Service() {
                         get("/storage") {
                             if (!call.hasValidAuth()) return@get call.respond(HttpStatusCode.Unauthorized)
                             try {
+                                val rootDoc = DocumentFile.fromTreeUri(this@ServerService, rootUri)
                                 var availableBytes = 0L
                                 var capacityBytes = 0L
                                 
@@ -296,13 +297,47 @@ class ServerService : Service() {
                                 }
 
                                 val usedBytes = if (capacityBytes > 0) capacityBytes - availableBytes else 0L
-                                call.respondText(
-                                    """{"total":$capacityBytes,"free":$availableBytes,"used":$usedBytes}""",
-                                    ContentType.Application.Json
+                                val healthPercent = if (capacityBytes > 0) {
+                                    ((usedBytes.toDouble() / capacityBytes.toDouble()) * 100).toInt()
+                                } else {
+                                    0
+                                }
+                                call.respond(
+                                    HttpStatusCode.OK,
+                                    mapOf(
+                                        "total" to capacityBytes,
+                                        "free" to availableBytes,
+                                        "used" to usedBytes,
+                                        "totalBytes" to capacityBytes,
+                                        "freeBytes" to availableBytes,
+                                        "usedBytes" to usedBytes,
+                                        "healthPercent" to healthPercent,
+                                        "totalFormatted" to formatBytes(capacityBytes),
+                                        "freeFormatted" to formatBytes(availableBytes),
+                                        "usedFormatted" to formatBytes(usedBytes),
+                                        "mountPoint" to (rootDoc?.name ?: "Unknown"),
+                                        "isReady" to (rootDoc != null && rootDoc.exists())
+                                    )
                                 )
                             } catch (e: Exception) {
                                 android.util.Log.e("STORAGE_DEBUG", "Absolute api/storage endpoint failure", e)
-                                call.respondText("""{"total":0,"free":0,"used":0}""", ContentType.Application.Json)
+                                call.respond(
+                                    HttpStatusCode.OK,
+                                    mapOf(
+                                        "total" to 0L,
+                                        "free" to 0L,
+                                        "used" to 0L,
+                                        "totalBytes" to 0L,
+                                        "freeBytes" to 0L,
+                                        "usedBytes" to 0L,
+                                        "healthPercent" to 0,
+                                        "totalFormatted" to "0 B",
+                                        "freeFormatted" to "0 B",
+                                        "usedFormatted" to "0 B",
+                                        "mountPoint" to "Unknown",
+                                        "isReady" to false
+                                    )
+                                )
                             }
                         }
 
@@ -1200,6 +1235,13 @@ class ServerService : Service() {
         
         manager.notify(filename.hashCode(), builder.build())
     }
+
+    private fun formatBytes(bytes: Long): String {
+        return when {
+            bytes >= 1_073_741_824L -> String.format("%.1f GB", bytes / 1_073_741_824.0)
+            bytes >= 1_048_576L -> String.format("%.1f MB", bytes / 1_048_576.0)
+            bytes >= 1_024L -> String.format("%.1f KB", bytes / 1_024.0)
+            else -> "$bytes B"
+        }
+    }
 }
-
-

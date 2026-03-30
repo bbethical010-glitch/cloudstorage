@@ -1,25 +1,25 @@
 package com.pratham.cloudstorage
 
-import android.util.Log
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.websocket.WebSockets
+import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.client.request.header
 import io.ktor.client.request.prepareRequest
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsChannel
-import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
-import io.ktor.http.content.ByteArrayContent
-import io.ktor.client.plugins.websocket.WebSockets
-import io.ktor.client.plugins.websocket.webSocket
+import io.ktor.util.flattenEntries
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
-import io.ktor.utils.io.readRemaining
 import io.ktor.utils.io.core.readBytes
+import io.ktor.utils.io.readRemaining
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -31,14 +31,11 @@ import java.util.Base64
 import java.util.concurrent.TimeUnit
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Relay Tunnel Client — Signaling-Only
+// Relay Tunnel Client — signaling + relay API fallback
 //
-// This client maintains a persistent WebSocket to the relay server for:
-//   1. Node registration (advertising the share code)
-//   2. WebRTC signaling (forwarding SDP offers/answers and ICE candidates)
-//
-// NO file data passes through this client. All file transfers happen
-// directly between the browser and the WebRTCPeer via RTCDataChannel.
+// The primary happy path is WebRTC. When the browser cannot reach the Android
+// node directly yet, the relay can still proxy /api/* requests over this same
+// WebSocket and the client forwards them to the local Ktor node.
 // ──────────────────────────────────────────────────────────────────────────────
 
 enum class TunnelStatus {
@@ -62,27 +59,21 @@ class RelayTunnelClient(
 
     private val relayClient = HttpClient(OkHttp) {
         install(WebSockets) {
-            maxFrameSize = 16 * 1024 * 1024L
+            maxFrameSize = 512 * 1024L
         }
         engine {
             config {
-                pingInterval(30, TimeUnit.SECONDS)
+                pingInterval(15, TimeUnit.SECONDS)
                 retryOnConnectionFailure(true)
             }
         }
         expectSuccess = false
     }
 
-    private val localHttpClient = HttpClient(OkHttp) {
+    private val localNodeClient = HttpClient(OkHttp) {
         expectSuccess = false
-        engine {
-            config {
-                retryOnConnectionFailure(true)
-            }
-        }
     }
 
-    // The WebRTC peer that handles P2P connections with browsers
     private var webRTCPeer: WebRTCPeer? = null
 
     fun start() {
@@ -90,32 +81,30 @@ class RelayTunnelClient(
 
         scope.launch {
             onStatusChange(TunnelStatus.Connecting)
-            var backoffMs = 1000L
+            var backoffMs = 1_000L
 
             while (isActive) {
                 try {
                     relayClient.webSocket(urlString = relayWebSocketUrl) {
                         Log.i(TAG, "Relay signaling connected for $shareCode")
                         onStatusChange(TunnelStatus.Connected)
-                        backoffMs = 1000L
+                        backoffMs = 1_000L
 
-                        // Initialize WebRTC peer with a callback that sends signaling
-                        // messages back through this WebSocket connection
                         val peer = WebRTCPeer(context, rootUri) { signalJson ->
                             outgoing.send(Frame.Text(signalJson))
                         }
                         webRTCPeer = peer
 
-                        // Send registration handshake
                         outgoing.send(Frame.Text("""{"type":"register","nodeId":"$shareCode"}"""))
 
-                        // Backup keep-alive heartbeat loop (15s)
-                        // Using text frames is more robust across some proxies than pings
                         val keepaliveJob = launch {
                             while (isActive) {
-                                delay(15_000)
-                                try { outgoing.send(Frame.Text("""{"type":"heartbeat"}""")) }
-                                catch (e: Exception) { break }
+                                delay(10_000)
+                                try {
+                                    outgoing.send(Frame.Text("""{"type":"heartbeat"}"""))
+                                } catch (_: Exception) {
+                                    break
+                                }
                             }
                         }
 
@@ -123,24 +112,15 @@ class RelayTunnelClient(
                             for (frame in incoming) {
                                 if (frame is Frame.Text) {
                                     val text = frame.readText()
-                                    val msg = text.toSignalOrNull() ?: continue
-
-                                    when (msg.type) {
-                                        // Relay forwards WebRTC signaling from browser → us
-                                        "signal" -> {
-                                            peer.handleSignalingMessage(text)
+                                    val envelope = text.toEnvelopeOrNull()
+                                    when (envelope?.type) {
+                                        "signal" -> peer.handleSignalingMessage(text)
+                                        "request" -> {
+                                            val response = forwardToLocalNode(envelope)
+                                            outgoing.send(Frame.Text(relayGson.toJson(response)))
                                         }
-                                        "connected" -> {
-                                            Log.i(TAG, "Relay confirmed registration for $shareCode")
-                                        }
-                                        "http_request" -> {
-                                            launch {
-                                                outgoing.send(Frame.Text(forwardHttpRequestToLocalServer(msg)))
-                                            }
-                                        }
-                                        else -> {
-                                            Log.d(TAG, "Unknown message type: ${msg.type}")
-                                        }
+                                        "connected" -> Log.i(TAG, "Relay confirmed registration for $shareCode")
+                                        else -> Log.d(TAG, "Unknown relay frame type: ${envelope?.type}")
                                     }
                                 }
                             }
@@ -157,7 +137,7 @@ class RelayTunnelClient(
 
                 if (isActive) {
                     delay(backoffMs)
-                    backoffMs = (backoffMs * 2).coerceAtMost(30000L)
+                    backoffMs = (backoffMs * 2).coerceAtMost(30_000L)
                     onStatusChange(TunnelStatus.Connecting)
                 }
             }
@@ -169,97 +149,79 @@ class RelayTunnelClient(
         webRTCPeer?.destroy()
         webRTCPeer = null
         scope.cancel()
-        localHttpClient.close()
         relayClient.close()
+        localNodeClient.close()
     }
 
-    private suspend fun forwardHttpRequestToLocalServer(message: SignalMessage): String {
-        val requestId = message.requestId ?: return relayGson.toJson(
-            mapOf("type" to "http_response", "requestId" to "", "status" to 400, "headers" to emptyMap<String, String>(), "body" to null)
-        )
-        val method = message.method ?: "GET"
-        val path = message.path ?: "/api/status"
-        val query = message.query.orEmpty()
-        val querySuffix = if (query.isNotBlank()) "?$query" else ""
-        val url = "http://127.0.0.1:$LOCAL_SERVER_PORT$path$querySuffix"
-        val headers = message.headers.orEmpty()
+    private suspend fun forwardToLocalNode(request: RelayEnvelope): RelayEnvelope {
+        val targetPath = request.path?.takeIf { it.isNotBlank() } ?: "/"
+        val querySuffix = request.query?.takeIf { it.isNotBlank() }?.let { "?$it" }.orEmpty()
+        val targetUrl = "http://127.0.0.1:$DEFAULT_PORT$targetPath$querySuffix"
 
         return try {
-            localHttpClient.prepareRequest(url) {
-                this.method = HttpMethod.parse(method)
-                headers.forEach { (key, value) ->
-                    if (!key.equals("Host", true) && !key.equals("Content-Length", true)) {
+            val statement = localNodeClient.prepareRequest(targetUrl) {
+                method = HttpMethod.parse(request.method ?: HttpMethod.Get.value)
+                request.headers.orEmpty().forEach { (key, value) ->
+                    if (!isHopByHopHeader(key) &&
+                        !key.equals(HttpHeaders.Host, ignoreCase = true) &&
+                        !key.equals("X-Node-Id", ignoreCase = true)
+                    ) {
                         header(key, value)
                     }
                 }
-                val bodyB64 = message.body
-                if (!bodyB64.isNullOrBlank()) {
-                    val bodyBytes = Base64.getDecoder().decode(bodyB64)
-                    val contentType = headers.entries.firstOrNull { it.key.equals("Content-Type", true) }?.value
-                    if (contentType != null) {
-                        setBody(ByteArrayContent(bodyBytes, ContentType.parse(contentType)))
-                    } else {
-                        setBody(bodyBytes)
-                    }
-                }
-            }.execute { statement ->
-                val responseHeaders = mutableMapOf<String, String>()
-                statement.headers.forEach { name, values ->
-                    if (!name.equals("Transfer-Encoding", true) && !name.equals("Connection", true)) {
-                        responseHeaders[name] = values.joinToString(", ")
-                    }
-                }
 
-                val bodyBytes = statement.bodyAsChannel().readRemaining().readBytes()
-                relayGson.toJson(
-                    mapOf(
-                        "type" to "http_response",
-                        "requestId" to requestId,
-                        "status" to statement.status.value,
-                        "headers" to responseHeaders,
-                        "body" to if (bodyBytes.isNotEmpty()) Base64.getEncoder().encodeToString(bodyBytes) else null
-                    )
-                )
-            }
+                request.bodyBase64.decodeBase64()?.let { body ->
+                    if (body.isNotEmpty()) {
+                        setBody(body)
+                    }
+                }
+            }.execute()
+
+            val responseBody = statement.bodyAsChannel().readRemaining().readBytes()
+            RelayEnvelope(
+                type = "response",
+                requestId = request.requestId,
+                status = statement.status.value,
+                headers = statement.headers.flattenEntries()
+                    .filterNot { (key, _) ->
+                        isHopByHopHeader(key) || key.equals(HttpHeaders.ContentLength, ignoreCase = true)
+                    }
+                    .associate { (key, value) -> key to value },
+                bodyBase64 = responseBody.encodeBase64()
+            )
         } catch (error: Exception) {
-            relayGson.toJson(
-                mapOf(
-                    "type" to "http_response",
-                    "requestId" to requestId,
-                    "status" to 502,
-                    "headers" to mapOf("Content-Type" to "application/json"),
-                    "body" to Base64.getEncoder().encodeToString(
-                        """{"error":"${error.message ?: "relay_proxy_error"}"}""".toByteArray()
-                    )
-                )
+            Log.e(TAG, "Local node proxy failed: ${error.message}", error)
+            RelayEnvelope(
+                type = "response",
+                requestId = request.requestId,
+                status = 502,
+                headers = mapOf(HttpHeaders.ContentType to "application/json; charset=utf-8"),
+                bodyBase64 = """{"error":"local_node_unreachable"}""".encodeToByteArray().encodeBase64(),
+                error = error.message
             )
         }
     }
 
     companion object {
         private const val TAG = "RelayTunnelClient"
-        private const val LOCAL_SERVER_PORT = 8970
     }
 }
 
-// ── Signaling message format ─────────────────────────────────────────────────
-
-private data class SignalMessage(
+private data class RelayEnvelope(
     val type: String,
-    val browserId: String? = null,
-    val signal: Map<String, Any>? = null,
-    val shareCode: String? = null,
     val requestId: String? = null,
     val method: String? = null,
     val path: String? = null,
     val query: String? = null,
     val headers: Map<String, String>? = null,
-    val body: String? = null
+    val bodyBase64: String? = null,
+    val status: Int? = null,
+    val error: String? = null
 )
 
-private fun String.toSignalOrNull(): SignalMessage? {
+private fun String.toEnvelopeOrNull(): RelayEnvelope? {
     return try {
-        relayGson.fromJson(this, SignalMessage::class.java)
+        relayGson.fromJson(this, RelayEnvelope::class.java)
     } catch (_: JsonSyntaxException) {
         null
     }
@@ -276,4 +238,25 @@ private fun String.toWebSocketUrl(shareCode: String): String {
     }
 
     return "$webSocketBase/agent/connect?shareCode=$shareCode"
+}
+
+private fun String?.decodeBase64(): ByteArray? {
+    if (this.isNullOrBlank()) return null
+    return Base64.getDecoder().decode(this)
+}
+
+private fun ByteArray?.encodeBase64(): String? {
+    if (this == null || isEmpty()) return null
+    return Base64.getEncoder().encodeToString(this)
+}
+
+private fun isHopByHopHeader(name: String): Boolean {
+    return name.equals(HttpHeaders.Connection, ignoreCase = true) ||
+        name.equals("Keep-Alive", ignoreCase = true) ||
+        name.equals(HttpHeaders.ProxyAuthenticate, ignoreCase = true) ||
+        name.equals(HttpHeaders.ProxyAuthorization, ignoreCase = true) ||
+        name.equals(HttpHeaders.TE, ignoreCase = true) ||
+        name.equals(HttpHeaders.Trailer, ignoreCase = true) ||
+        name.equals(HttpHeaders.TransferEncoding, ignoreCase = true) ||
+        name.equals(HttpHeaders.Upgrade, ignoreCase = true)
 }
