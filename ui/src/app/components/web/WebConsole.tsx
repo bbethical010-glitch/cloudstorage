@@ -804,6 +804,106 @@ export function WebConsole() {
     });
   };
 
+  const uploadChunkViaBestPath = useCallback(async (
+    chunk: Blob,
+    filename: string,
+    relativePath: string | undefined,
+    chunkIndex: number,
+    totalChunks: number,
+    fileId: string,
+    chunkSize: number,
+    fileProgressMap: Record<string, number>,
+    updateGlobalProgress: () => void
+  ) => {
+    const params = new URLSearchParams({
+      path: currentPath,
+      filename,
+      chunkIndex: String(chunkIndex),
+      totalChunks: String(totalChunks),
+    });
+
+    if (relativePath) {
+      params.set('relativePath', relativePath);
+    }
+
+    if (p2pReady && isDataChannelReady && p2pTransport?.ready) {
+      const uploadFile = new File([chunk], filename, {
+        type: chunk.type || 'application/octet-stream',
+      });
+
+      fileProgressMap[fileId] = chunkIndex * chunkSize;
+      updateGlobalProgress();
+
+      const response = await p2pTransport.upload(
+        '/api/upload_chunk',
+        params.toString(),
+        uploadFile,
+        getHeaders() as Record<string, string>
+      );
+
+      let payload: any = {};
+      try {
+        payload = await response.json();
+      } catch (error) {
+        throw new Error(response.status >= 500 ? `Server Error (${response.status})` : 'Malformed JSON response');
+      }
+
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error || `Server error ${response.status}`);
+      }
+
+      fileProgressMap[fileId] = (chunkIndex * chunkSize) + chunk.size;
+      updateGlobalProgress();
+      return;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      let uploadUrl = buildApiUrl(`/api/upload_chunk?${params.toString()}`);
+
+      xhr.open("POST", uploadUrl);
+      xhr.timeout = 60000;
+
+      const headers = getHeaders();
+      if (headers.Authorization) xhr.setRequestHeader('Authorization', headers.Authorization);
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+
+      xhr.upload.addEventListener("progress", (event) => {
+        if (event.lengthComputable) {
+          fileProgressMap[fileId] = (chunkIndex * chunkSize) + event.loaded;
+          updateGlobalProgress();
+        }
+      });
+
+      xhr.onload = () => {
+        let resp: any;
+        try {
+          resp = JSON.parse(xhr.responseText);
+        } catch (e) {
+          resp = {
+            success: false,
+            error: xhr.status >= 500 ? `Server Error (${xhr.status})` : "Malformed JSON response"
+          };
+          console.error("Failed to parse chunk response:", xhr.responseText);
+        }
+
+        if (xhr.status === 200 && resp.success) {
+          fileProgressMap[fileId] = (chunkIndex * chunkSize) + chunk.size;
+          updateGlobalProgress();
+          resolve();
+        } else {
+          const errorDetail = resp.error || `Server error ${xhr.status}`;
+          console.error(`Chunk failed for ${filename} chunk ${chunkIndex}:`, errorDetail);
+          reject(new Error(errorDetail));
+        }
+      };
+
+      xhr.ontimeout = () => reject(new Error("Chunk upload timed out (60s)"));
+      xhr.onerror = () => reject(new Error("Network connection error"));
+      xhr.send(chunk);
+    });
+  }, [buildApiUrl, currentPath, getHeaders, isDataChannelReady, p2pReady, p2pTransport]);
+
   const processFiles = async (files: File[]) => {
     if (!files || files.length === 0) return;
     
@@ -880,55 +980,17 @@ export function WebConsole() {
             // Chunk-level retry (Standardized XHR contract)
             for (let retry = 0; retry < 3; retry++) {
                 try {
-                    await new Promise((resolve, reject) => {
-                        const xhr = new XMLHttpRequest();
-                        let uploadUrl = buildApiUrl(`/api/upload_chunk?path=${encodeURIComponent(currentPath)}&filename=${encodeURIComponent(filename)}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}`);
-                        if (file.webkitRelativePath) {
-                            uploadUrl += `&relativePath=${encodeURIComponent(file.webkitRelativePath)}`;
-                        }
-                        
-                        xhr.open("POST", uploadUrl);
-                        xhr.timeout = 15000; 
-                        
-                        const headers = getHeaders();
-                        if (headers.Authorization) xhr.setRequestHeader('Authorization', headers.Authorization);
-                        xhr.setRequestHeader("Content-Type", "application/octet-stream");
-
-                        xhr.upload.addEventListener("progress", (event) => {
-                            if (event.lengthComputable) {
-                                fileProgressMap[fileId] = (chunkIndex * CHUNK_SIZE) + event.loaded;
-                                updateGlobalProgress();
-                            }
-                        });
-
-                        xhr.onload = () => {
-                            let resp: any;
-                            try {
-                                resp = JSON.parse(xhr.responseText);
-                            } catch (e) {
-                                // Fallback for 500 error pages if StatusPages wasn't hit or returned non-JSON
-                                resp = { 
-                                    success: false, 
-                                    error: xhr.status >= 500 ? `Server Error (${xhr.status})` : "Malformed JSON response" 
-                                };
-                                console.error("Failed to parse chunk response:", xhr.responseText);
-                            }
-
-                            if (xhr.status === 200 && resp.success) {
-                                fileProgressMap[fileId] = (chunkIndex * CHUNK_SIZE) + chunk.size;
-                                updateGlobalProgress();
-                                resolve(null);
-                            } else {
-                                const errorDetail = resp.error || `Server error ${xhr.status}`;
-                                console.error(`Chunk failed for ${file.name} chunk ${chunkIndex}:`, errorDetail);
-                                reject(new Error(errorDetail));
-                            }
-                        };
-
-                        xhr.ontimeout = () => reject(new Error("Chunk upload timed out (15s)"));
-                        xhr.onerror = () => reject(new Error("Network connection error"));
-                        xhr.send(chunk);
-                    });
+                    await uploadChunkViaBestPath(
+                      chunk,
+                      filename,
+                      file.webkitRelativePath,
+                      chunkIndex,
+                      totalChunks,
+                      fileId,
+                      CHUNK_SIZE,
+                      fileProgressMap,
+                      updateGlobalProgress
+                    );
                     chunkSuccess = true;
                     break;
                 } catch (err: any) {
