@@ -20,6 +20,7 @@ import io.ktor.server.engine.ApplicationEngine
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.request.receive
+import io.ktor.server.request.receiveChannel
 import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondOutputStream
@@ -48,6 +49,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import io.ktor.server.plugins.contentnegotiation.*
+import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.serialization.gson.*
 
 class ServerService : Service() {
@@ -140,9 +142,23 @@ class ServerService : Service() {
                     anyHost() // Allow Web Console origin
                 }
 
+                install(StatusPages) {
+                    exception<Throwable> { call, cause ->
+                        android.util.Log.e("ServerService", "Unhandled exception in Ktor", cause)
+                        // Use a literal respond here if extension method is problematic in this scope
+                        val map = mutableMapOf<String, Any?>(
+                            "success" to false,
+                            "error" to (cause.message ?: "Internal Server Error"),
+                            "code" to "INTERNAL_SERVER_ERROR"
+                        )
+                        call.respond(map)
+                    }
+                }
+
                 install(ContentNegotiation) {
                     gson {
                         setPrettyPrinting()
+                        setLenient()
                     }
                 }
 
@@ -942,7 +958,7 @@ class ServerService : Service() {
                                 
                                 // Idempotent thread-safe write using locking and FileChannel seeking
                                 val lockKey = fileUri.toString()
-                                synchronized(fileLocks.computeIfAbsent(lockKey) { Any() }) {
+                                synchronized(fileLocks.getOrPut(lockKey) { Any() }) {
                                     contentResolver.openFileDescriptor(fileUri, "rw")?.use { pfd ->
                                         java.io.FileOutputStream(pfd.fileDescriptor).channel.use { channel ->
                                             channel.position(chunkIndex.toLong() * chunkSize)
@@ -1230,5 +1246,18 @@ class ServerService : Service() {
             bytes >= 1_024L -> String.format("%.1f KB", bytes / 1_024.0)
             else -> "$bytes B"
         }
+    }
+
+    private suspend fun io.ktor.server.application.ApplicationCall.respondJson(
+        success: Boolean, 
+        error: String? = null, 
+        code: String? = null, 
+        data: Any? = null
+    ) {
+        val map = mutableMapOf<String, Any?>("success" to success)
+        if (error != null) map["error"] = error
+        if (code != null) map["code"] = code
+        if (data != null) map["data"] = data
+        this.respond(map)
     }
 }

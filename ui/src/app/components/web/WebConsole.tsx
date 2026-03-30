@@ -903,14 +903,25 @@ export function WebConsole() {
 
                         xhr.onload = () => {
                             let resp: any;
-                            try { resp = JSON.parse(xhr.responseText); } catch (e) { resp = { success: false, error: "Malformed JSON response" }; }
+                            try {
+                                resp = JSON.parse(xhr.responseText);
+                            } catch (e) {
+                                // Fallback for 500 error pages if StatusPages wasn't hit or returned non-JSON
+                                resp = { 
+                                    success: false, 
+                                    error: xhr.status >= 500 ? `Server Error (${xhr.status})` : "Malformed JSON response" 
+                                };
+                                console.error("Failed to parse chunk response:", xhr.responseText);
+                            }
 
                             if (xhr.status === 200 && resp.success) {
                                 fileProgressMap[fileId] = (chunkIndex * CHUNK_SIZE) + chunk.size;
                                 updateGlobalProgress();
                                 resolve(null);
                             } else {
-                                reject(new Error(resp.error || `Server error ${xhr.status}`));
+                                const errorDetail = resp.error || `Server error ${xhr.status}`;
+                                console.error(`Chunk failed for ${file.name} chunk ${chunkIndex}:`, errorDetail);
+                                reject(new Error(errorDetail));
                             }
                         };
 
