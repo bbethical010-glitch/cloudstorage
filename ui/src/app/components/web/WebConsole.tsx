@@ -38,6 +38,7 @@ import {
   Home,
   X,
   Check,
+  AlertCircle,
   Menu,
   ArrowLeft,
   Sun,
@@ -190,6 +191,7 @@ export function WebConsole() {
   const [activeTab, setActiveTab] = useState("Drive");
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'success' | 'error' | 'partial'>('idle');
   const [uploadProgress, setUploadProgress] = useState(0);
   const [folderProgress, setFolderProgress] = useState({ success: 0, uploading: 0, failed: 0, total: 0 });
   const [failedUploads, setFailedUploads] = useState<{file: File, error: string}[]>([]);
@@ -805,34 +807,27 @@ export function WebConsole() {
   const processFiles = async (files: File[]) => {
     if (!files || files.length === 0) return;
     
+    setUploadStatus('uploading');
     setIsUploading(true);
     setUploadProgress(0);
     setFolderProgress({ success: 0, uploading: files.length, failed: 0, total: files.length });
     setFailedUploads([]);
     setSanitizedUploads({});
 
-    // Pre-flight check
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      const statusRes = await apiFetch('/api/status', {
-        method: 'GET',
-      });
-      clearTimeout(timeoutId);
-      if (!statusRes.ok) {
-        throw new Error();
-      }
-    } catch {
-      setIsUploading(false);
-      toast.error("Android Node is offline. Please open the Easy Storage app on your phone and ensure it is running.");
-      return;
-    }
+    // We'll track progress by bytes for all files
+    const fileProgressMap: Record<string, number> = {};
+    const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
 
+    const updateGlobalProgress = () => {
+      const uploadedBytes = Object.values(fileProgressMap).reduce((acc, b) => acc + b, 0);
+      setUploadProgress(Math.round((uploadedBytes / totalBytes) * 100));
+    };
+
+    // Pre-flight Folder Manifest if applicable
     const manifest = files.filter(f => f.webkitRelativePath && f.webkitRelativePath.includes('/')).map(f => {
       const CHUNK_SIZE = 5 * 1024 * 1024;
       return {
-        relativePath: f.webkitRelativePath, // Use verbatim relativePath
-        fileId: crypto.randomUUID(),
+        relativePath: f.webkitRelativePath,
         size: f.size,
         totalChunks: Math.max(1, Math.ceil(f.size / CHUNK_SIZE))
       };
@@ -845,43 +840,46 @@ export function WebConsole() {
           headers: { ...getHeaders(), 'Content-Type': 'application/json' } as any,
           body: JSON.stringify(manifest)
         });
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error || "Failed to pre-create directory tree");
+        const resp = await res.json().catch(() => ({}));
+        if (!res.ok || !resp.success) {
+          throw new Error(resp.error || "Failed to pre-create directory tree");
         }
       } catch (e: any) {
         setIsUploading(false);
+        setUploadStatus('error');
         toast.error(`Folder manifest creation failed: ${e.message}`);
         return;
       }
     }
 
+    const CHUNK_SIZE = 5 * 1024 * 1024;
     const failed: {file: File, error: string}[] = [];
 
     for (let i = 0; i < files.length; i++) {
         const file = files[i] as File & { webkitRelativePath?: string };
+        const fileId = crypto.randomUUID();
+        fileProgressMap[fileId] = 0;
+
         let relativePath = file.webkitRelativePath || "";
         let filename = file.name;
-        
         if (relativePath) {
-            const parts = relativePath.split('/');
-            filename = parts.pop() || file.name;
+            filename = relativePath.split('/').pop() || file.name;
         }
         
-        let success = false;
-        let lastError = "";
-        
-        for (let retry = 0; retry < 3; retry++) {
-            try {
-                const CHUNK_SIZE = 5 * 1024 * 1024;
-                const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
-                setUploadProgress(0);
+        const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+        let fileSuccess = true;
+        let fileError = "";
 
-                for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-                    const start = chunkIndex * CHUNK_SIZE;
-                    const end = Math.min(start + CHUNK_SIZE, file.size);
-                    const chunk = file.slice(start, end);
+        for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+            let chunkSuccess = false;
+            let chunkError = "";
+            const start = chunkIndex * CHUNK_SIZE;
+            const end = Math.min(start + CHUNK_SIZE, file.size);
+            const chunk = file.slice(start, end);
 
+            // Chunk-level retry (Standardized XHR contract)
+            for (let retry = 0; retry < 3; retry++) {
+                try {
                     await new Promise((resolve, reject) => {
                         const xhr = new XMLHttpRequest();
                         let uploadUrl = buildApiUrl(`/api/upload_chunk?path=${encodeURIComponent(currentPath)}&filename=${encodeURIComponent(filename)}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}`);
@@ -889,89 +887,94 @@ export function WebConsole() {
                             uploadUrl += `&relativePath=${encodeURIComponent(file.webkitRelativePath)}`;
                         }
                         
-                        console.log(`[CHUNK DIAGNOSTIC] fileId=${file.name}, chunkIndex=${chunkIndex}, relativePath=${file.webkitRelativePath}`);
-                        
                         xhr.open("POST", uploadUrl);
+                        xhr.timeout = 15000; 
+                        
                         const headers = getHeaders();
                         if (headers.Authorization) xhr.setRequestHeader('Authorization', headers.Authorization);
                         xhr.setRequestHeader("Content-Type", "application/octet-stream");
 
                         xhr.upload.addEventListener("progress", (event) => {
                             if (event.lengthComputable) {
-                                const totalUploadedSoFar = (chunkIndex * CHUNK_SIZE) + event.loaded;
-                                setUploadProgress(Math.round((totalUploadedSoFar / file.size) * 100));
+                                fileProgressMap[fileId] = (chunkIndex * CHUNK_SIZE) + event.loaded;
+                                updateGlobalProgress();
                             }
                         });
 
                         xhr.onload = () => {
-                            if (xhr.status === 200) {
+                            let resp: any;
+                            try { resp = JSON.parse(xhr.responseText); } catch (e) { resp = { success: false, error: "Malformed JSON response" }; }
+
+                            if (xhr.status === 200 && resp.success) {
+                                fileProgressMap[fileId] = (chunkIndex * CHUNK_SIZE) + chunk.size;
+                                updateGlobalProgress();
                                 resolve(null);
-                            } else if (xhr.status === 502 || xhr.status === 503) {
-                                const bodyStr = xhr.responseText || "{}";
-                                let reason = 'Relay server is unavailable. Please try again in a moment.';
-                                try {
-                                    const body = JSON.parse(bodyStr);
-                                    if (body.error === 'agent_offline') {
-                                        reason = 'Android Node is offline. Open the Easy Storage app on your phone.';
-                                    }
-                                } catch(e) {}
-                                reject(new Error(reason));
                             } else {
-                                try {
-                                    const json = JSON.parse(xhr.responseText);
-                                    console.error(`Chunk failed for ${file.webkitRelativePath} chunk ${chunkIndex}:`, json.error);
-                                    reject(new Error(json.error || `Server error ${xhr.status}`));
-                                } catch {
-                                    reject(new Error(xhr.responseText || `Server error ${xhr.status}`));
-                                }
+                                reject(new Error(resp.error || `Server error ${xhr.status}`));
                             }
                         };
-                        xhr.onerror = () => reject(new Error("Network connection severed."));
+
+                        xhr.ontimeout = () => reject(new Error("Chunk upload timed out (15s)"));
+                        xhr.onerror = () => reject(new Error("Network connection error"));
                         xhr.send(chunk);
                     });
+                    chunkSuccess = true;
+                    break;
+                } catch (err: any) {
+                    chunkError = err.message;
+                    console.warn(`Retry ${retry + 1} for ${file.name} (Chunk ${chunkIndex}): ${chunkError}`);
+                    await new Promise(r => setTimeout(r, 1000 * (retry + 1))); 
                 }
-                success = true;
-                break;
-            } catch (err: any) {
-                lastError = err.message;
+            }
+
+            if (!chunkSuccess) {
+                fileSuccess = false;
+                fileError = chunkError;
+                break; 
             }
         }
 
-        if (!success) {
-            failed.push({file, error: lastError});
-            setFolderProgress(prev => ({ ...prev, uploading: prev.uploading - 1, failed: prev.failed + 1 }));
-        } else {
+        if (fileSuccess) {
+            // Call upload_complete for idempotency / verification
+            try {
+                const completeUrl = buildApiUrl(`/api/upload_complete?path=${encodeURIComponent(currentPath)}&filename=${encodeURIComponent(filename)}`);
+                await apiFetch(completeUrl, { method: 'POST', headers: getHeaders() as any });
+            } catch (e) { console.warn("upload_complete failed, ignoring as chunks succeeded", e); }
+
             setFolderProgress(prev => ({ ...prev, uploading: prev.uploading - 1, success: prev.success + 1 }));
+        } else {
+            failed.push({file, error: fileError});
+            setFolderProgress(prev => ({ ...prev, uploading: prev.uploading - 1, failed: prev.failed + 1 }));
         }
     }
-    
+
+    // After all files are done, if any folder was uploaded, finalize folder names
     if (manifest.length > 0 && files.length > 0) {
-        const firstRel = files.find(f => f.webkitRelativePath)?.webkitRelativePath || "";
-        const rootFolder = firstRel.split('/')[0] || "folder";
         try {
-            const response = await apiFetch(`/api/folder_complete?path=${encodeURIComponent(currentPath)}&folder=${encodeURIComponent(rootFolder)}`, {
-                method: 'POST',
-                headers: getHeaders() as any
-            });
-            const data = await response.json();
-            if (data.sanitizedNames && Object.keys(data.sanitizedNames).length > 0) {
-                setSanitizedUploads(data.sanitizedNames);
-                toast.success(`${Object.keys(data.sanitizedNames).length} files were renamed to remove unsupported characters. See console.`, { duration: 8000 });
-                console.warn("Sanitized names map:", data.sanitizedNames);
+            const firstRel = files.find(f => f.webkitRelativePath)?.webkitRelativePath || "";
+            const rootFolder = firstRel.split('/')[0] || "";
+            if (rootFolder) {
+                const response = await apiFetch(`/api/folder_complete?path=${encodeURIComponent(currentPath)}&folder=${encodeURIComponent(rootFolder)}`, {
+                    method: 'POST',
+                    headers: getHeaders() as any
+                });
+                const data = await response.json();
+                if (data.success && data.data?.sanitizedNames) {
+                    setSanitizedUploads(data.data.sanitizedNames);
+                }
             }
-        } catch (e) {
-            console.error("folder_complete failed", e);
-        }
+        } catch (e) { console.error("folder_complete finalization failed", e); }
     }
-    
+
     setIsUploading(false);
-    setUploadProgress(100);
-    
     if (failed.length > 0) {
+        setUploadStatus(failed.length === files.length ? 'error' : 'partial');
         setFailedUploads(failed);
-        toast.error(`${failed.length} files failed to upload. See details.`);
+        toast.error(`${failed.length} files failed to upload.`);
     } else {
-        toast.success("Upload complete!");
+        setUploadStatus('success');
+        setUploadProgress(100);
+        toast.success("All files uploaded successfully!");
     }
     
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -1615,29 +1618,56 @@ export function WebConsole() {
 
       {/* Upload Animation Overlay */}
       <AnimatePresence>
-        {isUploading && (
+        {(isUploading || uploadStatus !== 'idle') && (
           <motion.div 
             initial={{ opacity: 0, y: 100 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 100 }}
-            className="fixed bottom-10 left-1/2 -translate-x-1/2 w-96 bg-[#111827] border border-[#2563EB]/40 p-4 rounded-2xl shadow-2xl z-50 flex items-center gap-4"
+            className={`fixed bottom-10 left-1/2 -translate-x-1/2 w-96 bg-[#111827] border p-4 rounded-2xl shadow-2xl z-50 flex items-center gap-4 ${
+                uploadStatus === 'success' ? 'border-[#10B981]/60' : 
+                uploadStatus === 'error' ? 'border-[#EF4444]/60' : 
+                uploadStatus === 'partial' ? 'border-[#F59E0B]/60' : 'border-[#2563EB]/40'
+            }`}
           >
-             <div className="w-10 h-10 bg-[#2563EB]/10 rounded-xl flex items-center justify-center shrink-0">
-                <Upload className="w-5 h-5 text-[#2563EB] animate-bounce" />
+             <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                uploadStatus === 'success' ? 'bg-[#10B981]/10' : 
+                uploadStatus === 'error' ? 'bg-[#EF4444]/10' : 
+                uploadStatus === 'partial' ? 'bg-[#F59E0B]/10' : 'bg-[#2563EB]/10'
+             }`}>
+                {uploadStatus === 'success' ? <Check className="w-5 h-5 text-[#10B981]" /> :
+                 uploadStatus === 'error' ? <AlertCircle className="w-5 h-5 text-[#EF4444]" /> :
+                 uploadStatus === 'partial' ? <AlertCircle className="w-5 h-5 text-[#F59E0B]" /> :
+                 <Upload className="w-5 h-5 text-[#2563EB] animate-bounce" />}
              </div>
              <div className="flex-1">
                 <div className="flex justify-between mb-1.5 opacity-100">
-                   <span className="text-xs font-bold uppercase tracking-wider text-white">Uploading...</span>
-                   <span className="text-[10px] font-mono font-bold text-white">{uploadProgress}%</span>
+                   <span className="text-xs font-bold uppercase tracking-wider text-white">
+                     {uploadStatus === 'uploading' ? 'Uploading...' :
+                      uploadStatus === 'success' ? 'Upload Complete' :
+                      uploadStatus === 'error' ? 'Upload Failed' :
+                      uploadStatus === 'partial' ? 'Partial Success' : 'Idle'}
+                   </span>
+                   {uploadStatus !== 'idle' && (
+                     <div className="flex items-center gap-2">
+                        {uploadStatus === 'success' && <button onClick={() => setUploadStatus('idle')} className="text-[10px] text-white/50 hover:text-white underline">Dismiss</button>}
+                        <span className="text-[10px] font-mono font-bold text-white">{uploadProgress}%</span>
+                     </div>
+                   )}
                 </div>
-                <Progress value={uploadProgress} className="h-1 bg-[#0B1220]" />
-                {folderProgress.total > 1 && (
+                <Progress 
+                    value={uploadProgress} 
+                    className={`h-1 bg-[#0B1220] ${
+                        uploadStatus === 'success' ? '[&>div]:bg-[#10B981]' : 
+                        uploadStatus === 'error' ? '[&>div]:bg-[#EF4444]' : 
+                        uploadStatus === 'partial' ? '[&>div]:bg-[#F59E0B]' : '[&>div]:bg-[#2563EB]'
+                    }`} 
+                />
+                {(folderProgress.total > 1 || uploadStatus !== 'uploading') && (
                   <div className="mt-2 text-[10px] text-[#9CA3AF] font-medium flex justify-between gap-4">
-                    <span>Folder Progress</span>
+                    <span>{uploadStatus === 'uploading' ? 'Folder Progress' : 'Summary'}</span>
                     <span className="flex gap-2">
-                        <span className="text-[#10B981]">{folderProgress.success} uploaded</span> &middot;
-                        <span className="text-[#3B82F6]">{folderProgress.uploading} uploading</span> &middot;
-                        <span className="text-[#EF4444]">{folderProgress.failed} failed</span>
+                        <span className="text-[#10B981]">{folderProgress.success} OK</span> &middot;
+                        <span className="text-[#EF4444]">{folderProgress.failed} FAIL</span>
                     </span>
                   </div>
                 )}
