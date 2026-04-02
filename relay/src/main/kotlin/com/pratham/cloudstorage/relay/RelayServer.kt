@@ -51,6 +51,18 @@ fun Application.relayModule() {
     val registry = SignalingRegistry()
 
     routing {
+        // 1. HEALTH CHECK MUST BE AT THE VERY TOP
+        get("/health") {
+            call.respondText("relay_online", status = HttpStatusCode.OK)
+        }
+
+        // 2. STATIC ASSETS SECOND
+        // This ensures your CSS and JS load without hitting the catch-all
+        staticResources("/assets", "static/assets")
+        staticResources("/", "static") {
+            exclude { it.path.endsWith(".html") } // Don't let it serve the raw HTML yet
+        }
+
         get("/nodes") {
             val connectedCount = registry.connectedAgentCount()
             val shareCodes = registry.connectedShareCodes()
@@ -189,18 +201,6 @@ fun Application.relayModule() {
 
         // ── 4. React SPA & Static Files (Lowest Priority) ───────────────────────
         
-        /*
-         * Static asset routing MUST be declared before the SPA catch-all route.
-         * In Ktor, if the wildcard catch-all route intercepts asset requests, it will
-         * incorrectly serve the raw index.html instead of failing or yielding to the static
-         * handler (e.g., serving HTML when the browser expects /assets/index.js).
-         * Explicitly declaring staticResources here ensures Ktor serves the CSS/JS and
-         * root assets FIRST, allowing only unhandled navigational links to fall through to
-         * the SPA fallback.
-         */
-        staticResources("/assets", "static/assets")
-        staticResources("/", "static")
-
         get("{...}") {
             val path = call.request.path()
             if (path.startsWith("/api") || path.startsWith("/assets")) {
