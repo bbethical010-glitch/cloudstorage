@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Inter:wght@300;400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "on-surface-variant": "#bbcabf",
+            "outline": "#86948a",
+            "error-container": "#93000a",
+            "primary-fixed": "#6ffbbe",
+            "secondary": "#4cd7f6",
+            "tertiary-fixed": "#ffddb8",
+            "tertiary-container": "#e29100",
+            "on-error": "#690005",
+            "on-secondary-fixed-variant": "#004e5c",
+            "on-secondary": "#003640",
+            "on-surface": "#e3e1e9",
+            "on-background": "#e3e1e9",
+            "tertiary-fixed-dim": "#ffb95f",
+            "on-primary-fixed": "#002113",
+            "surface-bright": "#38393f",
+            "surface": "#121318",
+            "on-primary-container": "#00422b",
+            "surface-container-low": "#1a1b21",
+            "on-primary": "#003824",
+            "surface-container-lowest": "#0d0e13",
+            "on-secondary-container": "#00424e",
+            "on-secondary-fixed": "#001f26",
+            "secondary-fixed": "#acedff",
+            "tertiary": "#ffb95f",
+            "on-tertiary-fixed-variant": "#653e00",
+            "surface-tint": "#4edea3",
+            "on-tertiary-container": "#523200",
+            "on-primary-fixed-variant": "#005236",
+            "inverse-primary": "#006c49",
+            "on-tertiary-fixed": "#2a1700",
+            "surface-variant": "#34343a",
+            "primary-container": "#10b981",
+            "background": "#0d0e13",
+            "secondary-container": "#03b5d3",
+            "inverse-surface": "#e3e1e9",
+            "secondary-fixed-dim": "#4cd7f6",
+            "surface-dim": "#121318",
+            "inverse-on-surface": "#2f3036",
+            "primary-fixed-dim": "#4edea3",
+            "surface-container-high": "#292a2f",
+            "on-tertiary": "#472a00",
+            "on-error-container": "#ffdad6",
+            "surface-container-highest": "#34343a",
+            "error": "#ffb4ab",
+            "outline-variant": "#3c4a42",
+            "primary": "#4edea3",
+            "surface-container": "#1e1f25"
+          },
+          fontFamily: {
+            "headline": ["Space Grotesk"],
+            "body": ["Inter"],
+            "label": ["JetBrains Mono"]
+          },
+          borderRadius: {"DEFAULT": "0px", "lg": "0px", "xl": "0px", "full": "9999px"},
+        },
+      },
+    }
+  </script>
+<style>
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      font-size: 20px;
+    }
+    .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #3c4a42; }
+    .scanline {
+      background: linear-gradient(to bottom, transparent 50%, rgba(16, 185, 129, 0.05) 50%);
+      background-size: 100% 4px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body class="bg-background text-on-background font-body selection:bg-primary selection:text-on-primary overflow-hidden">
+<!-- Top Navigation Shell -->
+<nav class="fixed top-0 w-full z-50 flex justify-between items-center px-6 h-16 bg-[#0d0e13] dark:bg-[#0d0e13] border-b border-[#3c4a42] font-['Space_Grotesk'] uppercase tracking-widest text-sm">
+<div class="flex items-center gap-8">
+<span class="text-[#10b981] font-black text-xl tracking-tighter">VAULT_OS_v2.0</span>
+<div class="hidden md:flex gap-6">
+<a class="text-slate-500 hover:text-[#4cd7f6] transition-colors" href="#">Cluster</a>
+<a class="text-[#10b981] border-b-2 border-[#10b981] pb-1" href="#">Volumes</a>
+<a class="text-slate-500 hover:text-[#4cd7f6] transition-colors" href="#">Nodes</a>
+<a class="text-slate-500 hover:text-[#4cd7f6] transition-colors" href="#">Backups</a>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<button class="p-2 hover:bg-[#1e1f25] hover:text-[#10b981] transition-all"><span class="material-symbols-outlined">settings</span></button>
+<button class="p-2 hover:bg-[#1e1f25] hover:text-[#10b981] transition-all"><span class="material-symbols-outlined">notifications</span></button>
+<img alt="System Operator" class="w-8 h-8 object-cover grayscale brightness-75 border border-outline-variant" data-alt="Close-up portrait of a tech-focused individual with cool lighting, neon reflections, and a professional cyberpunk aesthetic." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBslh9e-i-X_4_RjU_ShOtWN_qkzbGNmHrgGFw50jaq4ViHK78Qs_E0vDG1RBreRA7x7B6pvLwY53L0nA-THOSn0IhPJrlVTmPzsq3CSsiUNFEk-7g2IRwWgDLHaG_nay0H8Cg5v8HmBehxpIiyQChNfU7KQZbFSs9AR8YqQ5hVF36RRWsDeTrd-BADGFPqOKGQgqXQOLa5BtQ0JfMnU-WHGe1F5zFzWImpsgvLcleqMTSf8qDAYvmyghKRQHoy3SANj4bBtWyQp9s"/>
+</div>
+</nav>
+<!-- Side Navigation Shell -->
+<aside class="fixed left-0 top-16 h-[calc(100vh-64px)] w-60 border-r border-[#3c4a42] bg-[#121318] dark:bg-[#121318] flex flex-col justify-between py-4 font-['JetBrains_Mono'] text-xs tracking-tight">
+<div class="space-y-1">
+<div class="px-6 mb-6">
+<p class="text-[#4cd7f6] font-bold">OPERATOR_01</p>
+<p class="text-slate-500 uppercase text-[10px]">Privileged Access</p>
+</div>
+<a class="bg-[#1e1f25] text-[#10b981] border-l-4 border-[#10b981] px-4 py-3 flex items-center gap-3" href="#">
+<span class="material-symbols-outlined">folder_open</span> File Explorer
+      </a>
+<a class="text-slate-400 px-4 py-3 hover:bg-[#1e1f25]/50 flex items-center gap-3 transition-all border-l-2 border-transparent hover:border-[#4cd7f6]/30" href="#">
+<span class="material-symbols-outlined">swap_vert</span> Transfer Queue
+      </a>
+<a class="text-slate-400 px-4 py-3 hover:bg-[#1e1f25]/50 flex items-center gap-3 transition-all border-l-2 border-transparent hover:border-[#4cd7f6]/30" href="#">
+<span class="material-symbols-outlined">terminal</span> SSH Terminal
+      </a>
+<a class="text-slate-400 px-4 py-3 hover:bg-[#1e1f25]/50 flex items-center gap-3 transition-all border-l-2 border-transparent hover:border-[#4cd7f6]/30" href="#">
+<span class="material-symbols-outlined">vpn_key</span> Security Keys
+      </a>
+<a class="text-slate-400 px-4 py-3 hover:bg-[#1e1f25]/50 flex items-center gap-3 transition-all border-l-2 border-transparent hover:border-[#4cd7f6]/30" href="#">
+<span class="material-symbols-outlined">history</span> Audit Logs
+      </a>
+</div>
+<div class="px-4 space-y-4">
+<div class="h-px bg-outline-variant/30 mx-2"></div>
+<a class="flex items-center gap-3 text-slate-400 px-2 py-1 hover:text-secondary transition-colors" href="#">
+<span class="material-symbols-outlined text-[18px]">sensors</span> System Status
+      </a>
+<a class="flex items-center gap-3 text-slate-400 px-2 py-1 hover:text-secondary transition-colors" href="#">
+<span class="material-symbols-outlined text-[18px]">menu_book</span> Documentation
+      </a>
+</div>
+</aside>
+<!-- Main Grid Canvas -->
+<main class="ml-60 pt-16 h-screen grid grid-cols-10 overflow-hidden">
+<!-- Zone 1: The Vault (70%) -->
+<section class="col-span-7 border-r border-outline-variant flex flex-col h-full bg-surface-container-lowest relative">
+<div class="scanline absolute inset-0 opacity-10 pointer-events-none"></div>
+<!-- Breadcrumbs & Actions -->
+<header class="h-14 flex items-center justify-between px-6 border-b border-outline-variant bg-surface-container-low/50">
+<div class="flex items-center gap-2 font-label text-sm">
+<span class="text-primary opacity-50">~</span>
+<span class="text-slate-500">/</span>
+<span class="text-slate-300">root</span>
+<span class="text-slate-500">/</span>
+<span class="text-primary">documents</span>
+</div>
+<div class="flex gap-4">
+<button class="bg-primary/10 border border-primary text-primary px-3 py-1 text-xs font-label uppercase tracking-wider hover:bg-primary hover:text-on-primary transition-all">New_Directory</button>
+<button class="bg-secondary/10 border border-secondary text-secondary px-3 py-1 text-xs font-label uppercase tracking-wider hover:bg-secondary hover:text-on-secondary transition-all">Encrypted_Sync</button>
+</div>
+</header>
+<div class="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-8">
+<!-- Large Drop Zone -->
+<div class="border-2 border-dashed border-outline-variant hover:border-primary/50 transition-colors group p-12 flex flex-col items-center justify-center gap-4 bg-surface-container-low/30 cursor-pointer">
+<div class="w-16 h-16 rounded-full border border-outline-variant flex items-center justify-center group-hover:border-primary group-hover:bg-primary/5 transition-all">
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors text-3xl">upload_file</span>
+</div>
+<div class="text-center">
+<p class="font-headline font-bold text-lg tracking-tight uppercase">Push to Vault</p>
+<p class="font-label text-[10px] text-slate-500 uppercase tracking-widest mt-1">Drag &amp; Drop or <span class="text-primary underline">Browse Terminal</span></p>
+</div>
+</div>
+<!-- File List Grid -->
+<div class="space-y-px bg-outline-variant/30">
+<!-- Table Header -->
+<div class="grid grid-cols-12 gap-4 px-4 py-3 bg-surface-container-low font-label text-[10px] text-slate-500 uppercase tracking-widest">
+<div class="col-span-6">Object_Identifier</div>
+<div class="col-span-2 text-right">Size_Metric</div>
+<div class="col-span-2 text-right">Permissions</div>
+<div class="col-span-2 text-right">Last_Modified</div>
+</div>
+<!-- File Row 1: Folder -->
+<div class="group grid grid-cols-12 gap-4 px-4 py-4 bg-background hover:bg-surface-container transition-all cursor-pointer items-center relative overflow-hidden">
+<div class="col-span-6 flex items-center gap-4">
+<span class="material-symbols-outlined text-tertiary">folder</span>
+<span class="font-body text-sm text-slate-200">System_Configs</span>
+</div>
+<div class="col-span-2 text-right font-label text-xs text-slate-400">--</div>
+<div class="col-span-2 text-right font-label text-xs text-secondary opacity-60">drwxr-xr-x</div>
+<div class="col-span-2 text-right font-label text-xs text-slate-500">2023-10-24 14:02:04</div>
+<!-- Telemetry Overlay on Hover -->
+<div class="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 flex items-center px-16 pointer-events-none border-l-2 border-primary">
+<span class="font-label text-[10px] text-primary bg-background px-2">SHA256: 0x882...AF4 | BYTES: DIR_SIZE_CALC_PENDING</span>
+</div>
+</div>
+<!-- File Row 2: Code -->
+<div class="group grid grid-cols-12 gap-4 px-4 py-4 bg-background hover:bg-surface-container transition-all cursor-pointer items-center relative">
+<div class="col-span-6 flex items-center gap-4">
+<span class="material-symbols-outlined text-secondary">code</span>
+<span class="font-body text-sm text-slate-200">main_protocol.js</span>
+</div>
+<div class="col-span-2 text-right font-label text-xs text-slate-400">14.2 KB</div>
+<div class="col-span-2 text-right font-label text-xs text-secondary opacity-60">-rw-r--r--</div>
+<div class="col-span-2 text-right font-label text-xs text-slate-500">2023-11-01 09:12:44</div>
+<div class="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 flex items-center px-16 pointer-events-none border-l-2 border-primary">
+<span class="font-label text-[10px] text-primary bg-background px-2">SHA256: E3B0C44298FC1C149AFBF4C8996FB924 | BYTES: 14541</span>
+</div>
+</div>
+<!-- File Row 3: PDF -->
+<div class="group grid grid-cols-12 gap-4 px-4 py-4 bg-background hover:bg-surface-container transition-all cursor-pointer items-center relative">
+<div class="col-span-6 flex items-center gap-4">
+<span class="material-symbols-outlined text-error">picture_as_pdf</span>
+<span class="font-body text-sm text-slate-200">Annual_Report_2024.pdf</span>
+</div>
+<div class="col-span-2 text-right font-label text-xs text-slate-400">4.8 MB</div>
+<div class="col-span-2 text-right font-label text-xs text-secondary opacity-60">-r--------</div>
+<div class="col-span-2 text-right font-label text-xs text-slate-500">2023-12-15 18:30:11</div>
+<div class="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 flex items-center px-16 pointer-events-none border-l-2 border-primary">
+<span class="font-label text-[10px] text-primary bg-background px-2">SHA256: 7F83B1657FF1FC53B92DC18148A1D65F | BYTES: 5033164</span>
+</div>
+</div>
+<!-- File Row 4: Image -->
+<div class="group grid grid-cols-12 gap-4 px-4 py-4 bg-background hover:bg-surface-container transition-all cursor-pointer items-center relative">
+<div class="col-span-6 flex items-center gap-4">
+<span class="material-symbols-outlined text-primary">image</span>
+<span class="font-body text-sm text-slate-200">infrastructure_map.png</span>
+</div>
+<div class="col-span-2 text-right font-label text-xs text-slate-400">1.2 MB</div>
+<div class="col-span-2 text-right font-label text-xs text-secondary opacity-60">-rw-rw-r--</div>
+<div class="col-span-2 text-right font-label text-xs text-slate-500">2024-01-10 11:05:00</div>
+<div class="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 flex items-center px-16 pointer-events-none border-l-2 border-primary">
+<span class="font-label text-[10px] text-primary bg-background px-2">SHA256: D57B1B629B124C6556105A775C5A856D | BYTES: 1258291</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Zone 2: The Engine Room (30%) -->
+<aside class="col-span-3 flex flex-col h-full bg-[#0d0e13]">
+<!-- Node Status Header -->
+<div class="p-6 border-b border-outline-variant">
+<div class="flex items-center gap-3">
+<span class="relative flex h-3 w-3">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+<span class="relative inline-flex rounded-full h-3 w-3 bg-primary"></span>
+</span>
+<span class="font-label text-xs tracking-tighter text-primary">P2P TUNNEL SECURED</span>
+</div>
+<div class="mt-4 flex justify-between items-baseline">
+<h2 class="font-headline font-black text-4xl text-white">100<span class="text-slate-600 text-lg ml-2 tracking-normal">%</span></h2>
+<span class="font-label text-[10px] text-slate-500 uppercase tracking-widest">UPTIME_INDEX</span>
+</div>
+</div>
+<!-- Network Sparkline -->
+<div class="p-6 space-y-4">
+<div class="flex justify-between items-center">
+<span class="font-label text-[10px] text-slate-400 uppercase tracking-widest">Live_Network_TxRx</span>
+<span class="font-label text-[10px] text-secondary">ACTIVE_SESSIONS: 12</span>
+</div>
+<!-- Mock Graph Area -->
+<div class="h-32 border border-outline-variant bg-surface-container-low/20 relative flex items-end">
+<svg class="absolute inset-0 w-full h-full" preserveaspectratio="none" viewbox="0 0 400 100">
+<path d="M0 80 Q 50 60, 100 85 T 200 70 T 300 90 T 400 75" fill="none" stroke="#4cd7f6" stroke-width="1.5"></path>
+<path d="M0 90 Q 50 85, 100 95 T 200 88 T 300 92 T 400 85" fill="none" stroke="#10b981" stroke-width="1.5"></path>
+</svg>
+<div class="absolute inset-0 flex flex-col justify-between p-2 opacity-30 pointer-events-none">
+<div class="border-t border-outline-variant w-full h-px"></div>
+<div class="border-t border-outline-variant w-full h-px"></div>
+<div class="border-t border-outline-variant w-full h-px"></div>
+</div>
+</div>
+<div class="grid grid-cols-2 gap-4">
+<div class="bg-surface-container-low p-3 border-l-2 border-secondary">
+<p class="font-label text-[9px] text-slate-500 uppercase">Transmit_Tx</p>
+<p class="font-label text-lg text-secondary">8.4 Mb/s</p>
+</div>
+<div class="bg-surface-container-low p-3 border-l-2 border-primary">
+<p class="font-label text-[9px] text-slate-500 uppercase">Receive_Rx</p>
+<p class="font-label text-lg text-primary">1.2 Mb/s</p>
+</div>
+</div>
+</div>
+<!-- Live Console Log -->
+<div class="flex-1 flex flex-col overflow-hidden bg-black/40 border-t border-outline-variant">
+<div class="px-6 py-2 bg-surface-container-low/50 border-b border-outline-variant flex justify-between items-center">
+<span class="font-label text-[10px] text-slate-400 uppercase tracking-widest">System_Console_Out</span>
+<div class="flex gap-1">
+<div class="w-2 h-2 rounded-full bg-error/40"></div>
+<div class="w-2 h-2 rounded-full bg-tertiary/40"></div>
+<div class="w-2 h-2 rounded-full bg-primary/40"></div>
+</div>
+</div>
+<div class="flex-1 p-6 font-label text-[11px] leading-relaxed custom-scrollbar overflow-y-auto space-y-1">
+<div class="flex gap-3">
+<span class="text-slate-600">[14:02:04]</span>
+<span class="text-primary">[SYS]</span>
+<span class="text-slate-300">WebRTC ICE Candidate Gathered</span>
+</div>
+<div class="flex gap-3">
+<span class="text-slate-600">[14:02:05]</span>
+<span class="text-secondary">[NET]</span>
+<span class="text-slate-300">Chunk 45/100 Transmitted to Node_Alpha</span>
+</div>
+<div class="flex gap-3">
+<span class="text-slate-600">[14:02:05]</span>
+<span class="text-tertiary">[IO]</span>
+<span class="text-slate-300">Storage Buffer Flushed</span>
+</div>
+<div class="flex gap-3">
+<span class="text-slate-600">[14:02:06]</span>
+<span class="text-primary">[SYS]</span>
+<span class="text-slate-300">Entropy pool updated - OK</span>
+</div>
+<div class="flex gap-3">
+<span class="text-slate-600">[14:02:08]</span>
+<span class="text-secondary">[NET]</span>
+<span class="text-slate-300">Handshake verified with 0x4f...22</span>
+</div>
+<div class="flex gap-3">
+<span class="text-slate-600">[14:02:10]</span>
+<span class="text-primary">[SYS]</span>
+<span class="text-slate-300">Background worker process ID 8824 initiated</span>
+</div>
+<div class="flex gap-3">
+<span class="text-slate-600">[14:02:12]</span>
+<span class="text-error">[ERR]</span>
+<span class="text-error-container bg-error/10 px-1 italic">Retrying shard fetch from redundant cluster...</span>
+</div>
+<div class="flex gap-3">
+<span class="text-slate-600">[14:02:14]</span>
+<span class="text-primary">[SYS]</span>
+<span class="text-slate-300">Sync state: OPTIMIZED</span>
+</div>
+<div class="pt-4 animate-pulse">
+<span class="bg-primary text-black px-1 mr-2">_</span>
+<span class="text-primary">AWAITING_INPUT</span>
+</div>
+</div>
+</div>
+</aside>
+</main>
+<!-- Floating Status Indicator (Optional but aesthetic) -->
+<div class="fixed bottom-6 right-6 z-[100] flex flex-col gap-2 items-end">
+<div class="bg-surface-container px-4 py-2 border border-outline-variant font-label text-[10px] flex items-center gap-3 shadow-2xl">
+<span class="text-slate-500 uppercase">Latency</span>
+<span class="text-secondary">24ms</span>
+<div class="w-px h-3 bg-outline-variant"></div>
+<span class="text-slate-500 uppercase">Region</span>
+<span class="text-white">US-EAST-1</span>
+</div>
+</div>
+</body></html>

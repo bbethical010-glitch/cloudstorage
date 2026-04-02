@@ -51,6 +51,18 @@ fun Application.relayModule() {
     val registry = SignalingRegistry()
 
     routing {
+        // 1. HEALTH CHECK MUST BE AT THE VERY TOP
+        get("/health") {
+            call.respondText("relay_online", status = HttpStatusCode.OK)
+        }
+
+        // 2. STATIC ASSETS SECOND
+        // This ensures your CSS and JS load without hitting the catch-all
+        staticResources("/assets", "static/assets")
+        staticResources("/", "static") {
+            exclude { it.path.endsWith(".html") } // Don't let it serve the raw HTML yet
+        }
+
         get("/nodes") {
             val connectedCount = registry.connectedAgentCount()
             val shareCodes = registry.connectedShareCodes()
@@ -189,16 +201,12 @@ fun Application.relayModule() {
 
         // ── 4. React SPA & Static Files (Lowest Priority) ───────────────────────
         
-        staticResources("/", "web") {
-            default("index.html")
-        }
-
-        get("{path...}") {
-            val path = call.parameters.getAll("path")?.joinToString("/") { it } ?: ""
-            if (path.startsWith("api")) {
+        get("{...}") {
+            val path = call.request.path()
+            if (path.startsWith("/api") || path.startsWith("/assets")) {
                  call.respond(HttpStatusCode.NotFound)
             } else {
-                 val content = registry.javaClass.classLoader.getResource("web/index.html")?.readBytes()
+                 val content = registry.javaClass.classLoader.getResource("static/index.html")?.readBytes()
                  if (content != null) call.respondBytes(content, ContentType.Text.Html)
                  else call.respond(HttpStatusCode.NotFound)
             }

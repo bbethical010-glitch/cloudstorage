@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700;900&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "error": "#ffb4ab",
+              "on-background": "#e3e1e9",
+              "surface-container-low": "#1a1b21",
+              "primary-container": "#10b981",
+              "on-primary": "#003824",
+              "background": "#121318",
+              "on-error": "#690005",
+              "on-error-container": "#ffdad6",
+              "error-container": "#93000a",
+              "surface-tint": "#4edea3",
+              "inverse-primary": "#006c49",
+              "surface-container-highest": "#34343a",
+              "primary": "#4edea3",
+              "outline": "#86948a",
+              "on-secondary": "#003640",
+              "on-tertiary-fixed": "#2a1700",
+              "on-surface": "#e3e1e9",
+              "surface": "#121318",
+              "tertiary": "#ffb95f",
+              "on-surface-variant": "#bbcabf",
+              "surface-container-high": "#292a2f",
+              "tertiary-fixed-dim": "#ffb95f",
+              "outline-variant": "#3c4a42",
+              "primary-fixed": "#6ffbbe",
+              "on-tertiary-fixed-variant": "#653e00",
+              "inverse-on-surface": "#2f3036",
+              "surface-container-lowest": "#0d0e13",
+              "surface-variant": "#34343a",
+              "tertiary-fixed": "#ffddb8",
+              "secondary": "#4cd7f6",
+              "on-primary-fixed": "#002113",
+              "on-tertiary-container": "#523200",
+              "surface-bright": "#38393f",
+              "tertiary-container": "#e29100",
+              "inverse-surface": "#e3e1e9",
+              "secondary-fixed": "#acedff",
+              "on-primary-fixed-variant": "#005236",
+              "secondary-fixed-dim": "#4cd7f6",
+              "on-secondary-container": "#00424e",
+              "surface-dim": "#121318",
+              "on-secondary-fixed-variant": "#004e5c",
+              "on-secondary-fixed": "#001f26",
+              "primary-fixed-dim": "#4edea3",
+              "on-tertiary": "#472a00",
+              "on-primary-container": "#00422b",
+              "surface-container": "#1e1f25",
+              "secondary-container": "#03b5d3"
+            },
+            fontFamily: {
+              "headline": ["Space Grotesk"],
+              "body": ["Inter"],
+              "label": ["Space Grotesk"],
+              "mono": ["JetBrains Mono"]
+            },
+            borderRadius: {"DEFAULT": "0px", "lg": "0px", "xl": "0px", "full": "9999px"},
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .vanta-depth {
+            background-color: #0d0e13;
+        }
+        .terminal-scanline {
+            background: linear-gradient(rgba(18, 19, 24, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+        }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: #121318; }
+        ::-webkit-scrollbar-thumb { background: #3c4a42; }
+    </style>
+</head>
+<body class="bg-surface-container-lowest text-on-surface font-body min-h-screen flex items-center justify-center p-4">
+<!-- TopNavBar: Execution of JSON style keys -->
+<header class="fixed top-0 w-full z-50 flex justify-between items-center px-6 h-16 bg-[#0d0e13] dark:bg-[#0d0e13] border-b border-[#3c4a42]">
+<div class="flex items-center gap-8">
+<span class="text-[#10b981] font-black text-xl tracking-tighter font-headline">VAULT_OS_v2.0</span>
+<nav class="hidden md:flex gap-6 font-['Space_Grotesk'] uppercase tracking-widest text-sm">
+<a class="text-slate-500 hover:text-[#4cd7f6] transition-colors" href="#">Cluster</a>
+<a class="text-[#10b981] border-b-2 border-[#10b981] pb-1" href="#">Volumes</a>
+<a class="text-slate-500 hover:text-[#4cd7f6] transition-colors" href="#">Nodes</a>
+<a class="text-slate-500 hover:text-[#4cd7f6] transition-colors" href="#">Backups</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<button class="material-symbols-outlined text-slate-500 hover:bg-[#1e1f25] hover:text-[#10b981] p-2 transition-all">settings</button>
+<button class="material-symbols-outlined text-slate-500 hover:bg-[#1e1f25] hover:text-[#10b981] p-2 transition-all">notifications</button>
+<img alt="System Operator Avatar" class="w-8 h-8 rounded-full border border-outline-variant" data-alt="high-contrast portrait of a digital avatar silhouette with green glowing circuitry patterns on a black background, tech aesthetic" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAzXeTKSrx9zMG6F3A1QuyyFRmsC_nor8KH87umsL7DBTWCDf9tTYDMG8GHif2nTad1tpMQioFVphAB53phNVQx2oIJkL403gtIK2AJhbEKwiiMJuW9n4qHZM7DQAQY-J4E1-npmwR1K8nYjGUQOzuxegsH_RuFhi4YvM6uD7CtZU_UXgei7RMaEst6c8LgzCkw7Ga00g0eT0TRvVOWxT5A1DTQ__VXrpgfBu-zau0ka_WRU_nP_mO9J1XpTFQAKhxsCg9bq17PR3U"/>
+</div>
+</header>
+<!-- SideNavBar: Execution of JSON style keys -->
+<aside class="fixed left-0 top-16 h-[calc(100vh-64px)] w-60 border-r border-[#3c4a42] bg-[#121318] dark:bg-[#121318] flex flex-col justify-between py-4 hidden lg:flex">
+<div class="flex flex-col">
+<div class="px-6 mb-8">
+<p class="text-[#4cd7f6] font-bold font-mono text-xs">OPERATOR_01</p>
+<p class="text-slate-500 text-[10px] tracking-tight uppercase">Privileged Access</p>
+</div>
+<nav class="flex flex-col font-['JetBrains_Mono'] text-xs tracking-tight">
+<div class="text-slate-400 px-4 py-3 hover:bg-[#1e1f25]/50 flex items-center gap-3 cursor-pointer group">
+<span class="material-symbols-outlined text-sm">folder_open</span>
+<span>File Explorer</span>
+</div>
+<div class="bg-[#1e1f25] text-[#10b981] border-l-4 border-[#10b981] px-4 py-3 flex items-center gap-3 cursor-pointer">
+<span class="material-symbols-outlined text-sm">swap_vert</span>
+<span>Transfer Queue</span>
+</div>
+<div class="text-slate-400 px-4 py-3 hover:bg-[#1e1f25]/50 flex items-center gap-3 cursor-pointer group">
+<span class="material-symbols-outlined text-sm">terminal</span>
+<span>SSH Terminal</span>
+</div>
+<div class="text-slate-400 px-4 py-3 hover:bg-[#1e1f25]/50 flex items-center gap-3 cursor-pointer group">
+<span class="material-symbols-outlined text-sm">vpn_key</span>
+<span>Security Keys</span>
+</div>
+<div class="text-slate-400 px-4 py-3 hover:bg-[#1e1f25]/50 flex items-center gap-3 cursor-pointer group">
+<span class="material-symbols-outlined text-sm">history</span>
+<span>Audit Logs</span>
+</div>
+</nav>
+</div>
+<div class="px-4 border-t border-outline-variant pt-4">
+<div class="flex items-center gap-3 text-slate-500 py-2 hover:text-[#4cd7f6] transition-all cursor-pointer">
+<span class="material-symbols-outlined text-sm">sensors</span>
+<span class="font-mono text-[10px]">System Status</span>
+</div>
+<div class="flex items-center gap-3 text-slate-500 py-2 hover:text-[#4cd7f6] transition-all cursor-pointer">
+<span class="material-symbols-outlined text-sm">menu_book</span>
+<span class="font-mono text-[10px]">Documentation</span>
+</div>
+</div>
+</aside>
+<!-- Main Content: Upload Summary Modal -->
+<main class="lg:ml-60 pt-20 pb-10 w-full max-w-4xl mx-auto px-6">
+<div class="bg-surface-container border border-outline-variant relative overflow-hidden">
+<!-- Background Telemetry Texture -->
+<div class="absolute inset-0 opacity-5 terminal-scanline"></div>
+<div class="p-8 relative z-10">
+<!-- Header -->
+<div class="flex justify-between items-start mb-12">
+<div>
+<h1 class="font-headline font-black text-4xl tracking-tight text-on-surface mb-2 uppercase">Upload Summary</h1>
+<p class="font-mono text-xs text-secondary opacity-80 uppercase tracking-widest">Session ID: 0xFD92_X_882</p>
+</div>
+<div class="text-right">
+<p class="font-mono text-xs text-outline mb-1 uppercase">Process Time</p>
+<p class="font-mono text-sm text-on-surface">2023-11-27 14:02:55 UTC</p>
+</div>
+</div>
+<!-- Bento Grid Data Cards -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-px bg-outline-variant mb-12">
+<!-- Packets Verified -->
+<div class="bg-surface-container-low p-8 flex flex-col justify-between aspect-video md:aspect-auto">
+<div class="flex items-center justify-between mb-4">
+<span class="font-mono text-[10px] tracking-widest text-primary uppercase">Status: Nominal</span>
+<span class="material-symbols-outlined text-primary" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+</div>
+<div>
+<p class="font-headline text-5xl font-black text-primary mb-2">26</p>
+<p class="font-label font-bold text-sm tracking-tighter text-on-surface opacity-70">PACKETS_VERIFIED</p>
+</div>
+<div class="mt-6 h-1 w-full bg-surface-container-highest">
+<div class="h-full bg-primary w-[33%]"></div>
+</div>
+</div>
+<!-- Packets Rejected -->
+<div class="bg-surface-container-low p-8 flex flex-col justify-between aspect-video md:aspect-auto">
+<div class="flex items-center justify-between mb-4">
+<span class="font-mono text-[10px] tracking-widest text-error uppercase">Status: Critical</span>
+<span class="material-symbols-outlined text-error" style="font-variation-settings: 'FILL' 1;">error</span>
+</div>
+<div>
+<p class="font-headline text-5xl font-black text-error mb-2">53</p>
+<p class="font-label font-bold text-sm tracking-tighter text-on-surface opacity-70">PACKETS_REJECTED</p>
+</div>
+<div class="mt-6 h-1 w-full bg-surface-container-highest">
+<div class="h-full bg-error w-[67%]"></div>
+</div>
+</div>
+</div>
+<!-- Scrollable List -->
+<div class="mb-8">
+<div class="flex items-center justify-between mb-4 px-2">
+<h3 class="font-mono text-xs font-bold uppercase tracking-widest text-outline">Failure Log Stream</h3>
+<span class="font-mono text-[10px] text-error">FILTER: ALL_ERRORS</span>
+</div>
+<div class="border border-outline-variant bg-surface-container-lowest max-h-64 overflow-y-auto">
+<!-- Header Row -->
+<div class="grid grid-cols-12 gap-4 p-4 border-b border-outline-variant bg-surface-container-high font-mono text-[10px] text-outline uppercase">
+<div class="col-span-1">UID</div>
+<div class="col-span-6">Resource path</div>
+<div class="col-span-5">Error_Code</div>
+</div>
+<!-- Error Items -->
+<div class="grid grid-cols-12 gap-4 p-4 border-b border-outline-variant/30 hover:bg-surface-variant transition-colors group">
+<div class="col-span-1 font-mono text-xs opacity-50">001</div>
+<div class="col-span-6 font-mono text-xs truncate">/root/data/archive_v1.tar.gz</div>
+<div class="col-span-5 font-mono text-xs text-error">SAF_CREATE_FAIL</div>
+</div>
+<div class="grid grid-cols-12 gap-4 p-4 border-b border-outline-variant/30 hover:bg-surface-variant transition-colors group">
+<div class="col-span-1 font-mono text-xs opacity-50">002</div>
+<div class="col-span-6 font-mono text-xs truncate">/usr/sys/logs/debug_01.log</div>
+<div class="col-span-5 font-mono text-xs text-error">UNSUPPORTED_ENCODING</div>
+</div>
+<div class="grid grid-cols-12 gap-4 p-4 border-b border-outline-variant/30 hover:bg-surface-variant transition-colors group">
+<div class="col-span-1 font-mono text-xs opacity-50">003</div>
+<div class="col-span-6 font-mono text-xs truncate">/temp/payload_delta.bin</div>
+<div class="col-span-5 font-mono text-xs text-error">SAF_CREATE_FAIL</div>
+</div>
+<div class="grid grid-cols-12 gap-4 p-4 border-b border-outline-variant/30 hover:bg-surface-variant transition-colors group">
+<div class="col-span-1 font-mono text-xs opacity-50">004</div>
+<div class="col-span-6 font-mono text-xs truncate">/shared/assets/legacy_index.db</div>
+<div class="col-span-5 font-mono text-xs text-error">UNSUPPORTED_ENCODING</div>
+</div>
+<div class="grid grid-cols-12 gap-4 p-4 border-b border-outline-variant/30 hover:bg-surface-variant transition-colors group">
+<div class="col-span-1 font-mono text-xs opacity-50">005</div>
+<div class="col-span-6 font-mono text-xs truncate">/node_4/cache/buffer_overflow.x</div>
+<div class="col-span-5 font-mono text-xs text-error">SAF_CREATE_FAIL</div>
+</div>
+</div>
+</div>
+<!-- Footer Actions -->
+<div class="flex flex-col md:flex-row gap-4 items-center justify-between pt-6 border-t border-outline-variant">
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-2">
+<div class="w-2 h-2 bg-primary"></div>
+<span class="font-mono text-[10px] uppercase text-outline">System Locked</span>
+</div>
+<div class="flex items-center gap-2">
+<div class="w-2 h-2 bg-secondary"></div>
+<span class="font-mono text-[10px] uppercase text-outline">Encrypted TLS 1.3</span>
+</div>
+</div>
+<div class="flex gap-4 w-full md:w-auto">
+<button class="flex-1 md:flex-none border border-outline-variant text-on-surface px-8 py-3 font-mono text-xs font-bold uppercase hover:bg-surface-variant transition-all active:scale-[0.98]">
+                            DISCARD_REJECTED
+                        </button>
+<button class="flex-1 md:flex-none bg-primary text-on-primary px-8 py-3 font-mono text-xs font-bold uppercase hover:opacity-90 transition-all active:scale-[0.98] flex items-center justify-center gap-2">
+<span class="material-symbols-outlined text-sm">refresh</span>
+                            RETRY_FAILED_PACKETS
+                        </button>
+</div>
+</div>
+</div>
+</div>
+<!-- Terminal Telemetry Footer -->
+<div class="mt-8 grid grid-cols-3 gap-8">
+<div class="border-t border-outline-variant pt-4">
+<p class="font-mono text-[9px] text-outline uppercase mb-2">CPU_LOAD</p>
+<div class="flex gap-1 h-3">
+<div class="flex-1 bg-primary"></div>
+<div class="flex-1 bg-primary"></div>
+<div class="flex-1 bg-primary opacity-50"></div>
+<div class="flex-1 bg-surface-container-highest"></div>
+<div class="flex-1 bg-surface-container-highest"></div>
+</div>
+</div>
+<div class="border-t border-outline-variant pt-4">
+<p class="font-mono text-[9px] text-outline uppercase mb-2">MEM_ALLOC</p>
+<p class="font-mono text-xs">1.24 GB / 8.00 GB</p>
+</div>
+<div class="border-t border-outline-variant pt-4 text-right">
+<p class="font-mono text-[9px] text-outline uppercase mb-2">NETWORK_PING</p>
+<p class="font-mono text-xs text-secondary">24.08ms</p>
+</div>
+</div>
+</main>
+<!-- BottomNavBar for Mobile -->
+<nav class="md:hidden fixed bottom-0 left-0 w-full bg-surface-container-lowest border-t border-outline-variant flex justify-around items-center h-16 px-4 z-50">
+<div class="flex flex-col items-center gap-1 text-slate-500">
+<span class="material-symbols-outlined">folder_open</span>
+<span class="text-[9px] font-mono">FILES</span>
+</div>
+<div class="flex flex-col items-center gap-1 text-[#10b981]">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">swap_vert</span>
+<span class="text-[9px] font-mono">QUEUE</span>
+</div>
+<div class="flex flex-col items-center gap-1 text-slate-500">
+<span class="material-symbols-outlined">terminal</span>
+<span class="text-[9px] font-mono">SHELL</span>
+</div>
+<div class="flex flex-col items-center gap-1 text-slate-500">
+<span class="material-symbols-outlined">history</span>
+<span class="text-[9px] font-mono">AUDIT</span>
+</div>
+</nav>
+</body></html>

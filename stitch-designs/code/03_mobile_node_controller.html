@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>NODE_CONTROLLER_v1.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700;900&amp;family=Inter:wght@300;400;500;600;700&amp;family=JetBrains+Mono:wght@300;400;500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<style>
+        body {
+            background-color: #000000;
+            color: #e3e1e9;
+            font-family: 'Inter', sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .headline { font-family: 'Space Grotesk', sans-serif; }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        /* Custom Donut Chart Clip */
+        .storage-donut {
+            background: conic-gradient(#10B981 0% 9%, #1a1b21 9% 100%);
+            border-radius: 50%;
+        }
+    </style>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              colors: {
+                "on-surface-variant": "#bbcabf",
+                "outline": "#86948a",
+                "error-container": "#93000a",
+                "primary-fixed": "#6ffbbe",
+                "secondary": "#4cd7f6",
+                "tertiary-fixed": "#ffddb8",
+                "tertiary-container": "#e29100",
+                "on-error": "#690005",
+                "on-secondary-fixed-variant": "#004e5c",
+                "on-secondary": "#003640",
+                "on-surface": "#e3e1e9",
+                "on-background": "#e3e1e9",
+                "tertiary-fixed-dim": "#ffb95f",
+                "on-primary-fixed": "#002113",
+                "surface-bright": "#38393f",
+                "surface": "#121318",
+                "on-primary-container": "#00422b",
+                "surface-container-low": "#1a1b21",
+                "on-primary": "#003824",
+                "surface-container-lowest": "#0d0e13",
+                "on-secondary-container": "#00424e",
+                "on-secondary-fixed": "#001f26",
+                "secondary-fixed": "#acedff",
+                "tertiary": "#ffb95f",
+                "on-tertiary-fixed-variant": "#653e00",
+                "surface-tint": "#4edea3",
+                "on-tertiary-container": "#523200",
+                "on-primary-fixed-variant": "#005236",
+                "inverse-primary": "#006c49",
+                "on-tertiary-fixed": "#2a1700",
+                "surface-variant": "#34343a",
+                "primary-container": "#10b981",
+                "background": "#121318",
+                "secondary-container": "#03b5d3",
+                "inverse-surface": "#e3e1e9",
+                "secondary-fixed-dim": "#4cd7f6",
+                "surface-dim": "#121318",
+                "inverse-on-surface": "#2f3036",
+                "primary-fixed-dim": "#4edea3",
+                "surface-container-high": "#292a2f",
+                "on-tertiary": "#472a00",
+                "on-error-container": "#ffdad6",
+                "surface-container-highest": "#34343a",
+                "error": "#ffb4ab",
+                "outline-variant": "#3c4a42",
+                "primary": "#4edea3",
+                "surface-container": "#1e1f25"
+              },
+              fontFamily: {
+                "headline": ["Space Grotesk"],
+                "body": ["Inter"],
+                "label": ["Space Grotesk"]
+              },
+              borderRadius: {"DEFAULT": "0px", "lg": "0px", "xl": "0px", "full": "9999px"},
+            },
+          },
+        }
+    </script>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-black text-on-surface min-h-screen pb-24 selection:bg-primary selection:text-on-primary">
+<!-- TopAppBar -->
+<header class="bg-[#121318] dark:bg-[#121318] flex justify-between items-center w-full px-6 h-16 fixed top-0 z-50 border-b border-[#3c4a42]">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-[#10B981]">terminal</span>
+<h1 class="font-['Space_Grotesk'] font-bold tracking-tight text-xl text-[#10B981]">NODE_CONTROLLER_v1.0</h1>
+</div>
+<div class="flex items-center gap-4">
+<div class="hidden md:flex gap-6 items-center">
+<span class="font-['JetBrains_Mono'] text-[10px] text-[#10B981]">UPTIME: 142:12:09</span>
+<span class="font-['JetBrains_Mono'] text-[10px] text-[#06B6D4]">DL: 42.1 MB/s</span>
+</div>
+<button class="material-symbols-outlined text-[#10B981] hover:bg-[#10B981]/10 transition-colors p-2">settings</button>
+</div>
+</header>
+<main class="pt-24 px-6 max-w-5xl mx-auto space-y-8">
+<!-- Massive Power Toggle Section -->
+<section class="flex flex-col md:flex-row items-center justify-between p-8 bg-[#0A0B10] border border-[#1F2937] relative overflow-hidden group">
+<div class="absolute inset-0 bg-gradient-to-r from-primary/5 to-transparent pointer-events-none"></div>
+<div class="z-10 text-center md:text-left mb-6 md:mb-0">
+<h2 class="headline text-2xl font-black uppercase tracking-widest text-primary mb-1">SYSTEM_POWER</h2>
+<p class="mono text-[10px] text-outline tracking-tighter uppercase">Status: <span class="text-primary">NODE_ACTIVE_READY</span></p>
+</div>
+<div class="z-10 flex items-center gap-6">
+<div class="flex flex-col items-end">
+<span class="mono text-[11px] text-primary">0101_ON</span>
+<span class="mono text-[11px] text-outline-variant">0000_OFF</span>
+</div>
+<!-- Modern Switch -->
+<button class="relative w-24 h-12 bg-surface-container border border-outline-variant p-1 group-active:scale-95 transition-transform">
+<div class="absolute right-1 top-1 bottom-1 w-10 bg-primary shadow-[0_0_15px_rgba(16,185,129,0.5)] flex items-center justify-center">
+<span class="material-symbols-outlined text-on-primary text-sm font-bold">power_settings_new</span>
+</div>
+</button>
+</div>
+</section>
+<!-- Bento Grid Layout -->
+<div class="grid grid-cols-1 md:grid-cols-12 gap-6">
+<!-- Hero Section: Storage Donut (Center Column) -->
+<section class="md:col-span-7 bg-[#0A0B10] border border-[#1F2937] p-8 flex flex-col items-center justify-center relative min-h-[400px]">
+<div class="absolute top-4 left-4 border-l border-t border-outline-variant w-8 h-8"></div>
+<div class="absolute bottom-4 right-4 border-r border-b border-outline-variant w-8 h-8"></div>
+<h3 class="headline text-xs font-bold uppercase tracking-[0.3em] text-outline mb-12">Storage Allocation Map</h3>
+<div class="relative w-64 h-64 flex items-center justify-center">
+<!-- Circular Storage Donut -->
+<div class="storage-donut absolute inset-0 rotate-[-90deg]"></div>
+<div class="absolute inset-4 bg-[#0A0B10] rounded-full flex flex-col items-center justify-center">
+<span class="mono text-3xl font-bold text-on-surface">9%</span>
+<span class="mono text-[10px] text-outline tracking-widest uppercase">Capacity</span>
+</div>
+</div>
+<div class="mt-12 text-center space-y-2">
+<div class="mono text-xl font-medium tracking-tight">
+                        11.81 GB <span class="text-outline-variant">/</span> 128.00 GB
+                    </div>
+<div class="mono text-xs text-[#10B981] bg-[#10B981]/10 px-3 py-1 inline-block">
+                        116.19 GB FREE
+                    </div>
+</div>
+</section>
+<!-- Sidebar Telemetry & Empty State -->
+<div class="md:col-span-5 flex flex-col gap-6">
+<!-- Connection Matrix Card -->
+<section class="bg-[#0A0B10] border border-[#1F2937] p-6">
+<div class="flex items-center justify-between mb-6">
+<h3 class="headline text-xs font-bold uppercase tracking-widest text-[#06B6D4]">Connection Matrix</h3>
+<span class="material-symbols-outlined text-[#06B6D4] text-lg">hub</span>
+</div>
+<div class="space-y-4">
+<div class="flex justify-between items-center border-b border-outline-variant pb-2">
+<span class="mono text-[10px] text-outline uppercase">Local IP</span>
+<span class="mono text-sm text-on-surface">192.168.1.100:8080</span>
+</div>
+<div class="flex justify-between items-center border-b border-outline-variant pb-2">
+<span class="mono text-[10px] text-outline uppercase">Signal Code</span>
+<span class="mono text-sm text-on-surface">NODE_8F2A</span>
+</div>
+<div class="flex justify-between items-center">
+<span class="mono text-[10px] text-outline uppercase">Active Peers</span>
+<div class="flex items-center gap-2">
+<div class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse"></div>
+<span class="mono text-sm text-on-surface">3</span>
+</div>
+</div>
+</div>
+</section>
+<!-- Empty State Component -->
+<section class="bg-[#0A0B10] border border-[#1F2937] p-8 flex flex-col items-center justify-center text-center flex-grow">
+<div class="w-24 h-24 mb-6 relative">
+<!-- Technical Wireframe Rack SVG/Icon substitute -->
+<div class="absolute inset-0 border border-dashed border-outline-variant flex flex-col justify-around px-4">
+<div class="h-1 bg-outline-variant/30 w-full"></div>
+<div class="h-1 bg-outline-variant/30 w-full"></div>
+<div class="h-1 bg-outline-variant/30 w-full"></div>
+<div class="h-1 bg-primary/40 w-full"></div>
+</div>
+<div class="absolute inset-0 flex items-center justify-center">
+<span class="material-symbols-outlined text-outline-variant text-4xl">dns</span>
+</div>
+</div>
+<p class="mono text-[10px] leading-relaxed text-outline max-w-[200px] uppercase tracking-tighter">
+                        STORAGE VOLUME MOUNTED.<br/>
+<span class="text-primary-fixed-dim">AWAITING DATA INGRESS.</span>
+</p>
+</section>
+</div>
+</div>
+<!-- Asymmetric Data Stream List -->
+<section class="bg-[#0A0B10] border border-[#1F2937] overflow-hidden">
+<div class="p-4 border-b border-[#1F2937] bg-surface-container-low flex justify-between items-center">
+<span class="headline text-[10px] font-bold tracking-[0.2em] uppercase text-outline">Active_Data_Packets</span>
+<span class="mono text-[9px] text-outline-variant">STREAMING_REALTIME_0.4ms</span>
+</div>
+<div class="divide-y divide-outline-variant/20">
+<div class="p-4 flex items-center gap-6 hover:bg-surface-variant transition-colors group">
+<span class="mono text-[10px] text-outline">01</span>
+<span class="material-symbols-outlined text-[#06B6D4] text-sm">description</span>
+<div class="flex-grow">
+<div class="mono text-xs">system_backup_core_v4.tar.gz</div>
+<div class="mono text-[9px] text-outline-variant uppercase">SHA256: 8f2a...11b2</div>
+</div>
+<div class="text-right">
+<div class="mono text-[10px] text-[#10B981]">UL_COMPLETE</div>
+<div class="mono text-[9px] text-outline-variant">2.4 GB</div>
+</div>
+</div>
+<div class="p-4 flex items-center gap-6 hover:bg-surface-variant transition-colors group">
+<span class="mono text-[10px] text-outline">02</span>
+<span class="material-symbols-outlined text-[#06B6D4] text-sm">image</span>
+<div class="flex-grow">
+<div class="mono text-xs">node_schematic_render_final.exr</div>
+<div class="mono text-[9px] text-outline-variant uppercase">RWX_ACCESS_ROOT</div>
+</div>
+<div class="text-right">
+<div class="mono text-[10px] text-tertiary">ENCRYPTING...</div>
+<div class="mono text-[9px] text-outline-variant">842.1 MB</div>
+</div>
+</div>
+</div>
+</section>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-safe bg-[#121318] border-t border-[#3c4a42] h-16">
+<!-- NODE - Active -->
+<a class="flex flex-col items-center justify-center text-[#10B981] border-t-2 border-[#10B981] pt-2 w-full h-full scale-95 transition-transform duration-75" href="#">
+<span class="material-symbols-outlined" data-icon="developer_board">developer_board</span>
+<span class="font-['JetBrains_Mono'] text-[10px] tracking-tighter uppercase">NODE</span>
+</a>
+<!-- DATA -->
+<a class="flex flex-col items-center justify-center text-gray-600 pt-2 w-full h-full hover:text-[#4cd7f6] transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="database">database</span>
+<span class="font-['JetBrains_Mono'] text-[10px] tracking-tighter uppercase">DATA</span>
+</a>
+<!-- PEERS -->
+<a class="flex flex-col items-center justify-center text-gray-600 pt-2 w-full h-full hover:text-[#4cd7f6] transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="hub">hub</span>
+<span class="font-['JetBrains_Mono'] text-[10px] tracking-tighter uppercase">PEERS</span>
+</a>
+<!-- LOGS -->
+<a class="flex flex-col items-center justify-center text-gray-600 pt-2 w-full h-full hover:text-[#4cd7f6] transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="Terminal">terminal</span>
+<span class="font-['JetBrains_Mono'] text-[10px] tracking-tighter uppercase">LOGS</span>
+</a>
+</nav>
+<!-- Background Decoration / Technical Grids -->
+<div class="fixed inset-0 pointer-events-none opacity-10 z-[-1]" style="background-image: linear-gradient(#1F2937 1px, transparent 1px), linear-gradient(90deg, #1F2937 1px, transparent 1px); background-size: 40px 40px;">
+</div>
+</body></html>

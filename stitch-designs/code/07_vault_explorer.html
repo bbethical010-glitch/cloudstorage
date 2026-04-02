@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>VAULT_EXPLORER_v1.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "surface-container-highest": "#34343a",
+            "primary-fixed-dim": "#4edea3",
+            "surface-variant": "#34343a",
+            "tertiary": "#ffb95f",
+            "secondary": "#4cd7f6",
+            "on-tertiary-container": "#523200",
+            "surface-container-lowest": "#0d0e13",
+            "inverse-on-surface": "#2f3036",
+            "outline": "#86948a",
+            "on-primary-fixed": "#002113",
+            "on-tertiary-fixed-variant": "#653e00",
+            "tertiary-container": "#e29100",
+            "on-secondary": "#003640",
+            "secondary-fixed": "#acedff",
+            "primary": "#4edea3",
+            "on-primary-container": "#00422b",
+            "on-error": "#690005",
+            "on-primary": "#003824",
+            "surface-container-high": "#292a2f",
+            "surface-container": "#1e1f25",
+            "surface-dim": "#121318",
+            "on-surface-variant": "#bbcabf",
+            "inverse-primary": "#006c49",
+            "on-tertiary-fixed": "#2a1700",
+            "error-container": "#93000a",
+            "on-tertiary": "#472a00",
+            "on-secondary-fixed-variant": "#004e5c",
+            "surface-bright": "#38393f",
+            "on-secondary-container": "#00424e",
+            "surface-tint": "#4edea3",
+            "tertiary-fixed-dim": "#ffb95f",
+            "on-surface": "#e3e1e9",
+            "secondary-fixed-dim": "#4cd7f6",
+            "outline-variant": "#3c4a42",
+            "primary-fixed": "#6ffbbe",
+            "on-secondary-fixed": "#001f26",
+            "error": "#ffb4ab",
+            "on-primary-fixed-variant": "#005236",
+            "surface": "#121318",
+            "inverse-surface": "#e3e1e9",
+            "on-error-container": "#ffdad6",
+            "secondary-container": "#03b5d3",
+            "primary-container": "#10b981",
+            "on-background": "#e3e1e9",
+            "tertiary-fixed": "#ffddb8",
+            "surface-container-low": "#1a1b21",
+            "background": "#121318"
+          },
+          fontFamily: {
+            "headline": ["Space Grotesk"],
+            "body": ["Inter"],
+            "label": ["Space Grotesk"],
+            "mono": ["JetBrains Mono", "monospace"]
+          },
+          borderRadius: {"DEFAULT": "0px", "lg": "0px", "xl": "0px", "full": "9999px"},
+        },
+      },
+    }
+  </script>
+<style>
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 2px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: #0d0e13;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #3c4a42;
+    }
+    body {
+      background-color: #000000;
+      color: #e3e1e9;
+      font-family: 'Inter', sans-serif;
+    }
+  </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="flex flex-col h-screen overflow-hidden selection:bg-primary selection:text-on-primary">
+<!-- Header: TopAppBar (Shared Component Logic Applied) -->
+<header class="bg-[#121318] flex justify-between items-center w-full px-6 py-4 border-b border-[#3c4a42] z-50">
+<div class="flex items-center gap-4">
+<button class="hover:opacity-90 active:scale-95 text-[#10B981]">
+<span class="material-symbols-outlined">arrow_back</span>
+</button>
+<h1 class="font-['Inter'] text-lg font-bold tracking-tighter text-white">VAULT_EXPLORER_v1.0</h1>
+</div>
+<div class="flex items-center gap-4">
+<button class="hover:opacity-90 active:scale-95 text-[#10B981]">
+<span class="material-symbols-outlined">search</span>
+</button>
+<span class="font-mono text-[0.6875rem] text-[#10B981] hidden md:block">0x882...AF4</span>
+</div>
+</header>
+<!-- Breadcrumb Bar -->
+<nav class="bg-[#0d0e13] px-6 py-2 border-b border-outline-variant/30">
+<div class="font-mono text-[0.75rem] text-primary tracking-tight">
+      ~/root/vault/archive/
+    </div>
+</nav>
+<!-- Main Content Area -->
+<main class="flex-1 overflow-y-auto custom-scrollbar bg-black">
+<!-- File List Simulation -->
+<div class="flex flex-col">
+<!-- Folders -->
+<div class="flex items-center px-6 py-4 hover:bg-surface-container-low border-b border-outline-variant/10 group cursor-pointer">
+<div class="mr-4 text-secondary">
+<span class="material-symbols-outlined">folder</span>
+</div>
+<div class="flex-1 min-w-0">
+<div class="text-on-surface font-mono text-sm font-medium">Camera_Sync</div>
+<div class="flex gap-4 mt-1">
+<span class="font-mono text-[0.6rem] text-outline">DIR</span>
+<span class="font-mono text-[0.6rem] text-outline">2023-11-20 09:44:12</span>
+</div>
+</div>
+<div class="text-outline-variant opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-sm">chevron_right</span>
+</div>
+</div>
+<div class="flex items-center px-6 py-4 hover:bg-surface-container-low border-b border-outline-variant/10 group cursor-pointer">
+<div class="mr-4 text-secondary">
+<span class="material-symbols-outlined">folder</span>
+</div>
+<div class="flex-1 min-w-0">
+<div class="text-on-surface font-mono text-sm font-medium">Backups</div>
+<div class="flex gap-4 mt-1">
+<span class="font-mono text-[0.6rem] text-outline">DIR</span>
+<span class="font-mono text-[0.6rem] text-outline">2023-11-18 14:02:04</span>
+</div>
+</div>
+<div class="text-outline-variant opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-sm">chevron_right</span>
+</div>
+</div>
+<!-- File: DSC_0982.RAW (ACTIVE SELECTION) -->
+<div class="flex items-center px-6 py-4 bg-primary/5 border-l-4 border-primary border-b border-outline-variant/10 group cursor-pointer">
+<div class="mr-4 text-primary">
+<span class="material-symbols-outlined">image</span>
+</div>
+<div class="flex-1 min-w-0">
+<div class="text-primary font-mono text-sm font-bold">DSC_0982.RAW</div>
+<div class="flex flex-col mt-1">
+<span class="font-mono text-[0.6rem] text-primary/70 uppercase">SHA256: 4e3d...1f9a</span>
+<span class="font-mono text-[0.6875rem] text-on-surface/80">42.8 MB</span>
+</div>
+</div>
+<div class="text-primary">
+<span class="material-symbols-outlined text-sm">check_circle</span>
+</div>
+</div>
+<!-- Video File -->
+<div class="flex items-center px-6 py-4 hover:bg-surface-container-low border-b border-outline-variant/10 group cursor-pointer">
+<div class="mr-4 text-tertiary">
+<span class="material-symbols-outlined">movie</span>
+</div>
+<div class="flex-1 min-w-0">
+<div class="text-on-surface font-mono text-sm font-medium">VLOG_2026.MP4</div>
+<div class="flex flex-col mt-1">
+<span class="font-mono text-[0.6rem] text-outline uppercase">SHA256: a8c2...09bc</span>
+<span class="font-mono text-[0.6875rem] text-on-surface/60">1,204.5 MB</span>
+</div>
+</div>
+</div>
+<!-- PDF File -->
+<div class="flex items-center px-6 py-4 hover:bg-surface-container-low border-b border-outline-variant/10 group cursor-pointer">
+<div class="mr-4 text-outline">
+<span class="material-symbols-outlined">description</span>
+</div>
+<div class="flex-1 min-w-0">
+<div class="text-on-surface font-mono text-sm font-medium">README.md</div>
+<div class="flex flex-col mt-1">
+<span class="font-mono text-[0.6rem] text-outline uppercase">SHA256: f11e...ee7d</span>
+<span class="font-mono text-[0.6875rem] text-on-surface/60">4.2 KB</span>
+</div>
+</div>
+</div>
+<!-- Key File -->
+<div class="flex items-center px-6 py-4 hover:bg-surface-container-low border-b border-outline-variant/10 group cursor-pointer">
+<div class="mr-4 text-error">
+<span class="material-symbols-outlined">key</span>
+</div>
+<div class="flex-1 min-w-0">
+<div class="text-on-surface font-mono text-sm font-medium">PRIVATE.KEY</div>
+<div class="flex flex-col mt-1">
+<span class="font-mono text-[0.6rem] text-outline uppercase">SHA256: 09d3...8821</span>
+<span class="font-mono text-[0.6875rem] text-on-surface/60">2.0 KB</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Technical Background Layout (Asymmetric Data) -->
+<div class="px-6 py-12 opacity-20 pointer-events-none select-none">
+<div class="border-t border-outline-variant/50 pt-4">
+<div class="font-mono text-[0.5rem] leading-tight text-primary">
+          SYSTEM_ID: CORE_01_VAULT<br/>
+          LATENCY: 24ms<br/>
+          ENCRYPTION: AES-256-GCM<br/>
+          PACKET_STATUS: NOMINAL
+        </div>
+</div>
+</div>
+</main>
+<!-- Storage Footer Bar -->
+<footer class="bg-surface-container-lowest border-t border-outline-variant">
+<!-- Storage Telemetry -->
+<div class="px-6 py-3 flex flex-col gap-2">
+<div class="flex justify-between items-end">
+<span class="font-mono text-[0.65rem] text-primary font-bold tracking-widest uppercase">VAULT_LOAD: 9%</span>
+<span class="font-mono text-[0.65rem] text-outline">9,022.4 MB / 100,000.0 MB</span>
+</div>
+<!-- Custom Progress Bar -->
+<div class="h-1 bg-surface-container-high w-full">
+<div class="h-full bg-primary" style="width: 9%"></div>
+</div>
+</div>
+<!-- BottomNavBar (Shared Component Logic Applied) -->
+<nav class="fixed bottom-0 left-0 w-full z-50 flex justify-around items-stretch h-16 bg-[#0d0e13] border-t border-[#3c4a42]">
+<a class="flex flex-col items-center justify-center text-white/40 p-3 hover:text-[#10B981] transition-colors active:bg-[#10B981]/20" href="#">
+<span class="material-symbols-outlined" data-icon="hub">hub</span>
+<span class="font-mono text-[0.75rem] uppercase tracking-widest">NODE</span>
+</a>
+<!-- DATA IS ACTIVE -->
+<a class="flex flex-col items-center justify-center text-[#10B981] bg-[#10B981]/5 border-t-2 border-[#10B981] p-3 hover:text-[#10B981] transition-colors active:bg-[#10B981]/20" href="#">
+<span class="material-symbols-outlined" data-icon="database">database</span>
+<span class="font-mono text-[0.75rem] uppercase tracking-widest">DATA</span>
+</a>
+<a class="flex flex-col items-center justify-center text-white/40 p-3 hover:text-[#10B981] transition-colors active:bg-[#10B981]/20" href="#">
+<span class="material-symbols-outlined" data-icon="group">group</span>
+<span class="font-mono text-[0.75rem] uppercase tracking-widest">PEERS</span>
+</a>
+<a class="flex flex-col items-center justify-center text-white/40 p-3 hover:text-[#10B981] transition-colors active:bg-[#10B981]/20" href="#">
+<span class="material-symbols-outlined" data-icon="terminal">terminal</span>
+<span class="font-mono text-[0.75rem] uppercase tracking-widest">LOGS</span>
+</a>
+</nav>
+</footer>
+<!-- Padding for Fixed Footer -->
+<div class="h-32 bg-black"></div>
+</body></html>

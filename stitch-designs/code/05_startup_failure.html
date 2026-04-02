@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "surface-container-highest": "#34343a",
+              "primary-fixed-dim": "#4edea3",
+              "surface-variant": "#34343a",
+              "tertiary": "#ffb95f",
+              "secondary": "#4cd7f6",
+              "on-tertiary-container": "#523200",
+              "surface-container-lowest": "#0d0e13",
+              "inverse-on-surface": "#2f3036",
+              "outline": "#86948a",
+              "on-primary-fixed": "#002113",
+              "on-tertiary-fixed-variant": "#653e00",
+              "tertiary-container": "#e29100",
+              "on-secondary": "#003640",
+              "secondary-fixed": "#acedff",
+              "primary": "#4edea3",
+              "on-primary-container": "#00422b",
+              "on-error": "#690005",
+              "on-primary": "#003824",
+              "surface-container-high": "#292a2f",
+              "surface-container": "#1e1f25",
+              "surface-dim": "#121318",
+              "on-surface-variant": "#bbcabf",
+              "inverse-primary": "#006c49",
+              "on-tertiary-fixed": "#2a1700",
+              "error-container": "#93000a",
+              "on-tertiary": "#472a00",
+              "on-secondary-fixed-variant": "#004e5c",
+              "surface-bright": "#38393f",
+              "on-secondary-container": "#00424e",
+              "surface-tint": "#4edea3",
+              "tertiary-fixed-dim": "#ffb95f",
+              "on-surface": "#e3e1e9",
+              "secondary-fixed-dim": "#4cd7f6",
+              "outline-variant": "#3c4a42",
+              "primary-fixed": "#6ffbbe",
+              "on-secondary-fixed": "#001f26",
+              "error": "#EF4444",
+              "on-error-container": "#ffdad6",
+              "secondary-container": "#03b5d3",
+              "primary-container": "#10b981",
+              "on-background": "#e3e1e9",
+              "tertiary-fixed": "#ffddb8",
+              "surface-container-low": "#1a1b21",
+              "background": "#000000"
+            },
+            fontFamily: {
+              "headline": ["Space Grotesk"],
+              "body": ["Inter"],
+              "label": ["Space Grotesk"],
+              "mono": ["JetBrains Mono"]
+            },
+            borderRadius: {"DEFAULT": "0px", "lg": "0px", "xl": "0px", "full": "9999px"},
+          },
+        },
+      }
+    </script>
+<style>
+      .material-symbols-outlined {
+        font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      }
+      .scanline {
+        background: linear-gradient(to bottom, transparent 50%, rgba(239, 68, 68, 0.05) 50%);
+        background-size: 100% 4px;
+      }
+      .crt-glow {
+        text-shadow: 0 0 10px rgba(239, 68, 68, 0.5);
+      }
+      .terminal-scroll {
+        scrollbar-width: thin;
+        scrollbar-color: #3c4a42 #0d0e13;
+      }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-surface font-body selection:bg-error/30 selection:text-error min-h-screen flex flex-col overflow-hidden">
+<!-- Top Navigation Anchor (Non-interactive/Status Only) -->
+<header class="bg-[#121318] text-white flex justify-between items-center w-full px-6 py-4 border-b border-[#3c4a42] font-['Space_Grotesk'] tracking-tight">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-[#10B981]" style="font-variation-settings: 'FILL' 1;">terminal</span>
+<span class="text-xl font-bold tracking-tighter text-[#10B981]">SYSTEM_CORE_01</span>
+</div>
+<div class="hidden md:block">
+<span class="font-mono text-[0.6875rem] text-[#10B981] tracking-widest uppercase">Telemetry: 0x882...AF4 // SESSION_TERMINATED</span>
+</div>
+<div class="flex items-center gap-2">
+<div class="w-2 h-2 bg-error rounded-full animate-pulse"></div>
+<span class="font-mono text-[0.6875rem] text-error">OFFLINE</span>
+</div>
+</header>
+<main class="flex-grow flex flex-col items-center justify-center relative p-6 scanline">
+<!-- Background Architectural Lines -->
+<div class="absolute inset-0 pointer-events-none overflow-hidden">
+<div class="absolute top-1/4 left-0 w-full h-[1px] bg-outline-variant/20"></div>
+<div class="absolute top-3/4 left-0 w-full h-[1px] bg-outline-variant/20"></div>
+<div class="absolute left-1/4 top-0 w-[1px] h-full bg-outline-variant/20"></div>
+<div class="absolute left-3/4 top-0 w-[1px] h-full bg-outline-variant/20"></div>
+</div>
+<div class="max-w-2xl w-full z-10 space-y-8">
+<!-- Alert Section -->
+<div class="flex flex-col items-center text-center space-y-4">
+<div class="p-4 border border-error bg-error/5 inline-block">
+<span class="material-symbols-outlined text-6xl text-error crt-glow" style="font-variation-settings: 'FILL' 1;">report</span>
+</div>
+<h1 class="font-headline font-extrabold text-4xl md:text-5xl tracking-tighter text-error crt-glow">
+                    AUTHENTICATION_FAILED
+                </h1>
+<p class="font-mono text-sm text-on-surface-variant max-w-md tracking-tight">
+                    The encrypted handshake between local workstation and remote node was rejected. Verify credentials or fallback to local-only mode.
+                </p>
+</div>
+<!-- Terminal Log Window -->
+<div class="bg-surface-container-lowest border border-outline-variant relative">
+<div class="flex items-center justify-between px-3 py-1.5 border-b border-outline-variant bg-surface-dim">
+<span class="font-mono text-[10px] uppercase text-on-surface-variant tracking-[0.2em]">System Diagnostics // Error Stack</span>
+<div class="flex gap-1.5">
+<div class="w-2 h-2 bg-outline-variant"></div>
+<div class="w-2 h-2 bg-outline-variant"></div>
+</div>
+</div>
+<div class="p-6 font-mono text-xs md:text-sm space-y-2 terminal-scroll max-h-[200px] overflow-y-auto">
+<div class="flex gap-4">
+<span class="text-on-surface-variant shrink-0">14:02:04.22</span>
+<span class="text-secondary">[SYS] INITIALIZING_SECURE_TUNNEL...</span>
+</div>
+<div class="flex gap-4">
+<span class="text-on-surface-variant shrink-0">14:02:04.89</span>
+<span class="text-secondary">[SYS] KEY_PAIR_GENERATION_SUCCESS</span>
+</div>
+<div class="flex gap-4">
+<span class="text-on-surface-variant shrink-0">14:02:05.11</span>
+<span class="text-error font-bold">[ERR] INVALID_RSA_HANDSHAKE</span>
+</div>
+<div class="flex gap-4">
+<span class="text-on-surface-variant shrink-0">14:02:05.12</span>
+<span class="text-error">[SYS] RELAY_REFUSED_ENTRY (0x00F2)</span>
+</div>
+<div class="flex gap-4 items-center">
+<span class="text-on-surface-variant shrink-0">14:02:05.13</span>
+<span class="bg-error text-on-error px-1">FATAL: REMOTE_REJECTION_ERROR</span>
+</div>
+<div class="flex gap-4">
+<span class="text-on-surface-variant shrink-0">14:02:05.14</span>
+<span class="text-on-surface-variant">Waiting for operator intervention... <span class="animate-pulse">_</span></span>
+</div>
+</div>
+</div>
+<!-- Action Modules -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+<button class="group relative bg-primary-container text-on-primary-container font-headline font-bold py-4 px-6 transition-all hover:bg-primary active:scale-[0.98] flex items-center justify-between border border-primary">
+<span>RETRY_CONNECTION</span>
+<span class="material-symbols-outlined text-xl group-hover:translate-x-1 transition-transform">sync</span>
+<!-- Border Flicker Effect -->
+<div class="absolute inset-0 border border-white/20 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+</button>
+<button class="group border border-outline-variant text-on-surface font-headline font-medium py-4 px-6 hover:bg-on-surface/5 active:scale-[0.98] flex items-center justify-between transition-colors">
+<span>USE_LOCAL_ONLY</span>
+<span class="material-symbols-outlined text-xl text-on-surface-variant">terminal</span>
+</button>
+</div>
+<!-- Bottom Telemetry Anchor -->
+<div class="pt-8 border-t border-outline-variant/30 flex flex-col md:flex-row justify-between gap-4 text-[10px] font-mono text-on-surface-variant uppercase tracking-widest">
+<div class="flex gap-6">
+<div>HOST: <span class="text-on-surface">EASY-CLOUD-NODE-04</span></div>
+<div>LATENCY: <span class="text-on-surface">---ms</span></div>
+</div>
+<div>SECURE_OS_KERNEL: <span class="text-on-surface">V4.9.2-STABLE</span></div>
+</div>
+</div>
+</main>
+<!-- Navigation Suppressed for Error Focusing -->
+<!-- Decorative Corner Accents -->
+<div class="fixed top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-outline-variant/30 pointer-events-none"></div>
+<div class="fixed top-0 right-0 w-8 h-8 border-t-2 border-r-2 border-outline-variant/30 pointer-events-none"></div>
+<div class="fixed bottom-0 left-0 w-8 h-8 border-b-2 border-l-2 border-outline-variant/30 pointer-events-none"></div>
+<div class="fixed bottom-0 right-0 w-8 h-8 border-b-2 border-r-2 border-outline-variant/30 pointer-events-none"></div>
+</body></html>
