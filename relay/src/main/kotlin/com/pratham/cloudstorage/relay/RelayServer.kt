@@ -189,16 +189,24 @@ fun Application.relayModule() {
 
         // ── 4. React SPA & Static Files (Lowest Priority) ───────────────────────
         
-        staticResources("/", "web") {
-            default("index.html")
-        }
+        /*
+         * Static asset routing MUST be declared before the SPA catch-all route.
+         * In Ktor, if the wildcard catch-all route intercepts asset requests, it will
+         * incorrectly serve the raw index.html instead of failing or yielding to the static
+         * handler (e.g., serving HTML when the browser expects /assets/index.js).
+         * Explicitly declaring staticResources here ensures Ktor serves the CSS/JS and
+         * root assets FIRST, allowing only unhandled navigational links to fall through to
+         * the SPA fallback.
+         */
+        staticResources("/assets", "static/assets")
+        staticResources("/", "static")
 
-        get("{path...}") {
-            val path = call.parameters.getAll("path")?.joinToString("/") { it } ?: ""
-            if (path.startsWith("api")) {
+        get("{...}") {
+            val path = call.request.path()
+            if (path.startsWith("/api") || path.startsWith("/assets")) {
                  call.respond(HttpStatusCode.NotFound)
             } else {
-                 val content = registry.javaClass.classLoader.getResource("web/index.html")?.readBytes()
+                 val content = registry.javaClass.classLoader.getResource("static/index.html")?.readBytes()
                  if (content != null) call.respondBytes(content, ContentType.Text.Html)
                  else call.respond(HttpStatusCode.NotFound)
             }

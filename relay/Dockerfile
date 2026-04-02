@@ -19,7 +19,7 @@ COPY relay/build.gradle.kts relay/settings.gradle.kts ./
 COPY relay/src ./src
 
 # Copy built frontend into the Ktor resources directory BEFORE building
-COPY --from=frontend-build /ui/dist ./src/main/resources/web
+COPY --from=frontend-build /ui/dist ./src/main/resources/static
 
 # Build the complete bundled application
 RUN gradle --no-daemon installDist
