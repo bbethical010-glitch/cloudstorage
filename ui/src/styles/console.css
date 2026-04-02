@@ -1,4 +1,7 @@
-/* Reset everything from the very top */
+/* ═══════════════════════════════════════════════════════════════════════════
+   RESET
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 *, *::before, *::after {
     box-sizing: border-box;
     margin: 0;
@@ -21,53 +24,44 @@ html, body {
     flex-direction: column;
 }
 
-.console-layout {
-    display: grid;
+/* ═══════════════════════════════════════════════════════════════════════════
+   APP SHELL — root wrapper for the entire console UI
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.app-shell {
     width: 100%;
-    height: calc(100vh - 56px); /* Full height minus topbar */
-    grid-template-columns: 260px 1fr 300px;
-    grid-template-rows: 1fr;
-    grid-template-areas: "sidebar main preview";
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
     background: #08090E;
 }
 
-.sidebar {
-    grid-area: sidebar;
-    width: 260px;
-    min-width: 260px;
-    max-width: 260px;
-    height: 100%;
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOPBAR — spans full width, adapts to layout
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.topbar {
+    width: 100%;
+    height: 56px;
+    min-height: 56px;
+    flex-shrink: 0;
+    display: grid;
+    grid-template-columns: clamp(200px, 20vw, 260px) 1fr auto;
+    align-items: center;
     background: #0F1117;
+    border-bottom: 1px solid #1C2035;
+    padding: 0;
+}
+
+.topbar-logo-section {
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
     border-right: 1px solid #1C2035;
-    overflow-y: auto;
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-}
-
-.file-panel {
-    grid-area: main;
-    min-width: 0; /* Critical — prevents flex/grid child from overflowing */
     height: 100%;
-    display: flex;
-    flex-direction: column;
     overflow: hidden;
-    background: #08090E;
-}
-
-.preview-panel {
-    grid-area: preview;
-    width: 300px;
-    min-width: 300px;
-    max-width: 300px;
-    height: 100%;
-    background: #0F1117;
-    border-left: 1px solid #1C2035;
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    overflow-y: auto;
 }
 
 .topbar-left {
@@ -95,33 +89,11 @@ html, body {
   color: white;
 }
 
-.topbar {
-    width: 100%;
-    height: 56px;
-    min-height: 56px;
-    flex-shrink: 0;
-    display: grid;
-    grid-template-columns: 260px 1fr auto;
-    align-items: center;
-    background: #0F1117;
-    border-bottom: 1px solid #1C2035;
-    padding: 0;
-}
-
-.topbar-logo-section {
-    width: 260px;
-    padding: 0 16px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    border-right: 1px solid #1C2035;
-    height: 100%;
-}
-
 .topbar-search-section {
     padding: 0 20px;
     display: flex;
     align-items: center;
+    min-width: 0;
 }
 
 .topbar-search-input {
@@ -148,6 +120,21 @@ html, body {
     display: flex;
     align-items: center;
     gap: 12px;
+    flex-shrink: 0;
+}
+
+.topbar-icon-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  color: #7C8798;
+  cursor: pointer;
+  transition: all 0.15s;
 }
 
 .topbar-icon-btn:hover {
@@ -172,6 +159,7 @@ html, body {
   cursor: pointer;
   transition: all 0.15s;
   color: #7C8798;
+  flex-shrink: 0;
 }
 
 .topbar-avatar:hover {
@@ -185,17 +173,34 @@ html, body {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   LEFT SIDEBAR — single unified panel, 260px fixed
+   THREE-COLUMN CONSOLE LAYOUT — responsive grid
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.console-layout {
+    display: grid;
+    width: 100%;
+    height: calc(100vh - 56px);
+    grid-template-columns: clamp(200px, 20vw, 260px) 1fr clamp(240px, 22vw, 320px);
+    grid-template-rows: 1fr;
+    grid-template-areas: "sidebar main preview";
+    overflow: hidden;
+    background: #08090E;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LEFT SIDEBAR — fluid with clamp, capped at 260px
    ═══════════════════════════════════════════════════════════════════════════ */
 
 .sidebar {
-  grid-area: sidebar;
-  background: #0F1117;
-  border-right: 1px solid #1C2035;
-  overflow-y: auto;
-  overflow-x: hidden;
-  display: flex;
-  flex-direction: column;
+    grid-area: sidebar;
+    height: 100%;
+    background: #0F1117;
+    border-right: 1px solid #1C2035;
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
 }
 
 /* Upload buttons section */
@@ -219,11 +224,13 @@ html, body {
   gap: 8px;
   transition: all 0.15s;
   border: none;
+  white-space: nowrap;
 }
 
 .sidebar-btn svg {
   width: 16px;
   height: 16px;
+  flex-shrink: 0;
 }
 
 .sidebar-btn-primary {
@@ -287,6 +294,7 @@ html, body {
   width: 100%;
   text-align: left;
   transition: all 0.12s;
+  white-space: nowrap;
 }
 
 .sidebar-nav-item:hover {
@@ -381,7 +389,7 @@ html, body {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   CENTER FILE PANEL — all remaining width
+   CENTER FILE PANEL — fills all remaining width
    ═══════════════════════════════════════════════════════════════════════════ */
 
 .file-panel {
@@ -708,7 +716,7 @@ html, body {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   RIGHT PREVIEW PANEL — 300px fixed
+   RIGHT PREVIEW PANEL — fluid with clamp, capped at 320px
    ═══════════════════════════════════════════════════════════════════════════ */
 
 .preview-panel {
@@ -719,6 +727,7 @@ html, body {
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .preview-panel.empty {
@@ -1165,19 +1174,64 @@ html, body {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   MOBILE MENU OVERLAY
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.mobile-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+
+.mobile-menu-drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 91;
+  width: 280px;
+  max-width: 80vw;
+  height: 100vh;
+  background: #0F1117;
+  border-right: 1px solid #1C2035;
+  overflow-y: auto;
+  box-shadow: 20px 0 60px rgba(0, 0, 0, 0.5);
+}
+
+/* Mobile hamburger button */
+.mobile-menu-btn {
+  display: none;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: #7C8798;
+  cursor: pointer;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.mobile-menu-btn:hover {
+  background: #1C2035;
+  color: #E2E5F0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    RESPONSIVE BREAKPOINTS
    ═══════════════════════════════════════════════════════════════════════════ */
 
+/* Tablet landscape / small desktop — hide preview panel */
 @media (max-width: 1024px) {
-  .console-root {
-    grid-template-columns: 260px 1fr;
-    grid-template-areas:
-      "topbar  topbar"
-      "sidebar main";
+  .console-layout {
+    grid-template-columns: clamp(200px, 22vw, 240px) 1fr;
+    grid-template-areas: "sidebar main";
   }
 
   .topbar {
-    grid-template-columns: 260px 1fr auto;
+    grid-template-columns: clamp(200px, 22vw, 240px) 1fr auto;
   }
 
   .preview-panel {
@@ -1185,21 +1239,81 @@ html, body {
   }
 }
 
-@media (max-width: 768px) {
-  .console-root {
-    grid-template-columns: 1fr;
-    grid-template-rows: 56px 1fr;
-    grid-template-areas:
-      "topbar"
-      "main";
+/* Tablet portrait — smaller sidebar */
+@media (max-width: 900px) {
+  .console-layout {
+    grid-template-columns: 200px 1fr;
+    grid-template-areas: "sidebar main";
   }
 
   .topbar {
-    grid-template-columns: 1fr auto;
+    grid-template-columns: 200px 1fr auto;
   }
 
-  .topbar-left {
+  .topbar-logo-section span {
     display: none;
+  }
+
+  .topbar-search-input {
+    max-width: 240px;
+  }
+
+  .preview-panel {
+    display: none;
+  }
+
+  .col-modified {
+    display: none;
+  }
+
+  .file-row td.col-modified,
+  .file-table th.col-modified {
+    display: none;
+  }
+}
+
+/* Mobile — single column, sidebar becomes drawer */
+@media (max-width: 768px) {
+  .console-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
+    grid-template-areas: "main";
+  }
+
+  .topbar {
+    grid-template-columns: auto 1fr auto;
+  }
+
+  .topbar-logo-section {
+    border-right: none;
+    padding: 0 8px 0 12px;
+    width: auto;
+  }
+
+  .topbar-logo-section span {
+    display: none;
+  }
+
+  .topbar-search-section {
+    padding: 0 8px;
+  }
+
+  .topbar-search-input {
+    max-width: 100%;
+  }
+
+  .topbar-actions-section {
+    padding: 0 8px;
+    gap: 8px;
+  }
+
+  /* Hide node status text on mobile */
+  .node-status-indicator span:last-child {
+    display: none;
+  }
+
+  .node-status-indicator {
+    padding: 6px 8px;
   }
 
   .sidebar {
@@ -1210,11 +1324,51 @@ html, body {
     display: none;
   }
 
+  .mobile-menu-btn {
+    display: flex;
+  }
+
   .file-row td.col-size,
   .file-row td.col-modified,
   .file-table th.col-size,
   .file-table th.col-modified {
     display: none;
+  }
+
+  .file-grid {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .bulk-bar {
+    bottom: 12px;
+    padding: 6px 10px;
+    gap: 4px;
+    max-width: calc(100vw - 24px);
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .upload-toast {
+    width: calc(100vw - 32px);
+    max-width: 380px;
+  }
+}
+
+/* Very small screens */
+@media (max-width: 480px) {
+  .topbar-search-section {
+    display: none;
+  }
+
+  .topbar {
+    grid-template-columns: auto 1fr auto;
+    gap: 0;
+  }
+
+  .file-grid {
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
   }
 }
 

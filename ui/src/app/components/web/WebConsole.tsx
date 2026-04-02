@@ -1325,6 +1325,9 @@ export function WebConsole() {
       {/* ═══════════ TOPBAR — spans full width ═══════════ */}
       <header className="topbar">
         <div className="topbar-logo-section">
+          <button className="mobile-menu-btn" onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}>
+            <Menu className="w-5 h-5" />
+          </button>
           <div className="topbar-logo">
             <Cloud className="w-[18px] h-[18px] text-white" />
           </div>
@@ -1373,6 +1376,30 @@ export function WebConsole() {
           </DropdownMenu>
         </div>
       </header>
+
+      {/* ═══════════ MOBILE SIDEBAR DRAWER ═══════════ */}
+      <AnimatePresence>
+        {isMobileMenuOpen && (
+          <>
+            <motion.div
+              className="mobile-menu-overlay"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsMobileMenuOpen(false)}
+            />
+            <motion.div
+              className="mobile-menu-drawer"
+              initial={{ x: -280 }}
+              animate={{ x: 0 }}
+              exit={{ x: -280 }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+            >
+              <SidebarContent />
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       <div className="console-layout">
         {/* ═══════════ LEFT SIDEBAR — fixed 260px ═══════════ */}
