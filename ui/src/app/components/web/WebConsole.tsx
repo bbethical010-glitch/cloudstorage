@@ -261,8 +261,27 @@ export function WebConsole() {
 
   const getFileKindLabel = useCallback((file: FileNode) => {
     if (file.isDirectory) return "Folder";
-    const ext = file.name.split('.').pop()?.toUpperCase();
-    return ext || "File";
+    // Only use extension if the file actually has a dot in the name
+    if (file.name.includes('.')) {
+      const ext = file.name.split('.').pop()?.toUpperCase();
+      if (ext && ext.length <= 5) return ext;
+    }
+    // No extension — return generic label
+    return "FILE";
+  }, []);
+
+  const getFileBadgeCategory = useCallback((file: FileNode) => {
+    if (file.isDirectory) return "folder";
+    const ext = file.name.includes('.') ? file.name.split('.').pop()?.toLowerCase() : null;
+    if (ext) {
+      if (['png','jpg','jpeg','gif','svg','webp','bmp','ico'].includes(ext)) return "image";
+      if (['mp4','mov','avi','webm','mkv'].includes(ext)) return "video";
+      if (ext === 'pdf') return "pdf";
+      if (['js','ts','tsx','jsx','py','java','kt','go','rs','c','cpp','h','css','scss'].includes(ext)) return "code";
+      if (['html','htm','xml','svg'].includes(ext)) return "html";
+      if (['txt','md','log','csv','json','yaml','yml','toml'].includes(ext)) return "text";
+    }
+    return "unknown";
   }, []);
 
   useEffect(() => {
@@ -300,116 +319,71 @@ export function WebConsole() {
   }, [buildApiUrl, getHeaders]);
 
   const SidebarContent = () => (
-    <div className="flex flex-col h-full px-4 py-5 gap-5">
-      <div className="console-sidebar-panel space-y-3">
-        <div className="px-1">
-          <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-[#4B5563]">Actions</p>
-          <h3 className="mt-1 text-sm font-semibold text-white">Manage Your Drive</h3>
-        </div>
-        <div className="space-y-2">
-         <Button 
-          onClick={() => { fileInputRef.current?.click(); setIsMobileMenuOpen(false); }}
-          className="w-full justify-start bg-[#2563EB] hover:bg-[#1d4ed8] h-10 rounded-2xl shadow-lg shadow-blue-500/10 gap-2.5 font-semibold transition-all"
-         >
-           <Upload className="w-4 h-4" /> Upload File
-         </Button>
-         <Button 
-          onClick={() => { folderInputRef.current?.click(); setIsMobileMenuOpen(false); }}
-          className="w-full justify-start bg-[#2563EB] hover:bg-[#1d4ed8] h-10 rounded-2xl shadow-lg shadow-blue-500/10 gap-2.5 font-semibold transition-all"
-         >
-           <Folder className="w-4 h-4 fill-white/20" /> Upload Folder
-         </Button>
-         <Button 
-          variant="outline"
-          onClick={() => { handleCreateFolder(); setIsMobileMenuOpen(false); }}
-          className="w-full justify-start bg-[#0B1220] border-[#233047] text-[#D7E0EC] hover:bg-[#111827] h-10 rounded-2xl gap-2.5 font-semibold transition-all"
-         >
-           <Plus className="w-4 h-4" /> New Folder
-         </Button>
-         <input type="file" ref={fileInputRef} className="hidden" multiple onChange={handleUpload} />
-         <input type="file" ref={folderInputRef} className="hidden" multiple {...{webkitdirectory: "true", directory: "true"} as any} onChange={handleUpload} />
-        </div>
+    <div className="sidebar" style={{ background: 'transparent', border: 'none' }}>
+      {/* Upload buttons */}
+      <div className="sidebar-upload-section">
+        <button className="sidebar-btn sidebar-btn-primary" onClick={() => { fileInputRef.current?.click(); setIsMobileMenuOpen(false); }}>
+          <Upload className="w-4 h-4" /> Upload File
+        </button>
+        <button className="sidebar-btn sidebar-btn-primary" onClick={() => { folderInputRef.current?.click(); setIsMobileMenuOpen(false); }}>
+          <Folder className="w-4 h-4" /> Upload Folder
+        </button>
+        <button className="sidebar-btn sidebar-btn-ghost" onClick={() => { handleCreateFolder(); setIsMobileMenuOpen(false); }}>
+          <Plus className="w-4 h-4" /> New Folder
+        </button>
+        <input type="file" ref={fileInputRef} className="hidden" multiple onChange={handleUpload} />
+        <input type="file" ref={folderInputRef} className="hidden" multiple {...{webkitdirectory: "true", directory: "true"} as any} onChange={handleUpload} />
       </div>
 
-      <ScrollArea className="flex-1 -mx-2 px-2">
-        <div className="space-y-4">
-          <div className="console-sidebar-panel space-y-2">
-            <div className="px-1 pb-1">
-              <h4 className="text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.24em]">Navigation</h4>
-            </div>
-            {[
-              { label: "Drive", icon: HardDrive },
-              { label: "Recent", icon: Clock },
-              { label: "Shared", icon: Share2 },
-              { label: "Trash", icon: Trash2 },
-            ].map((item, i) => (
-              <button 
-                key={i}
-                onClick={() => { setActiveTab(item.label); setCurrentPath(""); setIsMobileMenuOpen(false); }}
-                className={`w-full flex items-center gap-3 px-3 py-3 rounded-2xl text-sm font-medium transition-all ${
-                  activeTab === item.label
-                    ? 'bg-[#12274B] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
-                    : 'text-[#9CA3AF] hover:bg-[#111827] hover:text-[#E5E7EB]'
-                }`}
-              >
-                <span className={`flex h-8 w-8 items-center justify-center rounded-xl border ${
-                  activeTab === item.label
-                    ? 'border-[#2563EB]/40 bg-[#2563EB]/15 text-[#60A5FA]'
-                    : 'border-[#1F2937] bg-[#0B1220] text-[#6B7280]'
-                }`}>
-                  <item.icon className="w-4 h-4" />
-                </span>
-                <span className="flex-1 text-left">{item.label}</span>
-                {activeTab === item.label && <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#60A5FA]">Open</span>}
-              </button>
-            ))}
-          </div>
+      <div className="sidebar-divider" />
 
-          <div className="console-sidebar-panel space-y-3">
-            <div className="px-1">
-              <h4 className="text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.24em]">Storage</h4>
-              <p className="mt-1 text-sm font-semibold text-white">Drive Health</p>
-            </div>
-            <div className="px-1 space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-white">
-                    {driveHealthStatus === "error"
-                      ? "Storage Error"
-                      : storageStats.total > 0
-                        ? `${formatSize(storageStats.used)} used of ${formatSize(storageStats.total)}`
-                        : driveHealthStatus === "loading"
-                          ? "Analyzing..."
-                          : "Waiting..."}
-                  </p>
-                  <p className="mt-1 text-xs text-[#7C8798]">
-                    {driveHealthStatus === "error"
-                      ? driveHealthError || "Unable to read current storage health."
-                      : storageStats.total > 0
-                        ? `${formatSize(storageStats.free)} free space available`
-                        : "Storage statistics will appear here once the node responds."}
-                  </p>
-                </div>
-                <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] ${
-                  driveHealthStatus === "error"
-                    ? "bg-red-500/10 text-red-400"
-                    : "bg-[#111827] text-[#E5E7EB]"
-                }`}>
-                    {driveHealthStatus === "error"
-                      ? "ERROR"
-                      : storageStats.total > 0
-                        ? `${Math.round((storageStats.used / storageStats.total) * 100)}%`
-                        : "--"}
-                </span>
-              </div>
-              <Progress value={storageStats.total > 0 ? (storageStats.used / storageStats.total) * 100 : 0} className="console-storage-progress h-2 bg-[#111827]" />
-              {driveHealthStatus === "error" && (
-                <p className="text-[11px] leading-relaxed text-red-400">{driveHealthError}</p>
-              )}
-            </div>
-          </div>
+      {/* Navigation */}
+      <div className="sidebar-nav-label">MAIN</div>
+      <div className="sidebar-nav-list">
+        {[
+          { label: "Drive", icon: HardDrive },
+          { label: "Recent", icon: Clock },
+          { label: "Shared", icon: Share2 },
+          { label: "Trash", icon: Trash2 },
+        ].map((item) => (
+          <button
+            key={item.label}
+            onClick={() => { setActiveTab(item.label); setCurrentPath(""); setIsMobileMenuOpen(false); }}
+            className={`sidebar-nav-item ${activeTab === item.label ? 'active' : ''}`}
+          >
+            <span className="sidebar-nav-icon"><item.icon className="w-4 h-4" /></span>
+            <span>{item.label}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="sidebar-divider" />
+
+      {/* Drive Health */}
+      <div className="sidebar-drive-health">
+        <div className="sidebar-drive-health-label">DRIVE HEALTH</div>
+        <div className="sidebar-storage-main">
+          {driveHealthStatus === "error"
+            ? "Storage Error"
+            : storageStats.total > 0
+              ? `${formatSize(storageStats.used)} / ${formatSize(storageStats.total)}`
+              : driveHealthStatus === "loading" ? "Analyzing..." : "Waiting..."}
         </div>
-      </ScrollArea>
+        <div className="sidebar-storage-row">
+          <span className="sidebar-storage-free">
+            {storageStats.total > 0 ? `${formatSize(storageStats.free)} free` : "—"}
+          </span>
+          <span className="sidebar-storage-pct">
+            {storageStats.total > 0 ? `${Math.round((storageStats.used / storageStats.total) * 100)}%` : "--"}
+          </span>
+        </div>
+        <div className="sidebar-progress-bar">
+          <div className="sidebar-progress-fill" style={{ width: `${storageStats.total > 0 ? (storageStats.used / storageStats.total) * 100 : 0}%` }} />
+        </div>
+        {driveHealthStatus === "error" && (
+          <p style={{ fontSize: 11, color: '#EF4444', marginTop: 8 }}>{driveHealthError}</p>
+        )}
+      </div>
     </div>
   );
 
@@ -1347,538 +1321,328 @@ export function WebConsole() {
   }
 
   return (
-    <div className="console-layout bg-[#0B1220] text-[#E5E7EB] font-sans selection:bg-[#2563EB]/30">
-      {/* Top Bar - Responsive Header */}
-      <header className="console-header">
-        <div className="flex items-center gap-3 md:gap-6 min-w-0">
-          <Button variant="ghost" size="icon" className="md:hidden text-[#E5E7EB] shrink-0" onClick={() => setIsMobileMenuOpen(true)}>
-            <Menu className="w-5 h-5" />
-          </Button>
-          <div className="flex items-center gap-3 group cursor-pointer shrink-0" onClick={() => { setActiveTab("Drive"); setCurrentPath(""); }}>
-            <div className="hidden md:flex w-8 h-8 bg-gradient-to-br from-[#2563EB] to-[#A855F7] rounded-lg items-center justify-center shadow-lg shadow-blue-500/10">
-              <Cloud className="w-5 h-5 text-white" />
-            </div>
-            <span className="font-bold tracking-tight text-lg hidden md:block">Easy Storage</span>
-          </div>
-          
-          <Separator orientation="vertical" className="h-6 bg-[#1F2937] hidden md:block" />
-          
-          <div className="flex items-center gap-2 text-xs font-medium text-[#9CA3AF] min-w-0 flex-1 overflow-x-auto no-scrollbar whitespace-nowrap mask-gradient-right pr-4">
-            <Layers className="w-3.5 h-3.5 shrink-0" />
-            <span className="cursor-pointer hover:text-white transition-colors shrink-0" onClick={() => setCurrentPath('')}>Drive</span>
-            {currentPath.split('/').filter(Boolean).map((segment, idx, arr) => {
-               const pathSoFar = arr.slice(0, idx + 1).join('/');
-               return (
-                 <div key={idx} className="flex items-center gap-2 shrink-0">
-                   <ChevronRight className="w-3 h-3" />
-                   <span 
-                     className="text-[#E5E7EB] font-bold cursor-pointer hover:text-blue-400 transition-colors"
-                     onClick={() => setCurrentPath(pathSoFar)}
-                   >
-                     {segment}
-                   </span>
-                 </div>
-               );
-            })}
+    <div className="console-root">
+      {/* ═══════════ TOPBAR — spans all 3 columns ═══════════ */}
+      <header className="topbar">
+        <div className="topbar-left">
+          <div className="topbar-logo"><Cloud className="w-[18px] h-[18px] text-white" /></div>
+          <span className="topbar-wordmark">Easy Storage</span>
+        </div>
+
+        <div className="topbar-center">
+          <div className="topbar-search">
+            <Search className="w-4 h-4" />
+            <input
+              placeholder="Search files..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
           </div>
         </div>
 
-        <div className="flex items-center gap-2 md:gap-4 shrink-0">
-          <Button variant="ghost" size="icon" className="md:hidden text-white bg-[#2563EB] hover:bg-[#1d4ed8] rounded-full w-8 h-8 shrink-0" onClick={() => fileInputRef.current?.click()}>
-            <Upload className="w-4 h-4" />
-          </Button>
-          <Button variant="ghost" size="icon" className="md:hidden text-white bg-[#2563EB] hover:bg-[#1d4ed8] rounded-full w-8 h-8 shrink-0" onClick={() => folderInputRef.current?.click()}>
-            <Folder className="w-4 h-4 fill-white/20" />
-          </Button>
-          <div className="relative w-40 md:w-80 hidden sm:block">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#4B5563]" />
-            <Input 
-              placeholder="Search files..." 
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-9 bg-[#111827] border-[#1F2937] text-sm pl-10 focus:ring-1 ring-[#2563EB]/50 rounded-xl transition-all w-full"
-            />
+        <div className="topbar-right">
+          <div className={`node-status-indicator ${nodeStatus.className}`}>
+            <span className="status-dot" />
+            <span>{nodeStatus.label}</span>
           </div>
-          <div className="flex items-center gap-1 md:gap-3">
-             <div className={`node-status-indicator hidden md:flex ${nodeStatus.className}`}>
-               <span className="status-dot" />
-               <span>{nodeStatus.label}</span>
-             </div>
-             <Button 
-                variant="ghost" 
-                size="icon" 
-                className="w-9 h-9 rounded-xl hover:bg-[#374151] hover:text-white transition-colors"
-                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-             >
-                {theme === 'dark' ? <Sun className="w-4 h-4 text-[#9CA3AF] hover:text-white" /> : <Moon className="w-4 h-4 text-[#9CA3AF] hover:text-slate-800" />}
-             </Button>
-             
-             <DropdownMenu>
-               <DropdownMenuTrigger asChild>
-                 <div className="hidden md:flex w-9 h-9 rounded-xl bg-[#1F2937] border border-[#374151] items-center justify-center cursor-pointer hover:bg-[#374151] transition-colors">
-                   <User className="w-5 h-5 text-[#9CA3AF]" />
-                 </div>
-               </DropdownMenuTrigger>
-               <DropdownMenuContent align="end" className="bg-[#111827] border-[#1F2937] text-[#E5E7EB] w-48">
-                 <div className="px-3 py-2 text-xs text-[#9CA3AF] font-mono border-b border-[#1F2937] mb-1">
-                    {authEmail || "Admin Session"}
-                 </div>
-                 <DropdownMenuItem className="gap-2 text-[#EF4444]" onClick={handleLogout}>
-                    <Trash2 className="w-4 h-4" /> Disconnect Tunnel
-                 </DropdownMenuItem>
-               </DropdownMenuContent>
-             </DropdownMenu>
-          </div>
+          <button className="topbar-icon-btn" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+            {theme === 'dark' ? <Sun className="w-[18px] h-[18px]" /> : <Moon className="w-[18px] h-[18px]" />}
+          </button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <div className="topbar-avatar"><User className="w-[18px] h-[18px]" /></div>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="bg-[#111827] border-[#1F2937] text-[#E5E7EB] w-48">
+              <div className="px-3 py-2 text-xs text-[#9CA3AF] font-mono border-b border-[#1F2937] mb-1">{authEmail || "Admin Session"}</div>
+              <DropdownMenuItem className="gap-2 text-[#EF4444]" onClick={handleLogout}><Trash2 className="w-4 h-4" /> Disconnect</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 
-      {/* Mobile Sidebar Overlay */}
-      <AnimatePresence>
-        {isMobileMenuOpen && (
-           <motion.div 
-             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-             className="fixed inset-0 z-50 bg-black/60 md:hidden flex"
-             onClick={() => setIsMobileMenuOpen(false)}
-           >
-             <motion.div 
-               initial={{ x: "-100%" }} animate={{ x: 0 }} exit={{ x: "-100%" }}
-               transition={{ type: "spring", bounce: 0, duration: 0.3 }}
-               className="w-64 bg-[#0B1220] h-full flex flex-col border-r border-[#1F2937]"
-               onClick={e => e.stopPropagation()}
-             >
-                <SidebarContent />
-             </motion.div>
-           </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Sidebar - Desktop */}
-      <aside className="console-sidebar hidden md:block overflow-y-auto">
+      {/* ═══════════ LEFT SIDEBAR — unified 260px panel ═══════════ */}
+      <aside className="sidebar">
         <SidebarContent />
       </aside>
-      <div className="console-workspace">
-      <main className="console-main flex flex-col relative min-w-0"
-          onDragOver={(e) => { e.preventDefault(); setIsDragging(true); e.dataTransfer.dropEffect = "copy"; }}
-          onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
-          onDrop={async (e) => {
-            e.preventDefault();
-            setIsDragging(false);
-            if (e.dataTransfer.items) {
-                const items = Array.from(e.dataTransfer.items);
-                const allFiles: File[] = [];
-                for (let i = 0; i < items.length; i++) {
-                    const item = items[i].webkitGetAsEntry();
-                    if (item) {
-                        const files = await traverseFileTree(item);
-                        allFiles.push(...files);
-                    }
-                }
-                if (allFiles.length > 0) {
-                    processFiles(allFiles);
-                }
-            } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-                processFiles(Array.from(e.dataTransfer.files));
+
+      {/* ═══════════ CENTER FILE PANEL ═══════════ */}
+      <main className="file-panel"
+        onDragOver={(e) => { e.preventDefault(); setIsDragging(true); e.dataTransfer.dropEffect = "copy"; }}
+        onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
+        onDrop={async (e) => {
+          e.preventDefault();
+          setIsDragging(false);
+          if (e.dataTransfer.items) {
+            const items = Array.from(e.dataTransfer.items);
+            const allFiles: File[] = [];
+            for (let i = 0; i < items.length; i++) {
+              const item = items[i].webkitGetAsEntry();
+              if (item) { const files = await traverseFileTree(item); allFiles.push(...files); }
             }
-          }}>
-          
-          <AnimatePresence>
-            {isDragging && (
-              <motion.div 
-                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                className="hidden md:flex absolute inset-0 z-50 bg-[#2563EB]/10 backdrop-blur-sm border-2 border-dashed border-[#2563EB] m-4 rounded-3xl flex-col items-center justify-center pointer-events-none"
-              >
-                <div className="w-20 h-20 bg-[#2563EB]/20 rounded-full flex items-center justify-center mb-6">
-                  <Upload className="w-10 h-10 text-[#2563EB] animate-bounce" />
-                </div>
-                <h2 className="text-3xl font-bold text-white tracking-tight">Drop files here</h2>
-                <p className="mt-2 text-[#9CA3AF]">Upload instantly to {currentPath ? `/${currentPath}` : 'Drive root'}</p>
-              </motion.div>
-            )}
-
-            {isNodeOffline && (
-              <motion.div 
-                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                className="absolute inset-0 z-[60] bg-[#0B1220]/95 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center"
-              >
-                <div className="relative mb-8">
-                  <div className="w-24 h-24 bg-red-500/10 rounded-full flex items-center justify-center">
-                    <Cloud className="w-12 h-12 text-red-500/40" />
-                  </div>
-                  <div className="absolute inset-0 flex items-center justify-center">
-                     <SquareLoader color="#EF4444" size="md" />
-                  </div>
-                </div>
-                <h2 className="text-3xl font-bold text-white tracking-tight mb-3">Node is Offline</h2>
-                <p className="text-[#9CA3AF] max-w-xs mx-auto mb-8">
-                  The storage node on your device (<b>{shareCode}</b>) is currently unreachable. 
-                  Ensure the phone is active and the app is running.
-                </p>
-                <div className="flex flex-col gap-3 w-full max-w-xs px-6">
-                  <button 
-                    onClick={handleRetryConnection}
-                    className="launch-node-btn w-full"
-                  >
-                    <RefreshCw className="w-5 h-5" />
-                    <span>Retry Connection</span>
-                  </button>
-                  <p className="text-[10px] text-[#4B5563] uppercase tracking-[0.2em] font-bold mt-2">
-                    Last sync check: {new Date(lastCheck).toLocaleTimeString()}
-                  </p>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <div className="flex flex-col h-full w-full">
-            {/* Toolbar */}
-            <div className="px-6 lg:px-8 py-5 flex items-center justify-between border-b border-[#1F2937] bg-[#0B1220]/70 backdrop-blur-sm shrink-0">
-                <div className="flex items-center gap-4 min-w-0">
-                  {currentPath && (
-                      <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg" onClick={navigateUp}>
-                          <ChevronUp className="w-4 h-4"/>
-                      </Button>
-                  )}
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-3">
-                      <h2 className="text-2xl font-bold tracking-tight text-white flex items-center gap-3">
-                        {activeTab}
-                        {isRefreshing && <SquareLoader size="sm" />}
-                      </h2>
-                      <Badge variant="outline" className="text-[10px] font-mono py-0.5 px-2.5 text-[#9CA3AF] border-[#1F2937] bg-[#111827]">
-                        {files.length} items
-                      </Badge>
-                    </div>
-                    <p className="mt-1 text-sm text-[#7C8798] hidden md:block">
-                      Browse, preview, and organize your storage with clearer separation between folders and files.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                   <div className="bg-[#111827] p-1 rounded-2xl border border-[#1F2937] flex shadow-[0_10px_30px_rgba(0,0,0,0.18)]">
-                      <Button 
-                        variant="ghost" size="icon" 
-                        className={`h-8 w-8 rounded-xl ${viewMode === 'list' ? 'bg-[#1F2937] text-white' : 'text-[#4B5563]'}`}
-                        onClick={() => setViewMode('list')}
-                      >
-                        <List className="w-3.5 h-3.5" />
-                      </Button>
-                      <Button 
-                        variant="ghost" size="icon" 
-                        className={`h-8 w-8 rounded-xl ${viewMode === 'grid' ? 'bg-[#1F2937] text-white' : 'text-[#4B5563]'}`}
-                        onClick={() => setViewMode('grid')}
-                      >
-                        <LayoutGrid className="w-3.5 h-3.5" />
-                      </Button>
-                   </div>
-                </div>
-            </div>
-
-            {viewMode === 'list' && (
-              <div className="hidden md:flex items-center px-6 lg:px-8 py-3 border-b border-[#1F2937] text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.24em] shrink-0 bg-[#0D1420]">
-                <div style={{ width: 40 }} className="shrink-0" />
-                <div className="flex-1 min-w-[200px] flex items-center gap-2">Name</div>
-                <div style={{ width: 100 }} className="shrink-0">Size</div>
-                <div style={{ width: 140 }} className="shrink-0 text-right pr-10">Modified</div>
+            if (allFiles.length > 0) processFiles(allFiles);
+          } else if (e.dataTransfer.files?.length) {
+            processFiles(Array.from(e.dataTransfer.files));
+          }
+        }}
+        style={{ position: 'relative' }}
+      >
+        {/* Drag overlay */}
+        <AnimatePresence>
+          {isDragging && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="drag-overlay">
+              <div style={{ width: 56, height: 56, background: 'rgba(37,99,235,0.15)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
+                <Upload className="w-7 h-7 text-[#2563EB]" style={{ animation: 'bounce 1s infinite' }} />
               </div>
-            )}
+              <h2 style={{ fontSize: 22, fontWeight: 700, color: 'white' }}>Drop files here</h2>
+              <p style={{ fontSize: 13, color: '#7C8798', marginTop: 6 }}>Upload to {currentPath ? `/${currentPath}` : 'Drive root'}</p>
+            </motion.div>
+          )}
 
-            {filesError && (
-              <div className="mx-4 mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-                {filesError}
+          {isNodeOffline && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="offline-overlay">
+              <div style={{ width: 80, height: 80, background: 'rgba(239,68,68,0.08)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 20 }}>
+                <Cloud className="w-10 h-10" style={{ color: 'rgba(239,68,68,0.35)' }} />
               </div>
+              <h2 style={{ fontSize: 24, fontWeight: 700, color: 'white', marginBottom: 8 }}>Node is Offline</h2>
+              <p style={{ fontSize: 13, color: '#7C8798', maxWidth: 280, marginBottom: 24, lineHeight: 1.6 }}>
+                The storage node <b>{shareCode}</b> is unreachable. Ensure the phone is active and the app is running.
+              </p>
+              <button className="launch-node-btn" onClick={handleRetryConnection}>
+                <RefreshCw className="w-5 h-5" /><span>Retry Connection</span>
+              </button>
+              <p style={{ fontSize: 9, color: '#4B5E7A', marginTop: 12, textTransform: 'uppercase', letterSpacing: '0.16em', fontWeight: 700 }}>
+                Last check: {new Date(lastCheck).toLocaleTimeString()}
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* File panel header — compact */}
+        <div className="file-panel-header">
+          <div className="file-panel-title-row">
+            {currentPath && (
+              <button onClick={navigateUp} style={{ background: 'none', border: 'none', color: '#7C8798', cursor: 'pointer', padding: 4, borderRadius: 4, display: 'flex' }}>
+                <ChevronUp className="w-4 h-4" />
+              </button>
             )}
-
-            <ScrollArea className="flex-1 w-full h-[0px]">
-              {isRefreshing && files.length === 0 ? (
-                <div className="flex flex-col gap-3 p-6">
-                   {[1,2,3,4,5].map(i => (
-                     <div key={i} className="w-full h-14 bg-[#1F2937]/50 rounded-lg animate-pulse" />
-                   ))}
-                </div>
-              ) : filteredAndSortedFiles.length === 0 && !isRefreshing ? (
-                 <div className="flex flex-col items-center justify-center p-20 text-[#4B5563]">
-                    <div className="w-24 h-24 mb-6 opacity-20"><Cloud className="w-full h-full"/></div>
-                    <h3 className="text-xl font-bold text-[#E5E7EB]">{searchQuery ? "No matches found" : "Nothing here yet"}</h3>
-                    <p className="mt-2 text-sm text-center max-w-sm">
-                      {searchQuery 
-                        ? "Try adjusting your search or filters to find what you're looking for." 
-                        : "Upload files or create folders to populate your storage space. Drag and drop works anywhere."}
-                    </p>
-                 </div>
-              ) : (
-                  <div className={viewMode === 'list' ? "px-4 lg:px-6 py-4 space-y-2.5" : "grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-4 p-4 lg:p-6"}>
-                    {filteredAndSortedFiles.map((file, index) => (
-                      viewMode === 'list' ? (
-                        <button
-                          key={file.id}
-                          onClick={() => file.isDirectory ? navigateTo(file.path) : setSelectedFile(file)}
-                          className={`console-file-row flex items-center w-full px-4 py-4 text-left text-sm transition-all relative group min-h-[72px] rounded-2xl border ${
-                            file.isDirectory ? 'console-file-row-folder' : 'console-file-row-file'
-                          } ${
-                            selectedFile?.id === file.id ? 'bg-[#2563EB]/8 border-[#2563EB]/30 shadow-[0_18px_40px_rgba(37,99,235,0.08)]' : 'hover:bg-[#111827]/80 hover:border-[#22324a]'
-                          } ${selectedFiles.has(file.id) ? 'bg-[#2563EB]/10 border-[#2563EB]/25' : ''}`}
-                        >
-                          {/* Checkbox */}
-                          <div style={{ width: 40 }} className="shrink-0 flex items-center justify-center" onClick={e => e.stopPropagation()}>
-                            <div onClick={(e) => toggleSelection(e, file.id, index)} className={`w-4 h-4 rounded border flex items-center justify-center cursor-pointer transition-colors ${selectedFiles.has(file.id) ? 'bg-[#2563EB] border-[#2563EB]' : 'border-[#4B5563] hover:border-[#E5E7EB] opacity-0 group-hover:opacity-100'} ${selectedFiles.has(file.id) ? '!opacity-100' : ''}`}>
-                              {selectedFiles.has(file.id) && <Check className="w-3 h-3 text-white" />}
-                            </div>
-                          </div>
-                          {selectedFile?.id === file.id && <div className="absolute left-0 top-1.5 bottom-1.5 w-1 bg-[#2563EB] rounded-r-full" />}
-                          
-                          {/* NAME column */}
-                          <div className="flex-1 min-w-0 flex items-center gap-3.5 pr-4">
-                            <div className={`transition-transform group-hover:scale-105 duration-200 shrink-0 flex h-11 w-11 items-center justify-center rounded-2xl border ${
-                              file.isDirectory
-                                ? 'bg-[#0F2342] border-[#1E3A66]'
-                                : 'bg-[#101826] border-[#1F2937]'
-                            }`}>
-                               {getFileIcon(file.name, file.isDirectory, "w-5 h-5")}
-                            </div>
-                            <div className="min-w-0">
-                              <div className="truncate font-semibold text-[15px] text-[#E5E7EB] group-hover:text-white transition-colors">
-                                {file.name}
-                              </div>
-                              <div className="mt-1 flex items-center gap-2 text-xs text-[#7C8798]">
-                                <span className={`rounded-full px-2 py-0.5 font-semibold uppercase tracking-[0.14em] ${
-                                  file.isDirectory
-                                    ? 'bg-[#2563EB]/12 text-[#60A5FA]'
-                                    : 'bg-[#161E2C] text-[#AAB5C4]'
-                                }`}>
-                                  {getFileKindLabel(file)}
-                                </span>
-                                {!file.isDirectory && (
-                                  <span className="truncate">
-                                    Ready to preview or download
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* SIZE column */}
-                          <div style={{ width: 100 }} className="hidden md:flex shrink-0 font-mono text-xs text-[#7C8798] items-center whitespace-nowrap">{formatSize(file.size)}</div>
-
-                          {/* MODIFIED column */}
-                          <div style={{ width: 140 }} className="hidden md:flex shrink-0 text-[#7C8798] items-center justify-end text-xs font-mono whitespace-nowrap pr-10">{formatDate(file.lastModified)}</div>
-                          
-                          {/* Actions menu */}
-                          <div className="absolute right-1 md:right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="icon" className="h-8 w-8 px-0 text-[#9CA3AF] hover:text-[#E5E7EB]" onClick={(e) => { e.stopPropagation(); setSelectedFile(file); }}>
-                                  <MoreVertical className="w-4 h-4" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent className="bg-[#111827] border-[#1F2937] text-[#E5E7EB]">
-                                  <DropdownMenuItem className="gap-2" onClick={(e) => { e.stopPropagation(); handleDownload(file); }}><Download className="w-4 h-4" /> Download</DropdownMenuItem>
-                                  <DropdownMenuItem className="gap-2" onClick={(e) => { e.stopPropagation(); handleRename(file); }}><FileEdit className="w-4 h-4" /> Rename</DropdownMenuItem>
-                                  <DropdownMenuSeparator className="bg-[#1F2937]" />
-                                  <DropdownMenuItem className="gap-2 text-[#EF4444]" onClick={(e) => { e.stopPropagation(); handleDelete(file); }}><Trash2 className="w-4 h-4" /> Delete</DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </div>
-                        </button>
-                      ) : (
-                        <Card 
-                          key={file.id} 
-                          onClick={() => file.isDirectory ? navigateTo(file.path) : setSelectedFile(file)}
-                          className={`p-4 bg-[#111827]/55 border-[#1F2937] hover:border-[#2563EB]/40 hover:-translate-y-0.5 transition-all cursor-pointer flex flex-col items-center justify-center group relative min-h-[156px] rounded-[24px] ${
-                            selectedFile?.id === file.id ? 'ring-1 ring-[#2563EB] bg-[#2563EB]/5' : ''
-                          } ${selectedFiles.has(file.id) ? 'ring-1 ring-[#2563EB] bg-[#2563EB]/10' : ''}`}
-                        >
-                          <div className={`absolute top-3 left-3 flex items-center transition-opacity z-10 ${selectedFiles.has(file.id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`} onClick={e => e.stopPropagation()}>
-                            <div onClick={(e) => toggleSelection(e, file.id, index)} className={`w-4 h-4 rounded border flex items-center justify-center cursor-pointer transition-colors ${selectedFiles.has(file.id) ? 'bg-[#2563EB] border-[#2563EB]' : 'border-[#4B5563] hover:border-[#E5E7EB]'}`}>
-                              {selectedFiles.has(file.id) && <Check className="w-3 h-3 text-white" />}
-                            </div>
-                          </div>
-                          <div className="aspect-square w-[72px] h-[72px] shrink-0 rounded-xl bg-[#0B1220] flex items-center justify-center mb-4 transition-transform group-hover:scale-105">
-                            {getFileIcon(file.name, file.isDirectory, "w-8 h-8")}
-                          </div>
-                          <span className="text-[11px] font-medium w-full text-center px-1 break-words line-clamp-2 leading-tight">{file.name}</span>
-                          <div className="mt-2 flex flex-col items-center gap-1">
-                            <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.18em] ${
-                              file.isDirectory ? 'bg-[#2563EB]/12 text-[#60A5FA]' : 'bg-[#161E2C] text-[#AAB5C4]'
-                            }`}>
-                              {getFileKindLabel(file)}
-                            </span>
-                            <p className="text-[9px] text-[#4B5563] font-mono uppercase tracking-widest shrink-0">{formatSize(file.size)}</p>
-                          </div>
-                        </Card>
-                      )
-                    ))}
-                  </div>
-              )}
-            </ScrollArea>
-            
-            {/* Floating Bulk Actions Bar */}
-            <AnimatePresence>
-              {selectedFiles.size > 0 && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 50, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 50, scale: 0.95 }}
-                  className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 bg-[#1F2937]/90 backdrop-blur-xl border border-[#374151] shadow-2xl rounded-2xl p-2 px-4 shadow-black/50"
-                  onClick={e => e.stopPropagation()}
-                >
-                  <div className="flex items-center gap-2 px-2 border-r border-[#374151]">
-                     <div className="w-6 h-6 rounded-full bg-[#2563EB] flex items-center justify-center text-xs font-bold">{selectedFiles.size}</div>
-                     <span className="text-sm font-medium pr-2 text-white">{selectedFiles.size === 1 ? 'item' : 'items'} selected</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Button variant="ghost" className="h-9 hover:bg-[#374151] hover:text-white text-[#E5E7EB]" onClick={handleBulkDownload}>
-                      <Download className="w-4 h-4 mr-2" /> Download
-                    </Button>
-                    <Button variant="ghost" className="h-9 hover:bg-[#374151] hover:text-white text-[#E5E7EB]" onClick={handleBulkMove}>
-                      <Move className="w-4 h-4 mr-2" /> Move
-                    </Button>
-                    <Button variant="ghost" className="h-9 hover:bg-red-500/20 hover:text-red-400 text-red-500 transition-colors" onClick={handleBulkDelete}>
-                      <Trash2 className="w-4 h-4 mr-2" /> Delete
-                    </Button>
-                  </div>
-                  <div className="w-px h-6 bg-[#374151] mx-1" />
-                  <Button variant="ghost" size="icon" className="h-9 w-9 hover:bg-[#374151] text-[#9CA3AF]" onClick={clearSelection}>
-                    <X className="w-4 h-4" />
-                  </Button>
-                </motion.div>
-              )}
-            </AnimatePresence>
+            <h2 className="file-panel-title">{activeTab}</h2>
+            {isRefreshing && <SquareLoader size="sm" />}
+            <span className="file-count-badge">{files.length} items</span>
           </div>
+          <div className="file-panel-toolbar">
+            <div className="view-toggle-group">
+              <button className={`view-toggle-btn ${viewMode === 'list' ? 'active' : ''}`} onClick={() => setViewMode('list')}>
+                <List className="w-[14px] h-[14px]" />
+              </button>
+              <button className={`view-toggle-btn ${viewMode === 'grid' ? 'active' : ''}`} onClick={() => setViewMode('grid')}>
+                <LayoutGrid className="w-[14px] h-[14px]" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Error message */}
+        {filesError && (
+          <div style={{ margin: '8px 16px', padding: '10px 14px', borderRadius: 8, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', fontSize: 13, color: '#f87171' }}>
+            {filesError}
+          </div>
+        )}
+
+        {/* File content area */}
+        <div className="file-table-body-wrap">
+          {isRefreshing && files.length === 0 ? (
+            <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {[1,2,3,4,5].map(i => <div key={i} className="skeleton-row" />)}
+            </div>
+          ) : filteredAndSortedFiles.length === 0 && !isRefreshing ? (
+            <div className="empty-files-state">
+              <Cloud />
+              <h3>{searchQuery ? "No matches found" : "Nothing here yet"}</h3>
+              <p>{searchQuery
+                ? "Try adjusting your search to find what you're looking for."
+                : "Upload files or create folders. Drag and drop works anywhere."}</p>
+            </div>
+          ) : viewMode === 'list' ? (
+            <table className="file-table">
+              <thead>
+                <tr>
+                  <th className="col-name" onClick={() => toggleSort("name")}>
+                    NAME {sortField === "name" && (sortDirection === "asc" ? "↑" : "↓")}
+                  </th>
+                  <th className="col-size" onClick={() => toggleSort("size")}>
+                    SIZE {sortField === "size" && (sortDirection === "asc" ? "↑" : "↓")}
+                  </th>
+                  <th className="col-modified" onClick={() => toggleSort("lastModified")}>
+                    MODIFIED {sortField === "lastModified" && (sortDirection === "asc" ? "↑" : "↓")}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredAndSortedFiles.map((file, index) => (
+                  <tr
+                    key={file.id}
+                    className={`file-row ${selectedFile?.id === file.id ? 'selected' : ''}`}
+                    onClick={() => file.isDirectory ? navigateTo(file.path) : setSelectedFile(file)}
+                  >
+                    <td className="col-name">
+                      <div className="file-name-cell">
+                        <div className={`file-icon-wrap ${file.isDirectory ? 'folder-icon' : ''}`}>
+                          {getFileIcon(file.name, file.isDirectory, "w-4 h-4")}
+                        </div>
+                        <div className="file-name-info">
+                          <span className="file-name">{file.name}</span>
+                          <span className={`file-type-badge ${getFileBadgeCategory(file)}`}>
+                            {getFileKindLabel(file)}
+                          </span>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="col-size">{formatSize(file.size)}</td>
+                    <td className="col-modified">{formatDate(file.lastModified)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="file-grid">
+              {filteredAndSortedFiles.map((file) => (
+                <div
+                  key={file.id}
+                  className={`file-grid-item ${selectedFile?.id === file.id ? 'selected' : ''}`}
+                  onClick={() => file.isDirectory ? navigateTo(file.path) : setSelectedFile(file)}
+                >
+                  <div className="file-grid-icon">
+                    {getFileIcon(file.name, file.isDirectory, "w-6 h-6")}
+                  </div>
+                  <span className="file-grid-name">{file.name}</span>
+                  <span className="file-grid-meta">{formatSize(file.size)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Floating Bulk Actions Bar */}
+        <AnimatePresence>
+          {selectedFiles.size > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 50, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 50, scale: 0.95 }}
+              className="bulk-bar"
+              onClick={e => e.stopPropagation()}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingRight: 8, borderRight: '1px solid #374151' }}>
+                <div style={{ width: 24, height: 24, borderRadius: '50%', background: '#2563EB', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: 'white' }}>{selectedFiles.size}</div>
+                <span style={{ fontSize: 13, fontWeight: 500, color: 'white' }}>{selectedFiles.size === 1 ? 'item' : 'items'}</span>
+              </div>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <Button variant="ghost" className="h-9 hover:bg-[#374151] hover:text-white text-[#E5E7EB]" onClick={handleBulkDownload}><Download className="w-4 h-4 mr-2" /> Download</Button>
+                <Button variant="ghost" className="h-9 hover:bg-[#374151] hover:text-white text-[#E5E7EB]" onClick={handleBulkMove}><Move className="w-4 h-4 mr-2" /> Move</Button>
+                <Button variant="ghost" className="h-9 hover:bg-red-500/20 hover:text-red-400 text-red-500" onClick={handleBulkDelete}><Trash2 className="w-4 h-4 mr-2" /> Delete</Button>
+              </div>
+              <Button variant="ghost" size="icon" className="h-9 w-9 hover:bg-[#374151] text-[#9CA3AF]" onClick={clearSelection}><X className="w-4 h-4" /></Button>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </main>
 
-      {/* Info & Preview Panel - Desktop Only */}
-      <aside className="console-preview hidden lg:block">
-          <PreviewContent />
-      </aside>
-      </div>
+      {/* ═══════════ RIGHT PREVIEW PANEL — 300px fixed ═══════════ */}
+      <aside className={`preview-panel ${selectedFile ? 'active' : 'empty'}`}>
+        {selectedFile ? (
+          <div>
+            {/* Header */}
+            <div className="preview-header">
+              {getFileIcon(selectedFile.name, selectedFile.isDirectory, "w-7 h-7")}
+              <span className="preview-filename">{selectedFile.name}</span>
+            </div>
 
-      {/* Mobile Preview Modal */}
-      <AnimatePresence>
-        {selectedFile && (
-          <motion.div
-            initial={{ opacity: 0, y: "100%" }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: "100%" }}
-            transition={{ type: "spring", bounce: 0, duration: 0.4 }}
-            className="fixed inset-0 z-50 bg-[#0B1220] md:hidden flex flex-col pointer-events-auto"
-          >
-            <PreviewContent />
-          </motion.div>
+            {/* Thumbnail */}
+            <div className="preview-thumbnail">
+              {(() => {
+                const ext = selectedFile.name.split('.').pop()?.toLowerCase() || '';
+                const pwd = new URLSearchParams(window.location.hash.split('?')[1]).get('pwd') || '';
+                const url = buildApiUrl(`/api/download?path=${encodeURIComponent(currentPath)}&file=${encodeURIComponent(selectedFile.name)}&pwd=${encodeURIComponent(pwd)}`);
+                if (['png','jpg','jpeg','gif','webp'].includes(ext)) return <img src={url} alt="Preview" onError={(e) => { e.currentTarget.style.display='none'; }} />;
+                if (['mp4','webm','mov'].includes(ext)) return <video src={url} controls preload="metadata" />;
+                if (ext === 'pdf') return <iframe src={url} title="PDF Preview" />;
+                return getFileIcon(selectedFile.name, selectedFile.isDirectory, "w-12 h-12 fallback-icon");
+              })()}
+            </div>
+
+            {/* Metadata */}
+            <div className="preview-metadata">
+              <div className="preview-meta-row">
+                <span className="preview-meta-label">SIZE</span>
+                <span className="preview-meta-value">{formatSize(selectedFile.size)}</span>
+              </div>
+              <div className="preview-meta-row">
+                <span className="preview-meta-label">MODIFIED</span>
+                <span className="preview-meta-value">{formatDate(selectedFile.lastModified)}</span>
+              </div>
+              <div className="preview-meta-row">
+                <span className="preview-meta-label">TYPE</span>
+                <span className="preview-meta-value">{getFileKindLabel(selectedFile)}</span>
+              </div>
+              <div className="preview-meta-row">
+                <span className="preview-meta-label">PATH</span>
+                <span className="preview-meta-value mono">~/Root/{currentPath ? currentPath + '/' : ''}{selectedFile.name}</span>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="preview-actions">
+              <button className="btn-primary" onClick={() => handleDownload(selectedFile)}>
+                <Download className="w-4 h-4" /> Download
+              </button>
+              <button className="btn-danger-ghost" onClick={() => handleDelete(selectedFile)}>
+                <Trash2 className="w-4 h-4" /> Delete
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="preview-empty-state">
+            <Eye className="preview-eye-icon" />
+            <p className="preview-empty-title">NO PREVIEW</p>
+            <p className="preview-empty-sub">Select a file to view its preview and details</p>
+          </div>
         )}
-      </AnimatePresence>
+      </aside>
 
       {/* Upload Animation Overlay */}
       <AnimatePresence>
         {(isUploading || uploadStatus !== 'idle') && (
-          <motion.div 
-            initial={{ opacity: 0, y: 100 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 100 }}
-            className={`fixed bottom-10 left-1/2 -translate-x-1/2 w-96 bg-[#111827] border p-4 rounded-2xl shadow-2xl z-50 flex items-center gap-4 ${
-                uploadStatus === 'success' ? 'border-[#10B981]/60' : 
-                uploadStatus === 'error' ? 'border-[#EF4444]/60' : 
-                uploadStatus === 'partial' ? 'border-[#F59E0B]/60' : 'border-[#2563EB]/40'
-            }`}
+          <motion.div
+            initial={{ opacity: 0, y: 100 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 100 }}
+            className={`upload-toast ${uploadStatus}`}
           >
-             <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-                uploadStatus === 'success' ? 'bg-[#10B981]/10' : 
-                uploadStatus === 'error' ? 'bg-[#EF4444]/10' : 
-                uploadStatus === 'partial' ? 'bg-[#F59E0B]/10' : 'bg-[#2563EB]/10'
-             }`}>
-                {uploadStatus === 'success' ? <Check className="w-5 h-5 text-[#10B981]" /> :
-                 uploadStatus === 'error' ? <AlertCircle className="w-5 h-5 text-[#EF4444]" /> :
-                 uploadStatus === 'partial' ? <AlertCircle className="w-5 h-5 text-[#F59E0B]" /> :
-                 <Upload className="w-5 h-5 text-[#2563EB] animate-bounce" />}
-             </div>
-             <div className="flex-1">
-                <div className="flex justify-between mb-1.5 opacity-100">
-                   <span className="text-xs font-bold uppercase tracking-wider text-white">
-                     {uploadStatus === 'uploading' ? 'Uploading...' :
-                      uploadStatus === 'success' ? 'Upload Complete' :
-                      uploadStatus === 'error' ? 'Upload Failed' :
-                      uploadStatus === 'partial' ? 'Partial Success' : 'Idle'}
-                   </span>
-                   {uploadStatus !== 'idle' && (
-                     <div className="flex items-center gap-2">
-                        {uploadStatus === 'success' && <button onClick={() => setUploadStatus('idle')} className="text-[10px] text-white/50 hover:text-white underline">Dismiss</button>}
-                        <span className="text-[10px] font-mono font-bold text-white">{uploadProgress}%</span>
-                     </div>
-                   )}
-                </div>
-                <Progress 
-                    value={uploadProgress} 
-                    className={`h-1 bg-[#0B1220] ${
-                        uploadStatus === 'success' ? '[&>div]:bg-[#10B981]' : 
-                        uploadStatus === 'error' ? '[&>div]:bg-[#EF4444]' : 
-                        uploadStatus === 'partial' ? '[&>div]:bg-[#F59E0B]' : '[&>div]:bg-[#2563EB]'
-                    }`} 
-                />
-                {(folderProgress.total > 1 || uploadStatus !== 'uploading') && (
-                  <div className="mt-2 text-[10px] text-[#9CA3AF] font-medium flex justify-between gap-4">
-                    <span>{uploadStatus === 'uploading' ? 'Folder Progress' : 'Summary'}</span>
-                    <span className="flex gap-2">
-                        <span className="text-[#10B981]">{folderProgress.success} OK</span> &middot;
-                        <span className="text-[#EF4444]">{folderProgress.failed} FAIL</span>
-                    </span>
-                  </div>
-                )}
-             </div>
+            <div style={{ width: 36, height: 36, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              background: uploadStatus === 'success' ? 'rgba(16,185,129,0.1)' : uploadStatus === 'error' ? 'rgba(239,68,68,0.1)' : 'rgba(37,99,235,0.1)'
+            }}>
+              {uploadStatus === 'success' ? <Check className="w-5 h-5 text-[#10B981]" /> :
+               uploadStatus === 'error' ? <AlertCircle className="w-5 h-5 text-[#EF4444]" /> :
+               <Upload className="w-5 h-5 text-[#2563EB]" style={{ animation: 'bounce 1s infinite' }} />}
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'white' }}>
+                  {uploadStatus === 'uploading' ? 'Uploading...' : uploadStatus === 'success' ? 'Complete' : uploadStatus === 'error' ? 'Failed' : uploadStatus === 'partial' ? 'Partial' : 'Idle'}
+                </span>
+                <span style={{ fontSize: 10, fontFamily: 'monospace', fontWeight: 700, color: 'white' }}>{uploadProgress}%</span>
+              </div>
+              <Progress value={uploadProgress} className={`h-1 bg-[#0B1220] ${
+                uploadStatus === 'success' ? '[&>div]:bg-[#10B981]' :
+                uploadStatus === 'error' ? '[&>div]:bg-[#EF4444]' : '[&>div]:bg-[#2563EB]'
+              }`} />
+              {uploadStatus === 'success' && (
+                <button onClick={() => setUploadStatus('idle')} style={{ fontSize: 10, color: '#7C8798', marginTop: 6, background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>Dismiss</button>
+              )}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
-      
-      {failedUploads.length > 0 && (
-          <motion.div 
-            initial={{ opacity: 0, y: 100 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 100 }}
-            className="fixed bottom-10 right-10 w-96 bg-[#111827] border border-[#EF4444]/40 p-4 rounded-2xl shadow-2xl z-50 flex flex-col gap-3"
-          >
-             <div className="flex justify-between items-center">
-                <span className="text-xs font-bold text-[#EF4444]">{failedUploads.length} files failed</span>
-                <Button size="sm" variant="outline" className="h-7 text-[10px] border-[#374151] hover:bg-[#374151]" onClick={() => setFailedUploads([])}><X className="w-3 h-3"/></Button>
-             </div>
-             <div className="max-h-32 overflow-y-auto text-xs text-[#9CA3AF] space-y-1">
-                {failedUploads.map((f, i) => (
-                    <div key={i} className="flex justify-between gap-4">
-                        <span className="truncate flex-1">{f.file.name}</span>
-                        <span className="text-[#EF4444] text-[10px] truncate w-32 text-right">{f.error}</span>
-                    </div>
-                ))}
-             </div>
-             <Button 
-                size="sm" 
-                className="h-8 bg-[#2563EB] hover:bg-[#1d4ed8] text-xs font-bold w-full" 
-                onClick={() => {
-                    const filesToRetry = failedUploads.map(f => f.file);
-                    setFailedUploads([]);
-                    processFiles(filesToRetry);
-                }}
-             >
-                Retry Failed Files
-             </Button>
-          </motion.div>
-      )}
 
-      {Object.keys(sanitizedUploads).length > 0 && (
-          <motion.div 
-            initial={{ opacity: 0, y: 100 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 100 }}
-            className="fixed bottom-10 left-10 w-96 bg-[#111827] border border-[#F59E0B]/40 p-4 rounded-2xl shadow-2xl z-50 flex flex-col gap-3"
-          >
-             <div className="flex justify-between items-center">
-                <span className="text-xs font-bold text-[#F59E0B]">{Object.keys(sanitizedUploads).length} files renamed</span>
-                <Button size="sm" variant="outline" className="h-7 text-[10px] border-[#374151] hover:bg-[#374151]" onClick={() => setSanitizedUploads({})}><X className="w-3 h-3"/></Button>
-             </div>
-             <div className="max-h-32 overflow-y-auto text-xs text-[#9CA3AF] space-y-1">
-                {Object.entries(sanitizedUploads).map(([original, sanitized], i) => (
-                    <div key={i} className="flex justify-between gap-4">
-                        <span className="truncate flex-1" title={original}>{original}</span>
-                        <span className="text-[#F59E0B] text-[10px] truncate w-32 text-right" title={sanitized}>&#8594; {sanitized}</span>
-                    </div>
-                ))}
-             </div>
-          </motion.div>
-      )}
-
-      {/* Share Configuration Modal */}
+      {/* Share Modal */}
       <AnimatePresence>
         {showShareModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -1886,10 +1650,9 @@ export function WebConsole() {
               <Card className="w-full max-w-sm bg-[#111827] border-[#374151] p-6 shadow-2xl">
                 <h3 className="text-xl font-bold text-white mb-2">Share Link</h3>
                 <p className="text-xs text-[#9CA3AF] mb-6">Configure access controls for this link.</p>
-                
                 <div className="space-y-4 mb-6">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-white">Read-Only Access</span>
+                    <span className="text-sm font-medium text-white">Read-Only</span>
                     <button onClick={() => setShareConfig({...shareConfig, readOnly: !shareConfig.readOnly})} className={`w-10 h-6 rounded-full transition-colors ${shareConfig.readOnly ? 'bg-[#2563EB]' : 'bg-[#374151]'} relative`}>
                       <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${shareConfig.readOnly ? 'left-5' : 'left-1'}`} />
                     </button>
@@ -1904,26 +1667,9 @@ export function WebConsole() {
                     </select>
                   </div>
                 </div>
-
-                <div className="mb-6">
-                  <p className="text-[10px] text-[#4B5563] uppercase tracking-[0.2em] font-bold mb-4">Quick Share</p>
-                  <div className="flex items-center gap-3">
-                    {[
-                      { icon: <Twitter className="w-5 h-5"/>, color: "from-blue-400 to-blue-600", border: "border-blue-400/30" },
-                      { icon: <Linkedin className="w-5 h-5"/>, color: "from-blue-600 to-blue-800", border: "border-blue-500/30" },
-                      { icon: <Github className="w-5 h-5"/>, color: "from-gray-700 to-gray-900", border: "border-gray-600/30" },
-                      { icon: <Youtube className="w-5 h-5"/>, color: "from-red-500 to-red-700", border: "border-red-500/30" }
-                    ].map((btn, i) => (
-                      <div key={i} className={`h-12 w-12 bg-gradient-to-br ${btn.color} border ${btn.border} flex items-center justify-center text-white squircle-icon cursor-pointer shadow-lg`}>
-                        {btn.icon}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
                 <div className="flex justify-end gap-3 mt-2">
-                   <Button variant="ghost" className="text-gray-400 hover:text-white" onClick={() => setShowShareModal(false)}>Cancel</Button>
-                   <Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => { setShowShareModal(false); toast.success("Share link configured & copied!"); }}>Copy Link</Button>
+                  <Button variant="ghost" className="text-gray-400 hover:text-white" onClick={() => setShowShareModal(false)}>Cancel</Button>
+                  <Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => { setShowShareModal(false); toast.success("Share link copied!"); }}>Copy Link</Button>
                 </div>
               </Card>
             </motion.div>
