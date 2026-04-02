@@ -1,51 +1,73 @@
-/* ──────────────────────────────────────────────────────────────────────────────
-   Easy Storage Cloud — Web Console Three-Column Layout
-   ────────────────────────────────────────────────────────────────────────────── */
+/* Reset everything from the very top */
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   CORE THREE-COLUMN GRID LAYOUT
-   ═══════════════════════════════════════════════════════════════════════════ */
+html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #08090E;
+    margin: 0;
+}
 
-html,
-body,
 #root {
-  width: 100vw;
-  height: 100vh;
-  overflow: hidden;
-  margin: 0;
-  padding: 0;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
 
-.console-root {
-  display: grid;
-  grid-template-rows: 56px 1fr;
-  grid-template-columns: 260px 1fr 300px;
-  grid-template-areas:
-    "topbar  topbar  topbar"
-    "sidebar main    preview";
-  height: 100vh;
-  width: 100vw;
-  overflow: hidden;
-  background: #08090E;
-  color: #E2E5F0;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+.console-layout {
+    display: grid;
+    width: 100%;
+    height: calc(100vh - 56px); /* Full height minus topbar */
+    grid-template-columns: 260px 1fr 300px;
+    grid-template-rows: 1fr;
+    grid-template-areas: "sidebar main preview";
+    overflow: hidden;
+    background: #08090E;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   TOPBAR — spans all 3 columns
-   ═══════════════════════════════════════════════════════════════════════════ */
+.sidebar {
+    grid-area: sidebar;
+    width: 260px;
+    min-width: 260px;
+    max-width: 260px;
+    height: 100%;
+    background: #0F1117;
+    border-right: 1px solid #1C2035;
+    overflow-y: auto;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+}
 
-.topbar {
-  grid-area: topbar;
-  display: grid;
-  grid-template-columns: 260px 1fr auto;
-  align-items: center;
-  padding: 0 16px;
-  height: 56px;
-  background: #0F1117;
-  border-bottom: 1px solid #1C2035;
-  gap: 16px;
-  z-index: 30;
+.file-panel {
+    grid-area: main;
+    min-width: 0; /* Critical — prevents flex/grid child from overflowing */
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #08090E;
+}
+
+.preview-panel {
+    grid-area: preview;
+    width: 300px;
+    min-width: 300px;
+    max-width: 300px;
+    height: 100%;
+    background: #0F1117;
+    border-left: 1px solid #1C2035;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
 }
 
 .topbar-left {
@@ -73,78 +95,59 @@ body,
   color: white;
 }
 
-.topbar-wordmark {
-  font-size: 16px;
-  font-weight: 700;
-  color: #E2E5F0;
-  letter-spacing: -0.01em;
+.topbar {
+    width: 100%;
+    height: 56px;
+    min-height: 56px;
+    flex-shrink: 0;
+    display: grid;
+    grid-template-columns: 260px 1fr auto;
+    align-items: center;
+    background: #0F1117;
+    border-bottom: 1px solid #1C2035;
+    padding: 0;
 }
 
-.topbar-center {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  max-width: 480px;
-  width: 100%;
-  margin: 0 auto;
+.topbar-logo-section {
+    width: 260px;
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-right: 1px solid #1C2035;
+    height: 100%;
 }
 
-.topbar-search {
-  position: relative;
-  width: 100%;
+.topbar-search-section {
+    padding: 0 20px;
+    display: flex;
+    align-items: center;
 }
 
-.topbar-search svg {
-  position: absolute;
-  left: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 15px;
-  height: 15px;
-  color: #4B5E7A;
-  pointer-events: none;
+.topbar-search-input {
+    width: 100%;
+    max-width: 400px;
+    height: 34px;
+    background: #08090E;
+    border: 1px solid #252A3F;
+    border-radius: 8px;
+    padding: 0 12px 0 36px;
+    font-family: Inter, sans-serif;
+    font-size: 13px;
+    color: #E2E5F0;
+    outline: none;
 }
 
-.topbar-search input {
-  width: 100%;
-  height: 36px;
-  background: #161B26;
-  border: 1px solid #1C2035;
-  border-radius: 8px;
-  padding: 0 12px 0 36px;
-  font-size: 13px;
-  color: #E2E5F0;
-  outline: none;
-  transition: border-color 0.2s;
+.topbar-search-input:focus {
+    border-color: #3B82F6;
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
 }
 
-.topbar-search input::placeholder {
-  color: #4B5E7A;
-}
-
-.topbar-search input:focus {
-  border-color: #2563EB;
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
-}
-
-.topbar-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.topbar-icon-btn {
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  border-radius: 8px;
-  color: #7C8798;
-  cursor: pointer;
-  transition: all 0.15s;
+.topbar-actions-section {
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
 }
 
 .topbar-icon-btn:hover {
@@ -500,16 +503,9 @@ body,
   color: #7C8798;
 }
 
-.file-table th.col-size {
-  width: 100px;
-  text-align: right;
-}
-
-.file-table th.col-modified {
-  width: 140px;
-  text-align: right;
-  padding-right: 28px;
-}
+.col-name { width: auto; padding-left: 20px; text-align: left; }
+.col-size { width: 120px !important; text-align: right !important; }
+.col-modified { width: 180px !important; text-align: right !important; padding-right: 20px !important; }
 
 /* File rows */
 .file-row {

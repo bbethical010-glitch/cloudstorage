@@ -24,7 +24,7 @@ export function Root() {
   }, [location, navigate]);
 
   return (
-    <div className="min-h-screen bg-[#0B1220] font-sans selection:bg-[#2563EB]/30">
+    <div className="w-full h-full bg-[#0B1220] font-sans selection:bg-[#2563EB]/30 overflow-hidden">
       <Toaster position="top-center" richColors theme="dark" />
       <Outlet />
     </div>
