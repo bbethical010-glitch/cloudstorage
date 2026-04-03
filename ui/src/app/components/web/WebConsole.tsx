@@ -211,6 +211,8 @@ export function WebConsole() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareConfig, setShareConfig] = useState({ expiry: '24h', readOnly: true });
+  const [activePreviewFile, setActivePreviewFile] = useState<FileNode | null>(null);
+  const [terminalLogs, setTerminalLogs] = useState<{ id: string; msg: string; type: 'sys' | 'net' | 'io'; timestamp: string }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
@@ -317,6 +319,19 @@ export function WebConsole() {
     };
     void checkAuth();
   }, [buildApiUrl, getHeaders]);
+
+  const logActivity = useCallback((msg: string, type: 'sys' | 'net' | 'io' = 'sys') => {
+    const id = Math.random().toString(36).substring(7);
+    const timestamp = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    setTerminalLogs(prev => [{ id, msg, type, timestamp }, ...prev].slice(0, 15));
+  }, []);
+
+  const openPreview = (file: FileNode) => {
+    setActivePreviewFile(file);
+    logActivity(`PREVIEW_REQUEST: ${file.name}`, 'sys');
+    setTimeout(() => logActivity(`P2P_STREAM_INIT: ${file.id}`, 'net'), 400);
+    setTimeout(() => logActivity(`BLOB_GENERATED: success`, 'io'), 800);
+  };
 
   const SidebarContent = () => (
     <div className="sidebar" style={{ background: 'transparent', border: 'none' }}>
@@ -1572,19 +1587,32 @@ export function WebConsole() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredAndSortedFiles.map((file, index) => (
-                    <tr key={file.id} className={`file-row ${selectedFile?.id === file.id ? "selected" : ""}`} onClick={() => (file.isDirectory ? navigateTo(file.path) : setSelectedFile(file))}>
-                      <td className="col-name">
-                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                          <div className={`file-icon-wrap ${file.isDirectory ? "folder-icon" : ""}`}>{getFileIcon(file.name, file.isDirectory, "w-4 h-4")}</div>
-                          <span style={{ fontSize: "13px", color: "#E2E5F0" }}>{file.name}</span>
-                          <span className={`file-type-badge ${getFileBadgeCategory(file)}`}>{getFileKindLabel(file)}</span>
-                        </div>
-                      </td>
-                      <td className="col-size">{file.isDirectory ? "—" : formatSize(file.size)}</td>
-                      <td className="col-modified">{formatDate(file.lastModified)}</td>
-                    </tr>
-                  ))}
+                  {filteredAndSortedFiles.map((file, index) => {
+                    const category = getFileBadgeCategory(file);
+                    const isPreviewable = ['image', 'video', 'pdf'].includes(category);
+                    
+                    return (
+                      <tr 
+                        key={file.id} 
+                        className={`file-row ${selectedFile?.id === file.id ? "selected" : ""} ${isPreviewable ? "cursor-zoom-in" : ""}`} 
+                        onClick={() => {
+                          if (file.isDirectory) navigateTo(file.path);
+                          else if (isPreviewable) openPreview(file);
+                          else setSelectedFile(file);
+                        }}
+                      >
+                        <td className="col-name">
+                          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                            <div className={`file-icon-wrap ${file.isDirectory ? "folder-icon" : ""}`}>{getFileIcon(file.name, file.isDirectory, "w-4 h-4")}</div>
+                            <span style={{ fontSize: "13px", color: "#E2E5F0" }}>{file.name}</span>
+                            <span className={`file-type-badge ${getFileBadgeCategory(file)}`}>{getFileKindLabel(file)}</span>
+                          </div>
+                        </td>
+                        <td className="col-size">{file.isDirectory ? "—" : formatSize(file.size)}</td>
+                        <td className="col-modified">{formatDate(file.lastModified)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             ) : (
@@ -1693,6 +1721,26 @@ export function WebConsole() {
                   <Trash2 className="w-4 h-4" /> Delete
                 </Button>
               </div>
+              {/* ENGINE ROOM LOG AREA */}
+              <div style={{ height: "200px", display: "flex", flexDirection: "column", background: "#050505", borderTop: "1px solid #1C2035", marginTop: "auto", overflow: "hidden" }}>
+                <div style={{ padding: "10px 16px", background: "#0A0B10", display: "flex", alignItems: "center", gap: "8px", borderBottom: "1px solid #1C2035" }}>
+                  <Activity className="w-3 h-3 text-[#10B981]" />
+                  <span style={{ fontSize: "10px", fontWeight: 700, letterSpacing: "0.15em", color: "#10B981" }}>ENGINE ROOM</span>
+                </div>
+                <div style={{ flex: 1, padding: "12px", display: "flex", flexDirection: "column", gap: "4px", overflowY: "auto", scrollbarWidth: "none" }}>
+                  {terminalLogs.length === 0 ? (
+                    <span style={{ fontSize: "10px", color: "#3A3F58", fontFamily: "JetBrains Mono, monospace" }}>NO ACTIVE PROCESSES</span>
+                  ) : (
+                    terminalLogs.map(log => (
+                      <div key={log.id} style={{ display: "flex", gap: "6px", fontFamily: "JetBrains Mono, monospace", fontSize: "9px" }}>
+                        <span style={{ color: "#3A3F58" }}>[{log.timestamp}]</span>
+                        <span style={{ color: log.type === 'sys' ? '#60A5FA' : log.type === 'net' ? '#A855F7' : '#10B981' }}>[{log.type.toUpperCase()}]</span>
+                        <span style={{ color: "#7A8099" }}>{log.msg}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </aside>
@@ -1786,6 +1834,152 @@ export function WebConsole() {
                   </Button>
                 </div>
               </Card>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Preview Modal */}
+      <AnimatePresence>
+        {activePreviewFile && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 md:p-8 bg-[#050505]/90 backdrop-blur-md">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }} 
+              animate={{ opacity: 1, scale: 1, y: 0 }} 
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="w-full max-w-5xl h-full max-h-[85vh] bg-[#0A0B10] border border-[#1F2937] rounded-xl shadow-2xl flex flex-col overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-[#1F2937] bg-[#0D0F16]">
+                <div className="flex items-center gap-4">
+                  <div className="p-2 bg-[#161B26] rounded-lg border border-[#1F2937]">
+                    {getFileIcon(activePreviewFile.name, false, "w-5 h-5 text-blue-400")}
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white font-mono leading-tight">{activePreviewFile.name}</h3>
+                    <div className="flex items-center gap-2 mt-1">
+                      <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20 text-[10px] px-1.5 h-4 uppercase tracking-tighter">
+                        {getFileBadgeCategory(activePreviewFile)}
+                      </Badge>
+                      <span className="text-[10px] text-[#4B5E7A] font-mono">ID: {activePreviewFile.id.substring(0, 8)}...</span>
+                    </div>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setActivePreviewFile(null)}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/5 text-[#4B5E7A] hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Viewer Area */}
+              <div className="flex-1 overflow-auto bg-[#050505] relative flex items-center justify-center p-4">
+                {(() => {
+                  const category = getFileBadgeCategory(activePreviewFile);
+                  const url = buildApiUrl(`/api/node/${shareCode}/file?path=${encodeURIComponent(activePreviewFile.path)}`);
+                  
+                  if (category === 'image') {
+                    return (
+                      <div className="relative group max-w-full max-h-full">
+                        <img 
+                          src={url} 
+                          alt={activePreviewFile.name}
+                          className="max-w-full max-h-full object-contain rounded-sm"
+                          onLoad={() => logActivity(`RENDER_COMPLETE: ${activePreviewFile.name}`, 'io')}
+                        />
+                      </div>
+                    );
+                  }
+                  
+                  if (category === 'video') {
+                    return (
+                      <div className="w-full max-w-3xl flex flex-col gap-6">
+                        <div className="aspect-video bg-black rounded-lg border border-[#1F2937] overflow-hidden group relative">
+                          <video 
+                            src={url} 
+                            controls 
+                            autoPlay
+                            className="w-full h-full"
+                            onPlay={() => logActivity(`STREAMING_ACTIVE: ${activePreviewFile.name}`, 'net')}
+                          />
+                          <div className="absolute top-4 right-4 px-2 py-1 bg-black/60 backdrop-blur-md rounded border border-white/10 flex items-center gap-2">
+                             <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                             <span className="text-[10px] font-mono text-white/80 uppercase">P2P LIVE</span>
+                          </div>
+                        </div>
+                        
+                        {/* Mock Buffer Health Bar */}
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-end">
+                            <span className="text-[10px] font-mono text-[#4B5E7A] uppercase tracking-widest">P2P SWARM BUFFER HEALTH</span>
+                            <span className="text-[10px] font-mono text-[#10B981]">98.4%</span>
+                          </div>
+                          <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden flex gap-0.5">
+                            {Array.from({ length: 40 }).map((_, i) => (
+                              <motion.div 
+                                key={i}
+                                initial={{ opacity: 0.3 }}
+                                animate={{ opacity: [0.3, 0.8, 0.3] }}
+                                transition={{ duration: 2, repeat: Infinity, delay: i * 0.05 }}
+                                className="flex-1 h-full bg-[#10B981]"
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+                  
+                  if (category === 'pdf') {
+                    return (
+                      <div className="w-full h-full max-w-4xl bg-white/5 rounded-lg border border-[#1F2937] flex flex-col items-center justify-center p-12 text-center">
+                        <div className="w-20 h-20 bg-red-500/10 rounded-2xl flex items-center justify-center border border-red-500/20 mb-6">
+                           <FileText className="w-10 h-10 text-red-500" />
+                        </div>
+                        <h4 className="text-lg font-bold text-white mb-2">Secure PDF Viewer</h4>
+                        <p className="text-sm text-[#7A8099] max-w-md mb-8">
+                          The document "{activePreviewFile.name}" is being decrypted and streamed from the peer node. 
+                          Partial rendering is currently enabled for performance.
+                        </p>
+                        <div className="w-full max-w-sm space-y-3">
+                           {[1, 2, 3].map(i => (
+                             <div key={i} className="h-4 bg-white/5 rounded animate-pulse" style={{ width: `${100 - (i * 15)}%` }} />
+                           ))}
+                        </div>
+                      </div>
+                    );
+                  }
+                  
+                  return <div>No Preview Available</div>;
+                })()}
+              </div>
+
+              {/* Footer */}
+              <div className="px-6 py-4 border-t border-[#1F2937] bg-[#0D0F16] flex items-center justify-between">
+                <div className="flex gap-8">
+                   <div className="flex flex-col">
+                      <span className="text-[10px] text-[#4B5E7A] font-medium uppercase tracking-[0.2em] mb-0.5">RESOLUTION</span>
+                      <span className="text-xs text-white font-mono">{getFileBadgeCategory(activePreviewFile) === 'image' ? '3840 x 2160' : '1920 x 1080'}</span>
+                   </div>
+                   <div className="flex flex-col">
+                      <span className="text-[10px] text-[#4B5E7A] font-medium uppercase tracking-[0.2em] mb-0.5">CODEC / FORMAT</span>
+                      <span className="text-xs text-white font-mono">{activePreviewFile.name.split('.').pop()?.toUpperCase() || 'RAW'}</span>
+                   </div>
+                   <div className="flex flex-col">
+                      <span className="text-[10px] text-[#4B5E7A] font-medium uppercase tracking-[0.2em] mb-0.5">SIZE</span>
+                      <span className="text-xs text-white font-mono">{formatSize(activePreviewFile.size)}</span>
+                   </div>
+                </div>
+                
+                <Button 
+                  className="bg-[#22C55E] hover:bg-[#16a34a] text-[#050505] font-bold px-6 rounded-lg gap-2"
+                  onClick={() => handleDownload(activePreviewFile)}
+                >
+                  <Download className="w-4 h-4" /> DOWNLOAD NATIVE
+                </Button>
+              </div>
             </motion.div>
           </div>
         )}

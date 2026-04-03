@@ -222,6 +222,7 @@ class WebRTCPeer(
             // Buffer for assembling upload chunks
             private val uploadBuffers = ConcurrentHashMap<String, java.io.ByteArrayOutputStream>()
             private val uploadRequests = ConcurrentHashMap<String, Map<*, *>>()
+            private val uploadBytesReceived = ConcurrentHashMap<String, Long>()
 
             override fun onMessage(buffer: DataChannel.Buffer) {
                 try {
@@ -254,7 +255,11 @@ class WebRTCPeer(
                         // Begin accumulating upload chunks
                         uploadBuffers[reqId] = java.io.ByteArrayOutputStream()
                         uploadRequests[reqId] = msg
-                        Log.d(TAG, "[DC_DEBUG] Upload started: $reqId")
+                        uploadBytesReceived[reqId] = 0L
+                        val fileName = msg["fileName"] as? String ?: "Uploading file..."
+                        val fileSize = (msg["fileSize"] as? Double)?.toLong() ?: 0L
+                        TransferManager.startTransfer(fileName, fileSize, isDownload = false)
+                        Log.d(TAG, "[DC_DEBUG] Upload started: $reqId ($fileName)")
                     }
                     "upload-end" -> {
                         // Upload complete — forward accumulated body to local server
@@ -276,9 +281,14 @@ class WebRTCPeer(
                 val reqId = String(idBytes, Charsets.UTF_8).trim()
 
                 val remaining = ByteArray(data.remaining())
+                val chunkSize = remaining.size
                 data.get(remaining)
 
                 uploadBuffers[reqId]?.write(remaining)
+                
+                val current = (uploadBytesReceived[reqId] ?: 0L) + chunkSize
+                uploadBytesReceived[reqId] = current
+                TransferManager.updateProgress(current)
             }
 
             override fun onBufferedAmountChange(amount: Long) {}
@@ -359,6 +369,18 @@ class WebRTCPeer(
                     val channel = statement.bodyAsChannel()
                     val idBytes = reqId.padEnd(36, ' ').toByteArray(Charsets.UTF_8).sliceArray(0 until 36)
                     val readBuffer = java.nio.ByteBuffer.allocate(CHUNK_SIZE)
+                    
+                    var fileName = "Downloading file..."
+                    responseHeaders["Content-Disposition"]?.let { disp ->
+                        if (disp.contains("filename=")) {
+                            fileName = disp.substringAfter("filename=").trim('"')
+                        }
+                    } ?: run {
+                        fileName = path.substringAfterLast("/")
+                    }
+                    
+                    TransferManager.startTransfer(fileName, contentLength, isDownload = true)
+                    var totalSent = 0L
 
                     while (!channel.isClosedForRead) {
                         readBuffer.clear()
@@ -370,6 +392,9 @@ class WebRTCPeer(
                             packet.put(readBuffer)
                             packet.flip()
                             sendBinary(dc, packet)
+                            
+                            totalSent += bytesRead
+                            TransferManager.updateProgress(totalSent)
                         }
                     }
 

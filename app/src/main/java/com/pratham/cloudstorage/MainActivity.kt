@@ -17,6 +17,7 @@ import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.collectAsState
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -74,12 +75,23 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import com.pratham.cloudstorage.ui.theme.CloudStorageTheme
-import com.pratham.cloudstorage.ui.theme.DarkPanel
+import com.pratham.cloudstorage.ui.theme.DarkBackground
+import com.pratham.cloudstorage.ui.theme.DarkSurface
+import com.pratham.cloudstorage.ui.theme.DarkDivider
 import com.pratham.cloudstorage.ui.theme.PrimaryBlue
 import com.pratham.cloudstorage.ui.theme.TextSecondary
 import com.pratham.cloudstorage.ui.theme.TextPrimary
 import com.pratham.cloudstorage.ui.theme.SuccessGreen
 import com.pratham.cloudstorage.ui.theme.HighlightPurple
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 
 import android.webkit.JavascriptInterface
 import org.json.JSONObject
@@ -178,6 +190,17 @@ class MainActivity : ComponentActivity() {
             callback.onReceiveValue(uris.distinct().takeIf { it.isNotEmpty() }?.toTypedArray())
         }
 
+    private fun formatBytes(bytes: Long): String {
+        val units = listOf("B", "KB", "MB", "GB")
+        var value = bytes.toDouble()
+        var unitIndex = 0
+        while (value >= 1024 && unitIndex < units.size - 1) {
+            value /= 1024
+            unitIndex++
+        }
+        return String.format("%.1f %s", value, units[unitIndex])
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         preferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -193,7 +216,15 @@ class MainActivity : ComponentActivity() {
             relayBaseUrl = savedRelayUrl
         }
 
+
         setupWebView()
+        webView.loadUrl("file:///android_asset/web/index.html")
+
+        setContent {
+            CloudStorageTheme {
+                MainScreen()
+            }
+        }
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -310,8 +341,184 @@ class MainActivity : ComponentActivity() {
             }
             addJavascriptInterface(WebAppInterface(), "Android")
         }
-        setContentView(webView)
-        webView.loadUrl("file:///android_asset/web/index.html")
+    }
+    
+    @Composable
+    private fun MainScreen() {
+        val transferState by TransferManager.transferState.collectAsState(initial = null)
+
+        Box(modifier = Modifier.fillMaxSize()) {
+            // Full-screen WebView
+            AndroidView(
+                factory = { webView },
+                modifier = Modifier.fillMaxSize()
+            )
+
+            // Overlaid Active Transfer Card
+            AnimatedVisibility(
+                visible = transferState != null,
+                enter = slideInVertically(
+                    initialOffsetY = { it },
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessLow
+                    )
+                ) + fadeIn(),
+                exit = slideOutVertically(
+                    targetOffsetY = { it },
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMedium
+                    )
+                ) + fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(16.dp)
+                    .padding(bottom = 24.dp) // Extra clearance for system nav
+            ) {
+                transferState?.let { state ->
+                    ActiveTransferCard(state)
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun ActiveTransferCard(state: TransferState) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .shadow(12.dp, RoundedCornerShape(20.dp)),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(20.dp),
+            border = BorderStroke(
+                1.dp,
+                if (state.isComplete) SuccessGreen.copy(alpha = 0.5f) else DarkDivider
+            )
+        ) {
+            Column(modifier = Modifier.padding(18.dp)) {
+                // Header with Status and Toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(
+                            modifier = Modifier.size(8.dp),
+                            color = if (state.isComplete) SuccessGreen else PrimaryBlue,
+                            shape = CircleShape
+                        ) {}
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = if (state.isComplete) "Transfer Success" else if (state.isDownload) "Incoming Download" else "Outgoing Upload",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = if (state.isComplete) SuccessGreen else TextPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    
+                    if (state.isComplete) {
+                        Surface(
+                            color = SuccessGreen.copy(alpha = 0.1f),
+                            shape = CircleShape,
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text("✓", color = SuccessGreen, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = "${state.percent}%",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = PrimaryBlue,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+                
+                Text(
+                    text = state.filename,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Progress Bar
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .background(DarkBackground, RoundedCornerShape(3.dp))
+                ) {
+                    val progressWidth by animateFloatAsState(
+                        targetValue = state.progress,
+                        animationSpec = spring(stiffness = Spring.StiffnessLow)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progressWidth)
+                            .fillMaxSize()
+                            .background(
+                                if (state.isComplete) SuccessGreen else PrimaryBlue,
+                                RoundedCornerShape(3.dp)
+                            )
+                    )
+                }
+
+                if (!state.isComplete) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "TRANSFER SPEED",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "${formatBytes(state.speedBps)}/s",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextPrimary,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = "EST. TIME LEFT",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            val eta = if (state.speedBps > 0) {
+                                (state.totalBytes - state.bytesTransferred) / state.speedBps
+                            } else 0L
+                            
+                            Text(
+                                text = if (eta > 60) "${eta / 60}m ${eta % 60}s" else "${eta}s",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextPrimary,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 
     inner class WebAppInterface {
