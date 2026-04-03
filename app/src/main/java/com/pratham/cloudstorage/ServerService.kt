@@ -886,12 +886,25 @@ class ServerService : Service() {
                             if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
                             var relativePath: String? = null
                             var chunkIndex: Int = 0
+                            var transferId = ""
                             try {
                                 val path = call.request.queryParameters["path"] ?: ""
                                 val fileName = call.request.queryParameters["filename"] ?: "uploaded_file"
                                 relativePath = call.request.queryParameters["relativePath"]
                                 chunkIndex = call.request.queryParameters["chunkIndex"]?.toIntOrNull() ?: 0
+                                val totalChunks = call.request.queryParameters["totalChunks"]?.toIntOrNull() ?: 1
+                                val totalSize = call.request.queryParameters["totalSize"]?.toLongOrNull() ?: 0L
                                 val chunkSize = 5 * 1024 * 1024L // Match frontend constant
+
+                                transferId = TransferRegistry.generateTransferId(fileName, totalSize)
+
+                                if (chunkIndex == 0) {
+                                    TransferRegistry.onTransferStarted(
+                                        transferId = transferId,
+                                        fileName = fileName,
+                                        totalBytes = totalSize
+                                    )
+                                }
 
                                 val combinedPath = if (!relativePath.isNullOrBlank()) {
                                     if (path.isNotBlank()) "$path/$relativePath" else relativePath
@@ -983,9 +996,30 @@ class ServerService : Service() {
                                         }
                                     } ?: throw Exception("Failed to open file descriptor for writing")
                                 }
-                                
+
+                                // Calculate cumulative bytes written across all chunks
+                                val chunkSizeBytes = 5L * 1024L * 1024L
+                                val estimatedCumulativeBytes = minOf(
+                                    (chunkIndex.toLong() + 1L) * chunkSizeBytes,
+                                    if (totalSize > 0) totalSize else (chunkIndex.toLong() + 1L) * chunkSizeBytes
+                                )
+                                TransferRegistry.onChunkWritten(
+                                    transferId = transferId,
+                                    bytesWritten = estimatedCumulativeBytes
+                                )
+
+                                if (chunkIndex == totalChunks - 1) {
+                                    TransferRegistry.onTransferComplete(transferId)
+                                }
+
                                 call.respondJson(true)
                             } catch (e: Exception) {
+                                if (transferId.isNotBlank()) {
+                                    TransferRegistry.onTransferFailed(
+                                        transferId = transferId,
+                                        error = e.message ?: "Upload failed on chunk $chunkIndex"
+                                    )
+                                }
                                 android.util.Log.e("UploadChunk", "Error in upload_chunk for $relativePath", e)
                                 call.respondJson(false, e.message ?: "Unknown upload error", "UPLOAD_FAILED")
                             }
@@ -994,6 +1028,26 @@ class ServerService : Service() {
                         post("/upload_complete") {
                             // Logic to verify file integrity if needed
                             call.respondJson(true)
+                        }
+
+                        get("/transfer_status") {
+                            val active = TransferRegistry.activeTransfers.value
+                            val response = active.map { transfer ->
+                                mapOf(
+                                    "transferId" to transfer.transferId,
+                                    "fileName" to transfer.fileName,
+                                    "totalBytes" to transfer.totalBytes,
+                                    "bytesWritten" to transfer.bytesWritten,
+                                    "progressPercent" to transfer.progressPercent,
+                                    "speedBytesPerSecond" to transfer.speedBytesPerSecond,
+                                    "isComplete" to transfer.isComplete,
+                                    "isFailed" to transfer.isFailed,
+                                    "isActive" to transfer.isActive,
+                                    "startedAt" to transfer.startedAt,
+                                    "errorMessage" to transfer.errorMessage
+                                )
+                            }
+                            call.respond(response)
                         }
                     }
 

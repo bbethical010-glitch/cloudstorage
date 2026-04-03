@@ -3,6 +3,7 @@ import { Smartphone, Monitor } from "lucide-react";
 import { Button } from "./ui/button";
 import { useEffect } from "react";
 import { Toaster } from "sonner";
+import { TransferIndicatorBar } from "./TransferIndicatorBar";
 
 export function Root() {
   const location = useLocation();
@@ -24,9 +25,15 @@ export function Root() {
   }, [location, navigate]);
 
   return (
-    <div className="w-full h-full bg-[#0B1220] font-sans selection:bg-[#2563EB]/30 overflow-hidden">
+    <div className="w-full h-full bg-[#0B1220] font-sans selection:bg-[#2563EB]/30 overflow-hidden"
+         style={{ display: 'flex', flexDirection: 'column' }}>
       <Toaster position="top-center" richColors theme="dark" />
-      <Outlet />
+      {/* Transfer indicator — zero height when idle, 36px when active */}
+      <TransferIndicatorBar />
+      {/* All existing app content below */}
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <Outlet />
+      </div>
     </div>
   );
 }

@@ -145,7 +145,7 @@ export function AndroidBrowser() {
 
         await new Promise<void>((resolve, reject) => {
           const xhr = new XMLHttpRequest();
-          const uploadUrl = `http://127.0.0.1:8080/api/upload_chunk?path=${encodeURIComponent(currentPath)}&filename=${encodeURIComponent(file.name)}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}`;
+          const uploadUrl = `http://127.0.0.1:8080/api/upload_chunk?path=${encodeURIComponent(currentPath)}&filename=${encodeURIComponent(file.name)}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}&totalSize=${file.size}`;
           xhr.open("POST", uploadUrl);
           xhr.setRequestHeader('Authorization', `Bearer ${token}`);
           xhr.setRequestHeader('Content-Type', 'application/octet-stream');

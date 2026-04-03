@@ -823,6 +823,7 @@ export function WebConsole() {
     totalChunks: number,
     fileId: string,
     chunkSize: number,
+    fileSize: number,
     fileProgressMap: Record<string, number>,
     updateGlobalProgress: () => void
   ) => {
@@ -831,6 +832,7 @@ export function WebConsole() {
       filename,
       chunkIndex: String(chunkIndex),
       totalChunks: String(totalChunks),
+      totalSize: String(fileSize),
     });
 
     if (relativePath) {
@@ -999,6 +1001,7 @@ export function WebConsole() {
                       totalChunks,
                       fileId,
                       CHUNK_SIZE,
+                      file.size,
                       fileProgressMap,
                       updateGlobalProgress
                     );
