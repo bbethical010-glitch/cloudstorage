@@ -31,7 +31,7 @@ export function Root() {
       {/* Transfer indicator — zero height when idle, 36px when active */}
       <TransferIndicatorBar />
       {/* All existing app content below */}
-      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
         <Outlet />
       </div>
     </div>
