@@ -269,8 +269,8 @@ function Main() {
   return (
     <AppStateContext.Provider value={contextValue}>
       <div className={isWebConsole
-        ? "w-full h-[100dvh] overflow-hidden bg-[#08090E]"
-        : "w-full max-w-md mx-auto md:max-w-xl lg:max-w-2xl h-[100dvh] overflow-y-auto overflow-x-hidden overscroll-y-contain bg-[#0B1220] shadow-2xl shadow-blue-900/5"
+        ? "w-full h-[100vh] overflow-hidden bg-[#08090E]"
+        : "w-full max-w-md mx-auto md:max-w-xl lg:max-w-2xl h-[100vh] overflow-y-auto overflow-x-hidden overscroll-y-contain bg-[#0B1220] shadow-2xl shadow-blue-900/5"
       }>
         {step === "loading" && (
           <LoadingScreen onComplete={() => {
