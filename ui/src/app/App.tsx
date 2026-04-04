@@ -34,12 +34,13 @@ function Main() {
       
       const s = computedNext.storage;
       if (s) {
-        if (s.totalBytes <= 0 || s.freeBytes < 0 || s.freeBytes > s.totalBytes) {
-          console.error("[API_DEBUG] Invalid storage payload", s);
-          if (prev && prev.storage && prev.storage.totalBytes > 0 && prev.storage.freeBytes >= 0 && prev.storage.freeBytes <= prev.storage.totalBytes) {
+        // Allow totalBytes === 0 for initial state or unselected folders
+        if (s.totalBytes < 0 || s.freeBytes < 0 || s.freeBytes > s.totalBytes) {
+          console.error("[API_DEBUG] Invalid storage payload", JSON.stringify(s));
+          if (prev && prev.storage && prev.storage.totalBytes >= 0 && prev.storage.freeBytes >= 0 && prev.storage.freeBytes <= prev.storage.totalBytes) {
              computedNext.storage = prev.storage;
           } else {
-             computedNext.storage = { totalBytes: 1, freeBytes: 1, usedBytes: 0 };
+             computedNext.storage = { totalBytes: 0, freeBytes: 0, usedBytes: 0 };
           }
         }
       }
