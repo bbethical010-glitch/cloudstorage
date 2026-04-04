@@ -1,4 +1,3 @@
-import { motion } from "motion/react";
 import { Server, ArrowRight } from "lucide-react";
 import { Button } from "../ui/button";
 
@@ -9,8 +8,8 @@ interface WelcomeScreenProps {
 
 export function WelcomeScreen({ onStart, onSkip }: WelcomeScreenProps) {
   return (
-    <div className="min-h-screen bg-[#0B1220] flex flex-col items-center justify-center p-6 text-center">
-      <div className="absolute top-6 right-6">
+    <div className="min-h-screen bg-[#0B1220] flex flex-col items-center justify-center p-6 text-center overflow-hidden">
+      <div className="absolute top-6 right-6 z-50">
         <Button 
           variant="ghost" 
           onClick={onSkip}
@@ -20,18 +19,14 @@ export function WelcomeScreen({ onStart, onSkip }: WelcomeScreenProps) {
         </Button>
       </div>
 
-      <motion.div
-        initial={{ opacity: 0, scale: 0.9, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="mb-12"
-      >
-        <div className="w-24 h-24 bg-gradient-to-br from-[#2563EB] to-[#A855F7] rounded-[2rem] flex items-center justify-center shadow-2xl shadow-blue-500/20 mb-8 mx-auto">
+      <div className="mb-12 relative z-10">
+        <div className="w-24 h-24 bg-[#2563EB] rounded-[2rem] flex items-center justify-center shadow-xl mb-8 mx-auto">
           <Server className="w-12 h-12 text-white" />
         </div>
         
-        <h1 className="text-3xl font-extrabold text-white mb-4 tracking-tight">
+        <h1 className="text-3xl font-extrabold text-[#FFFFFF] mb-4 tracking-tight">
           Welcome to <br />
-          <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#2563EB] to-[#A855F7]">
+          <span className="text-[#3B82F6]">
             Easy Storage Cloud
           </span>
         </h1>
@@ -39,26 +34,20 @@ export function WelcomeScreen({ onStart, onSkip }: WelcomeScreenProps) {
         <p className="text-lg text-[#9CA3AF] max-w-xs mx-auto leading-relaxed">
           Turn your external storage into a personal cloud that you can access anytime, anywhere.
         </p>
-      </motion.div>
+      </div>
 
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
-        className="w-full max-w-xs space-y-4"
-      >
+      <div className="w-full max-w-xs space-y-4 relative z-10">
         <Button 
           onClick={onStart}
-          className="w-full h-14 bg-[#2563EB] hover:bg-[#1d4ed8] text-white rounded-2xl text-lg font-bold group"
+          className="w-full h-14 bg-[#2563EB] hover:bg-[#1d4ed8] text-white rounded-2xl text-lg font-bold flex items-center justify-center gap-2"
         >
           Get Started
-          <ArrowRight className="ml-2 w-5 h-5 group-hover:translate-x-1 transition-transform" />
+          <ArrowRight className="w-5 h-5" />
         </Button>
-      </motion.div>
+      </div>
 
-      {/* Decorative background elements */}
-      <div className="absolute top-1/4 -left-20 w-64 h-64 bg-[#2563EB]/5 blur-[100px] rounded-full pointer-events-none" />
-      <div className="absolute bottom-1/4 -right-20 w-64 h-64 bg-[#A855F7]/5 blur-[100px] rounded-full pointer-events-none" />
+      {/* Simplified background elements without complex blur/opacity that may fail */}
+      <div className="absolute top-0 left-0 w-full h-full bg-[#111827] -z-10" />
     </div>
   );
 }

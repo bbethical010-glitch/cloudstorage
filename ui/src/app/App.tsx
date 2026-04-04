@@ -134,6 +134,18 @@ function Main() {
     }
   }, [setAppState]);
 
+  useEffect(() => {
+    console.log("[API_DEBUG] Current Step:", step);
+    if (appStateRaw) {
+      console.log("[API_DEBUG] AppState Received:", JSON.stringify(appStateRaw.node));
+      if (!appStateRaw.node.folderName) {
+        setStep("welcome");
+      } else if (step === "loading" || step === "welcome") {
+        setStep("app");
+      }
+    }
+  }, [appStateRaw, step, setStep]);
+
   // Auth Guard
   useEffect(() => {
     if (!window.Android || !appStateRaw?.node?.isRunning) return;
