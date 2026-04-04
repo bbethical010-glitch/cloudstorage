@@ -8,48 +8,38 @@ Easy Storage Cloud runs a lightweight Ktor server on your Android device, allowi
 ## 🏗️ Architecture
 The project consists of two main components:
 1.  **Android App (`/app`)**: 
-    - **Server**: Embedded Ktor server running in a Foreground Service.
-    - **Storage**: Uses Android Storage Access Framework (SAF) for secure file access.
-    - **Client**: Connects to the Relay Server via a persistent WebSocket tunnel for remote access.
-2.  **Relay Server (`/relay`)**: 
-    - A public-facing proxy (hosted on Render) that tunnels HTTP traffic to the phone node via WebSockets.
-    - Handles deep-link redirection for easy joining via Share Codes.
+    - **Native Interface**: A high-fidelity Jetpack Compose dashboard with real-time transfer tracking.
+    - **Embedded WebView**: Uses **androidx.webkit.WebViewAssetLoader** to securely serve the React-based console from `https://appassets.androidplatform.net`. This prevents CORS issues and enables modern ES Modules support.
+    - **Ktor Server**: Local high-performance web server that handles P2P file transfers and storage management.
+2.  **Web Console (`/ui`)**: 
+    - A Next-generation React + Tailwind v4 interface that runs both natively on the phone and remotely via the relay.
 
 ## ✨ Key Features
-- **Remote Console**: Access your phone's drive via `https://easy-storage-relay.onrender.com/node/YOUR_CODE`.
-- **Hybrid Access**: 
-  - **Public Relay**: Access from anywhere over the internet.
-  - **Direct LAN**: High-speed, unlimited access when on the same Wi-Fi.
-- **Streaming Uploads**: Efficient file handling that prevents memory errors even for large files.
-- **Share Links**: Direct URL generation for files to share with others.
-- **Deep Linking**: Join nodes instantly using `easystoragecloud://join?code=...` or HTTPS links.
+- **P2P Direct Streaming**: High-speed chunked uploading and downloading that bypasses the cloud entirely when possible.
+- **Modern Security**: All internal communication is signed and restricted via the storage access context.
+- **Relay Tunneling**: Access your node from anywhere with zero configuration.
 
 ## 🛠️ Setup & Development
 
-### Local Configuration
-Values are managed in `local.properties`:
-```properties
-RELAY_BASE_URL=https://easy-storage-relay.onrender.com
-APP_LINK_HOST=easy-storage-relay.onrender.com
-```
+### Modern WebView Architecture
+The app now uses a secure virtual domain for internal assets. 
+- **Internal Domain**: `https://appassets.androidplatform.net`
+- **Asset Path**: `assets/web/` maps directly to `src/main/assets/web/`
 
-### Running the App
-1. Connect your Android device.
-2. Build and install:
+### Build & Deploy
+1. **Build the UI**:
    ```bash
-   ./gradlew assembleDebug
-   adb install -r app/build/outputs/apk/debug/app-debug.apk
+   cd ui && npm run build
+   # Assets are automatically synced to app/src/main/assets/web/
+   ```
+2. **Launch on Device**:
+   ```bash
+   ./gradlew installDebug
    ```
 
-### Debugging Commands
-Start the server node manually via ADB:
-```bash
-adb shell am start -n com.pratham.cloudstorage/.DebugStartActivity -a com.pratham.cloudstorage.debug.START_NODE
-```
-
 ## ⚠️ Important Technical Notes
-- **Relay Upload Limit**: Due to memory constraints on the free-tier relay server, uploads over the relay are capped at **50MB**. For larger files, use the **Direct Private LAN** link provided on the dashboard.
-- **WebSocket Tunneling**: Requests are encapsulated into `RelayEnvelope` JSON objects and sent over a WebSocket. Large frames (up to 100MB) are supported between the relay and the app.
+- **WebView Performance**: The app requires a modern system WebView (Chromium 100+ recommended).
+- **Relay Upload Limit**: Remote uploads over the proxy relay are currently capped at **50MB** due to cloud provider memory limits. Direct LAN transfers have no limit.
 
 ## 📄 License
 Designed and developed for high-speed mobile cloud sharing.

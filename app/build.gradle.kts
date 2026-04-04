@@ -77,6 +77,8 @@ dependencies {
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
+    implementation("androidx.webkit:webkit:1.11.0")
+
     // Ktor for embedded web server
     val ktor_version = "2.3.7"
     implementation("io.ktor:ktor-server-core-jvm:$ktor_version")

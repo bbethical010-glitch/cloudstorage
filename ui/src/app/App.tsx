@@ -99,14 +99,24 @@ function Main() {
     }
 
     const loadInitialState = async () => {
-      const stateStr = await androidBridge.getInitialState();
-      if (stateStr) {
-         const parsed = JSON.parse(stateStr);
-         setAppState({
-            node: parsed.node || { isRunning: false, tunnelConnected: false, folderName: null, shareCode: '', relayBaseUrl: '' },
-            storage: parsed.storage || { totalBytes: 1, freeBytes: 1, usedBytes: 0 },
-            files: { currentPath: '', items: [] }
-         });
+      try {
+        const stateStr = await androidBridge.getInitialState();
+        if (stateStr) {
+           const parsed = JSON.parse(stateStr);
+           setAppState({
+              node: parsed.node || { isRunning: false, tunnelConnected: false, folderName: null, shareCode: '', relayBaseUrl: '' },
+              storage: parsed.storage || { totalBytes: 1, freeBytes: 1, usedBytes: 0 },
+              files: { currentPath: '', items: [] }
+           });
+        }
+      } catch (e) {
+        console.error("[API_DEBUG] Failed to load or parse initial state", e);
+        // Ensure app still loads even if bridge fails
+        setAppState({
+          node: { isRunning: false, tunnelConnected: false, folderName: null, shareCode: '', relayBaseUrl: '' },
+          storage: { totalBytes: 1, freeBytes: 1, usedBytes: 0 },
+          files: { currentPath: '', items: [] }
+        });
       }
     };
     loadInitialState();

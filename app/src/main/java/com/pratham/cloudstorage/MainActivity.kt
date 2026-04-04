@@ -14,6 +14,9 @@ import android.webkit.WebChromeClient
 import android.webkit.ValueCallback
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import androidx.webkit.WebViewAssetLoader
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -110,6 +113,8 @@ class MainActivity : ComponentActivity() {
     private var relayBaseUrl by mutableStateOf("")
     private var isNodeRunning by mutableStateOf(false)
     private var tunnelStatus by mutableStateOf(TunnelStatus.Offline.name)
+    
+    private lateinit var assetLoader: WebViewAssetLoader
 
     private var healthCpu = "0%"
     private var healthMem = "0 MB"
@@ -217,8 +222,12 @@ class MainActivity : ComponentActivity() {
         }
 
 
+        assetLoader = WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
+
         setupWebView()
-        webView.loadUrl("file:///android_asset/web/index.html")
+        webView.loadUrl("https://appassets.androidplatform.net/assets/web/index.html")
 
         setContent {
             CloudStorageTheme {
@@ -337,6 +346,13 @@ class MainActivity : ComponentActivity() {
                     runOnUiThread {
                         Toast.makeText(this@MainActivity, "Load Error: $description", Toast.LENGTH_LONG).show()
                     }
+                }
+
+                override fun shouldInterceptRequest(
+                    view: WebView?,
+                    request: WebResourceRequest?
+                ): WebResourceResponse? {
+                    return request?.let { assetLoader.shouldInterceptRequest(it.url) }
                 }
             }
             addJavascriptInterface(WebAppInterface(), "Android")
@@ -647,7 +663,11 @@ class MainActivity : ComponentActivity() {
         android.util.Log.e("API_DEBUG", "Live Web Context Update: $state")
         webView.post {
             android.util.Log.e("API_DEBUG", "Evaluating JS inside webView.post")
-            webView.evaluateJavascript("window.updateWebState?.('${state.toString()}');", null)
+            // Safely escape single quotes and backslashes for the JS string literal
+            val escapedJson = state.toString()
+                .replace("\\", "\\\\")
+                .replace("'", "\\'")
+            webView.evaluateJavascript("if(window.updateWebState) window.updateWebState('$escapedJson');", null)
         }
     }
 
