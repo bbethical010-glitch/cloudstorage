@@ -12,10 +12,11 @@ import android.os.Build
 import android.widget.Toast
 import android.webkit.WebChromeClient
 import android.webkit.ValueCallback
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.webkit.WebViewAssetLoader
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -223,11 +224,12 @@ class MainActivity : ComponentActivity() {
 
 
         assetLoader = WebViewAssetLoader.Builder()
-            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .setDomain("app.local.cloud")
+            .addPathHandler("/", WebViewAssetLoader.AssetsPathHandler(this))
             .build()
 
         setupWebView()
-        webView.loadUrl("https://appassets.androidplatform.net/assets/web/index.html")
+        webView.loadUrl("https://app.local.cloud/web/index.html")
 
         setContent {
             CloudStorageTheme {
@@ -282,6 +284,13 @@ class MainActivity : ComponentActivity() {
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            settings.allowFileAccess = true
+            settings.allowContentAccess = true
+            settings.databaseEnabled = true
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            
+            settings.cacheMode = WebSettings.LOAD_DEFAULT
+            settings.userAgentString = settings.userAgentString + " EasyStorageAndroid/1.0"
             settings.allowFileAccess = true
             settings.allowContentAccess = true
             settings.allowFileAccessFromFileURLs = true

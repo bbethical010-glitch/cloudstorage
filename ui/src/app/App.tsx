@@ -100,22 +100,47 @@ function Main() {
     }
 
     const loadInitialState = async () => {
+      let resolved = false;
+      
+      // Safety timeout in case bridge hangs
+      const timeout = setTimeout(() => {
+        if (!resolved) {
+          console.warn("[API_DEBUG] Bridge load timed out. Falling back to defaults.");
+          setAppState({
+            node: { isRunning: false, tunnelConnected: false, folderName: null, shareCode: '', relayBaseUrl: '' },
+            storage: { totalBytes: 0, freeBytes: 0, usedBytes: 0 },
+            files: { currentPath: '', items: [] }
+          });
+        }
+      }, 2000);
+
       try {
         const stateStr = await androidBridge.getInitialState();
+        resolved = true;
+        clearTimeout(timeout);
+        
         if (stateStr) {
            const parsed = JSON.parse(stateStr);
            setAppState({
               node: parsed.node || { isRunning: false, tunnelConnected: false, folderName: null, shareCode: '', relayBaseUrl: '' },
-              storage: parsed.storage || { totalBytes: 1, freeBytes: 1, usedBytes: 0 },
+              storage: parsed.storage || { totalBytes: 0, freeBytes: 0, usedBytes: 0 },
+              files: { currentPath: '', items: [] }
+           });
+        } else {
+           // Bridge returned empty, still need to set an app state to unblock UI
+           setAppState({
+              node: { isRunning: false, tunnelConnected: false, folderName: null, shareCode: '', relayBaseUrl: '' },
+              storage: { totalBytes: 0, freeBytes: 0, usedBytes: 0 },
               files: { currentPath: '', items: [] }
            });
         }
       } catch (e) {
+        resolved = true;
+        clearTimeout(timeout);
         console.error("[API_DEBUG] Failed to load or parse initial state", e);
-        // Ensure app still loads even if bridge fails
         setAppState({
           node: { isRunning: false, tunnelConnected: false, folderName: null, shareCode: '', relayBaseUrl: '' },
-          storage: { totalBytes: 1, freeBytes: 1, usedBytes: 0 },
+          storage: { totalBytes: 0, freeBytes: 0, usedBytes: 0 },
           files: { currentPath: '', items: [] }
         });
       }
@@ -135,16 +160,15 @@ function Main() {
   }, [setAppState]);
 
   useEffect(() => {
-    console.log("[API_DEBUG] Current Step:", step);
+    console.log("[API_DEBUG] Current Step Transitions:", step);
     if (appStateRaw) {
-      console.log("[API_DEBUG] AppState Received:", JSON.stringify(appStateRaw.node));
       if (!appStateRaw.node.folderName) {
-        setStep("welcome");
+        if (step !== "welcome" && step !== "tutorial" && step !== "auth") setStep("welcome");
       } else if (step === "loading" || step === "welcome") {
         setStep("app");
       }
     }
-  }, [appStateRaw, step, setStep]);
+  }, [appStateRaw, step]);
 
   // Auth Guard
   useEffect(() => {
@@ -159,16 +183,16 @@ function Main() {
            const { hasAccount } = await authStat.json();
            
            if (token) {
-               const verify = await fetch(`http://127.0.0.1:8080/api/storage`, { headers: { Authorization: `Bearer ${token}` }});
-               if (verify.ok) {
-                   setIsAuthenticated(true);
-                   setAuthMode('none');
-                   if (step === 'loading' || step === 'auth') {
-                      const hasTut = localStorage.getItem("hasSeenTutorial");
-                      setStep(hasTut ? "app" : "welcome");
-                   }
-                   return;
-               }
+                const verify = await fetch(`http://127.0.0.1:8080/api/storage`, { headers: { Authorization: `Bearer ${token}` }});
+                if (verify.ok) {
+                    setIsAuthenticated(true);
+                    setAuthMode('none');
+                    if (step === 'loading' || step === 'auth') {
+                       const hasTut = localStorage.getItem("hasSeenTutorial");
+                       setStep(hasTut ? "app" : "welcome");
+                    }
+                    return;
+                }
            }
            
            setIsAuthenticated(false);
@@ -233,81 +257,6 @@ function Main() {
     }
   };
 
-  if (step === "loading") {
-    return <LoadingScreen onComplete={() => {
-      if (!window.Android) {
-        setStep("app");
-      } else {
-        if (authMode !== 'none') return;
-        const hasSeenTutorial = localStorage.getItem("hasSeenTutorial");
-        setStep(hasSeenTutorial ? "app" : "welcome");
-      }
-    }} />;
-  }
-
-  if (step === "auth") {
-    return (
-      <div className="h-[100dvh] w-full bg-[#0B1220] flex flex-col items-center justify-center p-6 text-[#E5E7EB] relative overflow-hidden">
-        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-[#2563EB]/20 blur-[120px] rounded-full pointer-events-none" />
-        <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-[#A855F7]/20 blur-[120px] rounded-full pointer-events-none" />
-        
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="z-10 w-full max-w-sm">
-          <Card className="bg-[#111827]/80 backdrop-blur-xl border-[#1F2937] p-8 shadow-2xl rounded-3xl mx-auto">
-            <div className="flex justify-center mb-6">
-              <div className="w-16 h-16 bg-gradient-to-br from-[#2563EB] to-[#A855F7] rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/20">
-                <Cloud className="w-8 h-8 text-white" />
-              </div>
-            </div>
-            <h2 className="text-2xl font-bold text-center text-white mb-2">
-              {authMode === 'signup' ? 'Secure Local Node' : 'Node Locked'}
-            </h2>
-            <p className="text-center text-[#9CA3AF] mb-8 text-xs">
-              {authMode === 'signup' ? 'Create an admin identity across the mesh.' : 'Authenticate to manage your local node.'}
-            </p>
-
-            <form onSubmit={performAuth} className="space-y-4">
-              <div className="space-y-1">
-                <Input type="email" required placeholder="admin@local.host" value={authEmail} onChange={e => setAuthEmail(e.target.value)}
-                  className="bg-[#0B1220] border-[#374151] text-white h-12 rounded-xl" />
-              </div>
-              <div className="space-y-1">
-                <Input type="password" required placeholder="••••••••" value={authPassword} onChange={e => setAuthPassword(e.target.value)}
-                  className="bg-[#0B1220] border-[#374151] text-white h-12 rounded-xl" />
-              </div>
-              {authError && <div className="text-red-400 text-xs font-medium text-center bg-red-500/10 py-2 rounded-lg">{authError}</div>}
-              <Button type="submit" className="w-full h-12 bg-[#2563EB] hover:bg-[#1d4ed8] text-white font-bold rounded-xl mt-4">
-                {authMode === 'signup' ? 'Lock Core API' : 'Unlock Node Engine'}
-              </Button>
-            </form>
-          </Card>
-        </motion.div>
-      </div>
-    );
-  }
-
-  if (step === "welcome") {
-    return (
-      <WelcomeScreen 
-        onStart={() => setStep("tutorial")} 
-        onSkip={() => {
-          localStorage.setItem("hasSeenTutorial", "true");
-          setStep("app");
-        }} 
-      />
-    );
-  }
-
-  if (step === "tutorial") {
-    return (
-      <AndroidOnboarding 
-        onComplete={() => {
-          localStorage.setItem("hasSeenTutorial", "true");
-          setStep("app");
-        }} 
-      />
-    );
-  }
-
   const contextValue: GlobalContextType = {
     state: appStateRaw,
     refreshStorage,
@@ -323,7 +272,68 @@ function Main() {
         ? "w-full h-[100dvh] overflow-hidden bg-[#08090E]"
         : "w-full max-w-md mx-auto md:max-w-xl lg:max-w-2xl h-[100dvh] overflow-y-auto overflow-x-hidden overscroll-y-contain bg-[#0B1220] shadow-2xl shadow-blue-900/5"
       }>
-        <RouterProvider router={router} />
+        {step === "loading" && (
+          <LoadingScreen onComplete={() => {
+            if (!window.Android) {
+              setStep("app");
+            } else {
+              if (authMode !== 'none') return;
+              const hasSeenTutorial = localStorage.getItem("hasSeenTutorial");
+              setStep(hasSeenTutorial ? "app" : "welcome");
+            }
+          }} />
+        )}
+
+        {step === "auth" && (
+          <div className="h-full w-full bg-[#0B1220] flex flex-col items-center justify-center p-6 text-[#E5E7EB] relative overflow-hidden">
+            <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-[#2563EB]/20 blur-[120px] rounded-full pointer-events-none" />
+            <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-[#A855F7]/20 blur-[120px] rounded-full pointer-events-none" />
+            
+            <div className="z-10 w-full max-w-sm">
+              <Card className="bg-[#111827]/80 backdrop-blur-xl border-[#1F2937] p-8 shadow-2xl rounded-3xl mx-auto">
+                <div className="flex justify-center mb-6">
+                  <div className="w-16 h-16 bg-[#2563EB] rounded-2xl flex items-center justify-center">
+                    <Cloud className="w-8 h-8 text-white" />
+                  </div>
+                </div>
+                <h2 className="text-2xl font-bold text-center text-white mb-2">
+                  {authMode === 'signup' ? 'Secure Local Node' : 'Node Locked'}
+                </h2>
+                <form onSubmit={performAuth} className="space-y-4">
+                  <Input type="email" required placeholder="admin@local.host" value={authEmail} onChange={e => setAuthEmail(e.target.value)}
+                    className="bg-[#0B1220] border-[#374151] text-white h-12 rounded-xl" />
+                  <Input type="password" required placeholder="••••••••" value={authPassword} onChange={e => setAuthPassword(e.target.value)}
+                    className="bg-[#0B1220] border-[#374151] text-white h-12 rounded-xl" />
+                  {authError && <div className="text-red-400 text-xs font-medium text-center">{authError}</div>}
+                  <Button type="submit" className="w-full h-12 bg-[#2563EB] hover:bg-[#1d4ed8] text-white">
+                    {authMode === 'signup' ? 'Lock Core API' : 'Unlock Node Engine'}
+                  </Button>
+                </form>
+              </Card>
+            </div>
+          </div>
+        )}
+
+        {step === "welcome" && (
+          <WelcomeScreen 
+            onStart={() => setStep("tutorial")} 
+            onSkip={() => {
+              localStorage.setItem("hasSeenTutorial", "true");
+              setStep("app");
+            }} 
+          />
+        )}
+
+        {step === "tutorial" && (
+          <AndroidOnboarding 
+            onComplete={() => {
+              localStorage.setItem("hasSeenTutorial", "true");
+              setStep("app");
+            }} 
+          />
+        )}
+
+        {step === "app" && <RouterProvider router={router} />}
       </div>
     </AppStateContext.Provider>
   );
