@@ -258,7 +258,7 @@ class WebRTCPeer(
                         uploadBytesReceived[reqId] = 0L
                         val fileName = msg["fileName"] as? String ?: "Uploading file..."
                         val fileSize = (msg["fileSize"] as? Double)?.toLong() ?: 0L
-                        TransferManager.startTransfer(fileName, fileSize, isDownload = false)
+                        TransferManager.startTransfer(reqId, fileName, fileSize, isDownload = false)
                         Log.d(TAG, "[DC_DEBUG] Upload started: $reqId ($fileName)")
                     }
                     "upload-end" -> {
@@ -288,7 +288,7 @@ class WebRTCPeer(
                 
                 val current = (uploadBytesReceived[reqId] ?: 0L) + chunkSize
                 uploadBytesReceived[reqId] = current
-                TransferManager.updateProgress(current)
+                TransferManager.updateProgress(reqId, current)
             }
 
             override fun onBufferedAmountChange(amount: Long) {}
@@ -379,7 +379,7 @@ class WebRTCPeer(
                         fileName = path.substringAfterLast("/")
                     }
                     
-                    TransferManager.startTransfer(fileName, contentLength, isDownload = true)
+                    TransferManager.startTransfer(reqId, fileName, contentLength, isDownload = true)
                     var totalSent = 0L
 
                     while (!channel.isClosedForRead) {
@@ -394,7 +394,7 @@ class WebRTCPeer(
                             sendBinary(dc, packet)
                             
                             totalSent += bytesRead
-                            TransferManager.updateProgress(totalSent)
+                            TransferManager.updateProgress(reqId, totalSent)
                         }
                     }
 

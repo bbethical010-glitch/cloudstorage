@@ -234,11 +234,15 @@ export function WebConsole() {
   const getRelayUrl = () => window.location.origin;
 
   const shareCode = getShareCode();
-  const { isOnline: isNodeOnline, checkStatus: refreshNodeStatus, lastCheck } = useNodeStatus(shareCode);
+  const { isOnline: isSignalingOnline, checkStatus: refreshNodeStatus, lastCheck } = useNodeStatus(shareCode);
+  
+  const isLocalSession = useMemo(() => {
+    const host = window.location.hostname;
+    return host === 'localhost' || host === '127.0.0.1' || /^10\./.test(host) || /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host) || /^192\.168\./.test(host);
+  }, []);
   
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup' | 'none'>('none');
-  const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
   const [theme, setTheme] = useState<"dark" | "light">(() => {
@@ -260,6 +264,18 @@ export function WebConsole() {
     }
     return `${url.pathname}${url.search}${url.hash}`;
   }, [shareCode]);
+
+  const getAuthenticatedUrl = useCallback((path: string): string => {
+    const url = buildApiUrl(path);
+    const authList = getHeaders() as Record<string, string>;
+    const auth = authList['Authorization'];
+    const token = auth?.startsWith('Bearer ') ? auth.substring(7) : auth;
+    if (!token) return url;
+    
+    // Check if URL already has query params
+    const separator = url.includes('?') ? '&' : '?';
+    return `${url}${separator}pwd=${encodeURIComponent(token)}`;
+  }, [buildApiUrl, getHeaders]);
 
   const getFileKindLabel = useCallback((file: FileNode) => {
     if (file.isDirectory) return "Folder";
@@ -435,36 +451,41 @@ export function WebConsole() {
 
   const { connectionState: p2pState, transport: p2pTransport, isReady: p2pReady, isDataChannelReady, reconnect: p2pReconnect } = webrtc;
 
-  // Unified "Online" Detection: Node is online if signaling OR P2P is healthy
+  // Unified "Online" Detection: Node is online if signaling OR P2P is healthy OR we are on a direct local connection
   useEffect(() => {
-    const isOnline = isNodeOnline || (p2pState === 'connected' && isDataChannelReady);
+    const isOnline = isLocalSession || isSignalingOnline || (p2pState === 'connected' && isDataChannelReady);
     setIsNodeOffline(!isOnline);
-  }, [isNodeOnline, p2pState, isDataChannelReady]);
+  }, [isLocalSession, isSignalingOnline, p2pState, isDataChannelReady]);
 
-  const canUseNodeApi = (p2pState === 'connected' && isDataChannelReady) || p2pState === 'fallback';
+  const canUseNodeApi = isLocalSession || (p2pState === 'connected' && isDataChannelReady) || p2pState === 'fallback';
 
   /**
    * Unified API fetch — uses P2P DataChannel when connected, falls back to relay.
    * This is the primary replacement for all fetch(getBaseUrl() + endpoint) calls.
    */
   const apiFetch = useCallback(async (endpoint: string, options: RequestInit = {}): Promise<Response | P2PResponse> => {
+    const authHeaders = getHeaders();
+    const mergedHeaders = {
+      ...(authHeaders as Record<string, string>),
+      ...(options.headers as Record<string, string> || {}),
+      ...(shareCode ? { 'X-Node-Id': shareCode } : {}),
+    };
+
     if (p2pReady && isDataChannelReady && p2pTransport?.ready) {
       // Route through the P2P DataChannel — zero relay bandwidth
       return p2pTransport.fetch(endpoint, {
         method: options.method || 'GET',
-        headers: options.headers as Record<string, string> || {},
+        headers: mergedHeaders,
         body: options.body as string | null,
       });
     }
+
     // Fallback: route through the relay server
     return fetch(buildApiUrl(endpoint), {
       ...options,
-      headers: {
-        ...(options.headers || {}),
-        ...(shareCode ? { 'X-Node-Id': shareCode } : {}),
-      },
+      headers: mergedHeaders,
     });
-  }, [buildApiUrl, isDataChannelReady, p2pReady, p2pTransport, shareCode]);
+  }, [buildApiUrl, getHeaders, isDataChannelReady, p2pReady, p2pTransport, shareCode]);
 
   const PreviewContent = () => (
     <AnimatePresence mode="wait">
@@ -1090,19 +1111,37 @@ export function WebConsole() {
     }
   };
 
-  const handleDownload = (file: FileNode) => {
-      const url = file.isDirectory
-        ? buildApiUrl(`/api/download_folder?path=${encodeURIComponent(file.path)}&folder=${encodeURIComponent(file.name)}`)
-        : buildApiUrl(`/api/download?path=${encodeURIComponent(file.path)}&file=${encodeURIComponent(file.name)}`);
+  const handleDownload = async (file: FileNode) => {
+    const endpoint = file.isDirectory
+      ? `/api/download_folder?path=${encodeURIComponent(file.path)}&folder=${encodeURIComponent(file.name)}`
+      : `/api/download?path=${encodeURIComponent(file.path)}&file=${encodeURIComponent(file.name)}`;
+
+    const url = buildApiUrl(endpoint);
     
-    // Create an invisible link to trigger the download natively
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = file.name + (file.isDirectory ? ".zip" : "");
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    toast.info("Download started");
+    try {
+      // Pre-flight check to prevent downloading 28-byte JSON error strings
+      const res = await apiFetch(endpoint, { method: 'HEAD' });
+      
+      if (!res.ok) {
+        // If HEAD fails, try full fetch to get the error message
+        const fullRes = await apiFetch(endpoint);
+        const errorData = await fullRes.json().catch(() => ({ error: "Download failed" }));
+        const statusText = 'statusText' in fullRes ? (fullRes as Response).statusText : 'Unknown Error';
+        toast.error(`Download blocked: ${errorData.error || statusText}`);
+        return;
+      }
+
+      // If check passes, trigger the native browser download
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.name + (file.isDirectory ? ".zip" : "");
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast.info("Download started");
+    } catch (err) {
+      toast.error("Network error during download pre-flight");
+    }
   };
 
   const handleDelete = async (file: FileNode) => {
@@ -1221,7 +1260,7 @@ export function WebConsole() {
       const res = await apiFetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' } as any,
-        body: JSON.stringify({ email: authEmail, password: authPassword })
+        body: JSON.stringify({ password: authPassword })
       });
       
       const data = await res.json();
@@ -1275,15 +1314,7 @@ export function WebConsole() {
             </p>
 
             <form onSubmit={handleAuth} className="space-y-4">
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-[#9CA3AF] uppercase px-1">Email</label>
-                <Input 
-                  type="email" required
-                  placeholder="admin@local.host"
-                  value={authEmail} onChange={e => setAuthEmail(e.target.value)}
-                  className="bg-[#0B1220] border-[#374151] text-white focus:ring-[#2563EB] h-12 rounded-xl"
-                />
-              </div>
+
               <div className="space-y-1">
                 <label className="text-xs font-bold text-[#9CA3AF] uppercase px-1">Passkey</label>
                 <Input 
@@ -1386,7 +1417,7 @@ export function WebConsole() {
               </div>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="bg-[#111827] border-[#1F2937] text-[#E5E7EB] w-48">
-              <div className="px-3 py-2 text-xs text-[#9CA3AF] font-mono border-b border-[#1F2937] mb-1">{authEmail || "Admin Session"}</div>
+              <div className="px-3 py-2 text-xs text-[#9CA3AF] font-mono border-b border-[#1F2937] mb-1">{"Admin Session"}</div>
               <DropdownMenuItem className="gap-2 text-[#EF4444]" onClick={handleLogout}>
                 <Trash2 className="w-4 h-4" /> Disconnect
               </DropdownMenuItem>
@@ -1878,7 +1909,7 @@ export function WebConsole() {
               <div className="flex-1 overflow-auto bg-[#050505] relative flex items-center justify-center p-4">
                 {(() => {
                   const category = getFileBadgeCategory(activePreviewFile);
-                  const url = buildApiUrl(`/api/node/${shareCode}/file?path=${encodeURIComponent(activePreviewFile.path)}`);
+                  const url = getAuthenticatedUrl(`/api/node/${shareCode}/file?path=${encodeURIComponent(activePreviewFile.path)}`);
                   
                   if (category === 'image') {
                     return (

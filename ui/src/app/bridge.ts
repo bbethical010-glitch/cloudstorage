@@ -55,6 +55,7 @@ declare global {
       showNotification(title: string, message: string): void;
       scanQRCode?(): void;
       shareLink?(text: string): void;
+      resetNodePassword?(): void;
     };
     updateWebState?: (stateJson: string) => void;
   }
@@ -110,6 +111,12 @@ export const androidBridge = {
     } else {
       // Fallback for non-Android: copy to clipboard
       navigator.clipboard?.writeText(text);
+    }
+  },
+
+  resetNodePassword: () => {
+    if (window.Android?.resetNodePassword) {
+      window.Android.resetNodePassword();
     }
   }
 };

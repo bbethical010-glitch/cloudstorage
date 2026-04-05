@@ -118,6 +118,10 @@ export function AndroidSettings() {
     {
       title: "Security",
       items: [
+        { icon: Shield, label: "Reset Node Password", onClick: () => {
+             androidBridge.resetNodePassword();
+             toast.success("Password reset! Set a new one on your next connection.");
+        }},
         { icon: Shield, label: "Security Settings", value: "Standard", onClick: () => toast.info("Advanced Security modules are under construction") },
         { icon: Shield, label: "Node Visibility", value: "Encrypted", onClick: () => toast.info("Custom Node Visibility is under construction") },
         { icon: Share2, label: "Invite Friends", onClick: () => {

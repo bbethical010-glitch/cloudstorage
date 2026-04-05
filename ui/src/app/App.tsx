@@ -160,13 +160,14 @@ function Main() {
   }, [setAppState]);
 
   useEffect(() => {
-    console.log("[API_DEBUG] Current Step Transitions:", step);
-    if (appStateRaw) {
-      if (!appStateRaw.node.folderName) {
-        if (step !== "welcome" && step !== "tutorial" && step !== "auth") setStep("welcome");
-      } else if (step === "loading" || step === "welcome") {
-        setStep("app");
-      }
+    // Only log transitions for API_DEBUG, but don't force transitions if we are already in the app
+    console.log("[API_DEBUG] Current Step Transitions: ", step);
+    
+    // We only enforce "welcome" if the state is evaluated and we were somehow disconnected completely,
+    // but we NEVER force out of 'app' or 'loading' automatically if the node is locally mounted.
+    if (appStateRaw && step === "auth" && appStateRaw.node.folderName) {
+      // If auth passes and folder is there, ensure we go to app eventually.
+      // Handled by Auth Guard below.
     }
   }, [appStateRaw, step]);
 
@@ -187,7 +188,7 @@ function Main() {
                 if (verify.ok) {
                     setIsAuthenticated(true);
                     setAuthMode('none');
-                    if (step === 'loading' || step === 'auth') {
+                    if (step === 'auth') {
                        const hasTut = localStorage.getItem("hasSeenTutorial");
                        setStep(hasTut ? "app" : "welcome");
                     }

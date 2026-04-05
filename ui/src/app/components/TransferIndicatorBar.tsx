@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router'
 
+declare global {
+    interface Window {
+        Android?: any;
+    }
+}
+
 interface TransferStatus {
     transferId: string
     fileName: string
@@ -33,15 +39,26 @@ export function TransferIndicatorBar() {
 
     // Determine the correct API base URL
     const getApiBase = useCallback((): string => {
-        // On Android WebView, the SPA is loaded from file:// or localhost
-        if (window.Android) {
-            return 'http://127.0.0.1:8080'
-        }
-        // On web console, use relative URL (goes through relay)
+        if (window.Android) return 'http://127.0.0.1:8080'
         return ''
     }, [])
 
-    // Poll /api/transfer_status every 500ms
+    const getHeaders = useCallback(() => {
+        const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token') || '';
+        const params = new URLSearchParams(window.location.hash.split('?')[1]);
+        const pwd = params.get('pwd') || token;
+        
+        // Extract node ID if present in the URL (for relay mode)
+        const shareCode = window.location.pathname.split('/')[2] || "";
+
+        return {
+            'Authorization': `Bearer ${pwd}`,
+            ...(shareCode ? { 'X-Node-Id': shareCode } : {}),
+            'Accept': 'application/json'
+        };
+    }, [])
+
+    // Poll /api/transfer_status every 1000ms (throttled from 500ms)
     useEffect(() => {
         let cancelled = false
         const apiBase = getApiBase()
@@ -49,28 +66,28 @@ export function TransferIndicatorBar() {
         async function poll() {
             try {
                 const res = await fetch(`${apiBase}/api/transfer_status`, {
-                    headers: { 'Accept': 'application/json' }
+                    headers: getHeaders()
                 })
                 if (!res.ok) return
-                const ct = res.headers.get('content-type') || ''
-                if (!ct.includes('json')) return
                 const data: TransferStatus[] = await res.json()
                 if (!cancelled) {
-                    setTransfers(data.filter(t => t.isActive))
+                    // Only show transfers that are active, or finished/failed within the last 3-5 seconds
+                    // The backend TransferRegistry already performs cleanup, but we filter here for safety.
+                    setTransfers(data)
                 }
             } catch {
                 // Silently ignore polling errors
             }
         }
 
-        const interval = setInterval(poll, 500)
+        const interval = setInterval(poll, 1000)
         poll() // Immediate first poll
 
         return () => {
             cancelled = true
             clearInterval(interval)
         }
-    }, [getApiBase])
+    }, [getApiBase, getHeaders])
 
     // Detect transition from active → empty for completion flash
     useEffect(() => {
@@ -173,7 +190,7 @@ export function TransferIndicatorBar() {
                     <span style={{
                         fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
                         fontSize: '11px',
-                        color: progressColor,
+                        color: primaryTransfer.isFailed ? '#EF4444' : progressColor,
                         fontWeight: 500,
                         whiteSpace: 'nowrap',
                         flexShrink: 0,
@@ -181,7 +198,9 @@ export function TransferIndicatorBar() {
                         minWidth: '36px',
                         textAlign: 'right',
                     }}>
-                        {showCompletionFlash ? '100%' : `${primaryTransfer.progressPercent}%`}
+                        {primaryTransfer.isFailed ? 'FAILED' 
+                            : (primaryTransfer.isComplete || showCompletionFlash) ? '100%' 
+                            : `${primaryTransfer.progressPercent}%`}
                     </span>
 
                     {/* +N for multiple transfers */}

@@ -24,8 +24,8 @@ android {
         applicationId = "com.pratham.cloudstorage"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 5
+        versionName = "1.4"
         manifestPlaceholders["appLinkHost"] = readConfig("APP_LINK_HOST").ifBlank { "invite.easystoragecloud.app" }
         buildConfigField("String", "APP_LINK_HOST", "\"${readConfig("APP_LINK_HOST")}\"")
         buildConfigField("String", "RELAY_BASE_URL", "\"${readConfig("RELAY_BASE_URL")}\"")

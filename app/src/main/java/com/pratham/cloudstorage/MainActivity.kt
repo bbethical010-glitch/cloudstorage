@@ -196,6 +196,14 @@ class MainActivity : ComponentActivity() {
             callback.onReceiveValue(uris.distinct().takeIf { it.isNotEmpty() }?.toTypedArray())
         }
 
+    private fun formatSpeed(bps: Long): String {
+        return when {
+            bps >= 1_048_576 -> "%.1f MB/s".format(bps / 1_048_576.0)
+            bps >= 1024 -> "${bps / 1024} KB/s"
+            else -> "$bps B/s"
+        }
+    }
+
     private fun formatBytes(bytes: Long): String {
         val units = listOf("B", "KB", "MB", "GB")
         var value = bytes.toDouble()
@@ -282,6 +290,10 @@ class MainActivity : ComponentActivity() {
     private fun setupWebView() {
         WebView.setWebContentsDebuggingEnabled(true)
         webView = WebView(this).apply {
+            layoutParams = android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT
+            )
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.allowFileAccess = true
@@ -436,7 +448,12 @@ class MainActivity : ComponentActivity() {
                         ) {}
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = if (state.isComplete) "Transfer Success" else if (state.isDownload) "Incoming Download" else "Outgoing Upload",
+                            text = when {
+                                state.isComplete -> "All Transfers Success"
+                                state.activeFiles > 1 -> "Transferring ${state.activeFiles} Files..."
+                                state.isDownload -> "Incoming Download"
+                                else -> "Outgoing Upload"
+                            },
                             style = MaterialTheme.typography.titleSmall,
                             color = if (state.isComplete) SuccessGreen else TextPrimary,
                             fontWeight = FontWeight.Bold
@@ -466,14 +483,31 @@ class MainActivity : ComponentActivity() {
 
                 Spacer(modifier = Modifier.height(10.dp))
                 
-                Text(
-                    text = state.filename,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextPrimary,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (state.activeFiles > 1) "${state.primaryFileName} + ${state.activeFiles - 1} more" else state.primaryFileName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f),
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    
+                    if (state.speedBps > 0 && !state.isComplete) {
+                        Text(
+                            text = formatSpeed(state.speedBps),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(start = 8.dp)
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(14.dp))
 
@@ -530,7 +564,7 @@ class MainActivity : ComponentActivity() {
                                 fontWeight = FontWeight.SemiBold
                             )
                             val eta = if (state.speedBps > 0) {
-                                (state.totalBytes - state.bytesTransferred) / state.speedBps
+                                (state.totalBytes - state.totalBytesTransferred) / state.speedBps
                             } else 0L
                             
                             Text(
@@ -624,6 +658,16 @@ class MainActivity : ComponentActivity() {
                     putExtra(Intent.EXTRA_TEXT, text)
                 }
                 startActivity(Intent.createChooser(sendIntent, "Share Link"))
+            }
+        }
+
+        @JavascriptInterface
+        fun resetNodePassword() {
+            runOnUiThread {
+                val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
+                prefs.edit().clear().apply()
+                android.widget.Toast.makeText(this@MainActivity, "Node Password has been reset", android.widget.Toast.LENGTH_SHORT).show()
+                updateWebState() // Broadcast new state if needed
             }
         }
     }

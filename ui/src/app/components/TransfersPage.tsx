@@ -1,6 +1,12 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router'
 
+declare global {
+    interface Window {
+        Android?: any;
+    }
+}
+
 interface TransferStatus {
     transferId: string
     fileName: string
@@ -38,22 +44,38 @@ export function TransfersPage() {
         return ''
     }, [])
 
+    const getHeaders = useCallback(() => {
+        const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token') || '';
+        const params = new URLSearchParams(window.location.hash.split('?')[1]);
+        const pwd = params.get('pwd') || token;
+        
+        // Extract node ID from the current URL if possible
+        const shareCode = window.location.pathname.split('/')[2] || "";
+
+        return {
+            'Authorization': `Bearer ${pwd}`,
+            ...(shareCode ? { 'X-Node-Id': shareCode } : {})
+        };
+    }, [])
+
     useEffect(() => {
         let cancelled = false
         const apiBase = getApiBase()
 
         async function poll() {
             try {
-                const res = await fetch(`${apiBase}/api/transfer_status`)
+                const res = await fetch(`${apiBase}/api/transfer_status`, {
+                    headers: getHeaders()
+                })
                 if (!res.ok || cancelled) return
                 const data = await res.json()
                 if (!cancelled) setTransfers(data)
             } catch { /* ignore */ }
         }
-        const interval = setInterval(poll, 500)
+        const interval = setInterval(poll, 1000)
         poll()
         return () => { cancelled = true; clearInterval(interval) }
-    }, [getApiBase])
+    }, [getApiBase, getHeaders])
 
     return (
         <div style={{

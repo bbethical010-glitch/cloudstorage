@@ -165,33 +165,16 @@ class ServerService : Service() {
                 routing {
                     
                     fun io.ktor.server.application.ApplicationCall.hasValidAuth(): Boolean {
-                        val auth = request.headers["Authorization"]
-                        val pwd = request.queryParameters["pwd"]
-                        return auth != null || pwd != null // Simplified for this implementation
-                    }
-
-                    suspend fun io.ktor.server.application.ApplicationCall.respondJson(success: Boolean, error: String? = null, code: String? = null, data: Map<String, Any>? = null) {
-                        val map = mutableMapOf<String, Any>("success" to success)
-                        if (error != null) map["error"] = error
-                        if (code != null) map["code"] = code
-                        data?.let { map.putAll(it) }
-                        respond(map)
-                    }
-
-                    fun io.ktor.server.application.ApplicationCall.hasValidAuthInternal(): Boolean {
                         val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
-                        val accountExists = prefs.contains("email")
+                        val accountExists = prefs.contains("password_hash")
                         val activeToken = prefs.getString("active_token", null)
                         
                         val headerToken = request.headers["Authorization"]?.removePrefix("Bearer ")?.trim()
 
                         if (accountExists) {
-                            // If an account is claimed, require a matching active token.
-                            // If no active token (e.g. they logged out), all requests fail until they login again.
                             if (activeToken.isNullOrBlank()) return false
                             return headerToken == activeToken
                         } else {
-                            // First-time setup / legacy fallback
                             if (consolePassword.isNullOrBlank()) return true
                             return headerToken == consolePassword
                         }
@@ -201,13 +184,13 @@ class ServerService : Service() {
                         route("/auth") {
                             get("/status") {
                                 val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
-                                val hasAccount = prefs.contains("email")
+                                val hasAccount = prefs.contains("password_hash")
                                 call.respondText("{\"hasAccount\": $hasAccount}", ContentType.Application.Json)
                             }
                             
                             post("/signup") {
                                 val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
-                                if (prefs.contains("email")) {
+                                if (prefs.contains("password_hash")) {
                                     return@post call.respond(HttpStatusCode.Forbidden, "{\"error\": \"Account exists\"}")
                                 }
                                 
@@ -215,11 +198,10 @@ class ServerService : Service() {
                                 if (jsonStr.isBlank()) return@post call.respond(HttpStatusCode.BadRequest)
                                 
                                 val obj = org.json.JSONObject(jsonStr)
-                                val email = obj.optString("email", "")
                                 val password = obj.optString("password", "")
                                 
-                                if (email.isBlank() || password.isBlank()) {
-                                    return@post call.respond(HttpStatusCode.BadRequest, "{\"error\": \"Missing credentials\"}")
+                                if (password.isBlank()) {
+                                    return@post call.respond(HttpStatusCode.BadRequest, "{\"error\": \"Missing password\"}")
                                 }
                                 
                                 val md = java.security.MessageDigest.getInstance("SHA-256")
@@ -227,7 +209,6 @@ class ServerService : Service() {
                                 
                                 val token = java.util.UUID.randomUUID().toString()
                                 prefs.edit()
-                                    .putString("email", email)
                                     .putString("password_hash", hash)
                                     .putString("active_token", token)
                                     .apply()
@@ -237,10 +218,9 @@ class ServerService : Service() {
 
                             post("/login") {
                                 val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
-                                val existingEmail = prefs.getString("email", null)
                                 val existingHash = prefs.getString("password_hash", null)
                                 
-                                if (existingEmail == null || existingHash == null) {
+                                if (existingHash == null) {
                                     return@post call.respond(HttpStatusCode.NotFound, "{\"error\": \"No account\"}")
                                 }
                                 
@@ -248,13 +228,12 @@ class ServerService : Service() {
                                 if (jsonStr.isBlank()) return@post call.respond(HttpStatusCode.BadRequest)
                                 
                                 val obj = org.json.JSONObject(jsonStr)
-                                val email = obj.optString("email", "")
                                 val password = obj.optString("password", "")
                                 
                                 val md = java.security.MessageDigest.getInstance("SHA-256")
                                 val hash = java.util.Base64.getEncoder().encodeToString(md.digest(password.toByteArray()))
                                 
-                                if (email == existingEmail && hash == existingHash) {
+                                if (hash == existingHash) {
                                     val token = java.util.UUID.randomUUID().toString()
                                     prefs.edit().putString("active_token", token).apply()
                                     call.respondText("{\"token\":\"$token\"}", ContentType.Application.Json)
@@ -395,6 +374,26 @@ class ServerService : Service() {
                                 }
                             }
                             call.respond(HttpStatusCode.OK)
+                        }
+
+                        get("/transfer_status") {
+                            val active = TransferManager.getActiveTransfers()
+                            val globalState = TransferManager.transferState.value
+                            val list = active.map { item ->
+                                mapOf(
+                                    "transferId" to item.id,
+                                    "fileName" to item.filename,
+                                    "totalBytes" to item.totalBytes,
+                                    "bytesWritten" to item.bytesTransferred,
+                                    "progressPercent" to (if (item.totalBytes > 0) (item.bytesTransferred * 100 / item.totalBytes).toInt() else 0),
+                                    "speedBytesPerSecond" to (globalState?.speedBps ?: 0L),
+                                    "isActive" to true,
+                                    "isComplete" to false,
+                                    "isFailed" to false,
+                                    "startedAt" to item.lastUpdateMs
+                                )
+                            }
+                            call.respond(list)
                         }
 
                         get("/files") {
