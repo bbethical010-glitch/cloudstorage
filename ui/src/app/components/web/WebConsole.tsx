@@ -65,6 +65,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import { PreviewModal } from "./PreviewModal";
 import "../../../styles/console.css";
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -487,152 +488,6 @@ export function WebConsole() {
     });
   }, [buildApiUrl, getHeaders, isDataChannelReady, p2pReady, p2pTransport, shareCode]);
 
-  const PreviewContent = () => (
-    <AnimatePresence mode="wait">
-      {selectedFile ? (
-        <motion.div 
-          key={selectedFile.id}
-          initial={{ opacity: 0, x: 20 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: 20 }}
-          className="h-full flex flex-col p-6 w-full max-h-screen"
-        >
-          <div className="flex items-center justify-between mb-8 shrink-0">
-             <Button variant="ghost" size="icon" className="h-8 w-8 text-[#E5E7EB] md:hidden" onClick={() => setSelectedFile(null)}>
-               <ArrowLeft className="w-5 h-5 text-white" />
-             </Button>
-             <h3 className="font-bold text-sm tracking-widest uppercase text-[#4B5563] hidden md:block">Details</h3>
-             <div className="flex-1 md:hidden" />
-             <Button variant="ghost" size="icon" className="h-8 w-8 text-[#4B5563]" onClick={() => setSelectedFile(null)}>
-               <ChevronUp className="w-4 h-4 hidden md:block" />
-             </Button>
-          </div>
-
-          <div className="aspect-square shrink-0 w-full min-h-[180px] bg-gradient-to-br from-[#111827] to-[#0B1220] rounded-[2rem] border border-[#1F2937] flex items-center justify-center mb-8 shadow-2xl relative overflow-hidden group">
-            <div className="absolute inset-0 bg-[#2563EB]/5 opacity-0 group-hover:opacity-100 transition-opacity" />
-            {(() => {
-              const ext = selectedFile.name.split('.').pop()?.toLowerCase() || '';
-              const pwd = new URLSearchParams(window.location.hash.split('?')[1]).get('pwd') || '';
-              const url = buildApiUrl(`/api/download?path=${encodeURIComponent(currentPath)}&file=${encodeURIComponent(selectedFile.name)}&pwd=${encodeURIComponent(pwd)}`);
-              
-              if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
-                return (
-                  <div className="w-full h-full relative flex items-center justify-center">
-                    <img 
-                      src={url} 
-                      className="object-contain w-full h-full absolute inset-0 text-transparent" 
-                      alt="Preview"
-                      onLoad={() => console.log("PREVIEW_DEBUG", "Image loaded:", url)}
-                      onError={(e) => {
-                        console.error("PREVIEW_ERROR", selectedFile, "Image broken.", e);
-                        e.currentTarget.style.display = 'none';
-                        e.currentTarget.parentElement?.insertAdjacentHTML('beforeend', '<p class="text-[10px] text-red-400 p-4 text-center z-10 w-full relative">Preview not available.</p>');
-                      }}
-                    />
-                  </div>
-                );
-              }
-              if (['mp4', 'webm', 'mov', 'avi'].includes(ext)) {
-                return (
-                  <div className="w-full h-full relative flex items-center justify-center bg-black/50">
-                    <video 
-                      src={url} 
-                      controls 
-                      preload="metadata"
-                      className="object-contain w-full h-full absolute inset-0 text-transparent" 
-                      onLoadedData={() => console.log("PREVIEW_DEBUG", "Video loaded:", url)}
-                      onError={(e) => {
-                        console.error("PREVIEW_ERROR", selectedFile, "Video broken.", e);
-                        e.currentTarget.style.display = 'none';
-                        e.currentTarget.parentElement?.insertAdjacentHTML('beforeend', '<p class="text-[10px] text-red-400 p-4 text-center z-10 w-full relative">Preview not available.</p>');
-                      }}
-                    />
-                  </div>
-                );
-              }
-              if (ext === 'pdf') {
-                return <iframe src={url} className="w-full h-full bg-white rounded-2xl" title="PDF Preview" />;
-              }
-              return getFileIcon(selectedFile.name, selectedFile.isDirectory, "w-20 h-20 transition-transform group-hover:scale-110 duration-500 z-10 relative");
-            })()}
-            
-            <div className="absolute bottom-4 left-4 right-4 pointer-events-none">
-               <div className="bg-[#0B1220]/80 backdrop-blur-md p-3 rounded-2xl border border-[#374151]/30 opacity-0 group-hover:opacity-100 translate-y-4 group-hover:translate-y-0 transition-all">
-                  <p className="text-[10px] text-center font-bold text-[#2563EB] uppercase tracking-widest">
-                      {selectedFile.isDirectory ? "Folder" : "File"}
-                  </p>
-               </div>
-            </div>
-          </div>
-          
-          <div className="flex-1 overflow-y-auto space-y-8 pr-2">
-            <div>
-              <h3 className="text-xl font-bold break-words pr-4 text-white leading-tight">{selectedFile.name}</h3>
-              <div className="flex items-center gap-2 mt-2">
-                 <Badge className="bg-[#2563EB]/10 text-[#2563EB] border-transparent text-[10px] uppercase font-bold tracking-widest">
-                     {selectedFile.isDirectory ? "Folder" : selectedFile.name.split('.').pop() || 'Unknown'}
-                 </Badge>
-                 <span className="text-[10px] text-[#4B5563] font-mono uppercase tracking-widest">{formatSize(selectedFile.size)}</span>
-              </div>
-            </div>
-
-            <div className="space-y-5 pt-6 border-t border-[#1F2937]/50">
-              <div className="grid grid-cols-2 gap-4">
-                 <div className="space-y-1">
-                    <label className="text-[9px] font-bold text-[#4B5563] uppercase tracking-widest block">Modified</label>
-                    <p className="text-xs font-mono text-[#E5E7EB]">{formatDate(selectedFile.lastModified)}</p>
-                 </div>
-              </div>
-              <div className="space-y-2">
-                <label className="text-[9px] font-bold text-[#4B5563] uppercase tracking-widest block">Location</label>
-                <div className="flex items-center gap-2 px-3 py-2 bg-[#111827] border border-[#1F2937] rounded-xl flex-wrap">
-                  <HardDrive className="w-3.5 h-3.5 text-[#2563EB] shrink-0" />
-                  <p className="text-[10px] font-mono text-[#9CA3AF] break-all">/Storage/{currentPath}</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="pt-8 space-y-3 pb-4">
-              <Button 
-                className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] h-11 rounded-xl gap-2 font-bold shadow-lg shadow-blue-500/10 active:scale-95 transition-all outline-none"
-                onClick={() => handleDownload(selectedFile)}
-              >
-                <Download className="w-4 h-4" /> Download
-              </Button>
-              <div className="grid grid-cols-2 gap-3">
-                 <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs" onClick={() => handleRename(selectedFile)}>
-                   <FileEdit className="w-3.5 h-3.5" /> Rename
-                 </Button>
-                 <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs" onClick={() => setShowShareModal(true)}>
-                   <Share2 className="w-3.5 h-3.5" /> Share
-                 </Button>
-                 <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs" onClick={() => {
-                    const dest = prompt("Enter destination folder path (e.g. Documents):");
-                    if (dest !== null) {
-                       setSelectedFiles(new Set([selectedFile.id]));
-                       handleBulkAction('move', dest);
-                    }
-                 }}>
-                   <Move className="w-3.5 h-3.5" /> Move
-                 </Button>
-                 <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs text-[#EF4444]" onClick={() => handleDelete(selectedFile)}>
-                   <Trash2 className="w-3.5 h-3.5" /> Delete
-                 </Button>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-      ) : (
-        <div className="h-full flex flex-col items-center justify-center text-[#4B5563] p-12 text-center md:flex hidden">
-          <div className="w-20 h-20 bg-[#111827] rounded-[2.5rem] border border-[#1F2937] flex items-center justify-center mb-6">
-            <Eye className="w-8 h-8 opacity-20" />
-          </div>
-          <h3 className="text-sm font-bold uppercase tracking-widest text-[#E5E7EB]">No Preview</h3>
-          <p className="text-xs mt-3 leading-relaxed">Select a file to view its preview and details</p>
-        </div>
-      )}
-    </AnimatePresence>
-  );
 
   const loadStorageStats = useCallback(async (retryCount = 0) => {
     if (!canUseNodeApi) return;
@@ -1707,73 +1562,25 @@ export function WebConsole() {
 
         {/* ═══════════ RIGHT PREVIEW PANEL — fixed 300px ═══════════ */}
         <aside className="preview-panel">
-          {!selectedFile ? (
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: "12px", padding: "24px" }}>
-              <div style={{ width: "64px", height: "64px", borderRadius: "50%", background: "#141720", border: "1px solid #1C2035", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <Eye style={{ color: "#3A3F58", width: "28px" }} />
-              </div>
-              <p style={{ color: "#E2E5F0", fontSize: "13px", fontWeight: 600, letterSpacing: "0.08em" }}>NO PREVIEW</p>
-              <p style={{ color: "#3A3F58", fontSize: "12px", textAlign: "center", lineHeight: 1.5 }}>Select a file to view its preview and details</p>
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-              {/* File header */}
-              <div style={{ padding: "16px", borderBottom: "1px solid #1C2035" }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  {getFileIcon(selectedFile.name, selectedFile.isDirectory, "w-8 h-8")}
-                  <Button variant="ghost" size="icon" className="h-8 w-8 text-[#4B5E7A]" onClick={() => setSelectedFile(null)}>
-                    <X className="w-4 h-4" />
-                  </Button>
-                </div>
-                <p style={{ color: "#E2E5F0", fontSize: "13px", fontWeight: 500, marginTop: "8px", wordBreak: "break-all" }}>{selectedFile.name}</p>
-              </div>
-
-              {/* Metadata */}
-              <div style={{ padding: "16px", borderBottom: "1px solid #1C2035", display: "flex", flexDirection: "column", gap: "10px" }}>
-                {[
-                  ["SIZE", formatSize(selectedFile.size)],
-                  ["MODIFIED", formatDate(selectedFile.lastModified)],
-                  ["TYPE", getFileKindLabel(selectedFile)],
-                  ["PATH", `~/Root/${currentPath}/${selectedFile.name}`],
-                ].map(([label, value]) => (
-                  <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
-                    <span style={{ fontSize: "10px", letterSpacing: "0.14em", color: "#3A3F58", fontFamily: "JetBrains Mono, monospace", flexShrink: 0 }}>{label}</span>
-                    <span style={{ fontSize: "12px", color: "#7A8099", textAlign: "right", wordBreak: "break-all", fontFamily: label === "PATH" ? "JetBrains Mono, monospace" : "inherit" }}>{value}</span>
-                  </div>
-                ))}
-              </div>
-
-              {/* Actions */}
-              <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: 8, marginTop: "auto" }}>
-                <Button className="w-full bg-[#3B82F6] hover:bg-blue-600 h-9 rounded-lg gap-2 text-sm" onClick={() => handleDownload(selectedFile)}>
-                  <Download className="w-4 h-4" /> Download
-                </Button>
-                <Button variant="outline" className="w-full border-red-500/30 text-red-500 hover:bg-red-500/10 h-9 rounded-lg gap-2 text-sm" onClick={() => handleDelete(selectedFile)}>
-                  <Trash2 className="w-4 h-4" /> Delete
-                </Button>
-              </div>
-              {/* ENGINE ROOM LOG AREA */}
-              <div style={{ height: "200px", display: "flex", flexDirection: "column", background: "#050505", borderTop: "1px solid #1C2035", marginTop: "auto", overflow: "hidden" }}>
-                <div style={{ padding: "10px 16px", background: "#0A0B10", display: "flex", alignItems: "center", gap: "8px", borderBottom: "1px solid #1C2035" }}>
-                  <Activity className="w-3 h-3 text-[#10B981]" />
-                  <span style={{ fontSize: "10px", fontWeight: 700, letterSpacing: "0.15em", color: "#10B981" }}>ENGINE ROOM</span>
-                </div>
-                <div style={{ flex: 1, padding: "12px", display: "flex", flexDirection: "column", gap: "4px", overflowY: "auto", scrollbarWidth: "none" }}>
-                  {terminalLogs.length === 0 ? (
-                    <span style={{ fontSize: "10px", color: "#3A3F58", fontFamily: "JetBrains Mono, monospace" }}>NO ACTIVE PROCESSES</span>
-                  ) : (
-                    terminalLogs.map(log => (
-                      <div key={log.id} style={{ display: "flex", gap: "6px", fontFamily: "JetBrains Mono, monospace", fontSize: "9px" }}>
-                        <span style={{ color: "#3A3F58" }}>[{log.timestamp}]</span>
-                        <span style={{ color: log.type === 'sys' ? '#60A5FA' : log.type === 'net' ? '#A855F7' : '#10B981' }}>[{log.type.toUpperCase()}]</span>
-                        <span style={{ color: "#7A8099" }}>{log.msg}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
+          <PreviewModal
+            selectedFile={selectedFile}
+            currentPath={currentPath}
+            apiFetch={apiFetch}
+            onClose={() => setSelectedFile(null)}
+            onRename={handleRename}
+            onShare={() => setShowShareModal(true)}
+            onMove={(file) => {
+              const dest = prompt("Enter destination folder path (e.g. Documents):");
+              if (dest !== null) {
+                setSelectedFiles(new Set([file.id]));
+                handleBulkAction('move', dest);
+              }
+            }}
+            onDelete={handleDelete}
+            formatSize={formatSize}
+            formatDate={formatDate}
+            getFileIcon={getFileIcon}
+          />
         </aside>
       </div>
 
@@ -1871,150 +1678,25 @@ export function WebConsole() {
       </AnimatePresence>
 
       {/* Preview Modal */}
-      <AnimatePresence>
-        {activePreviewFile && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 md:p-8 bg-[#050505]/90 backdrop-blur-md">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }} 
-              animate={{ opacity: 1, scale: 1, y: 0 }} 
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="w-full max-w-5xl h-full max-h-[85vh] bg-[#0A0B10] border border-[#1F2937] rounded-xl shadow-2xl flex flex-col overflow-hidden"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Header */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-[#1F2937] bg-[#0D0F16]">
-                <div className="flex items-center gap-4">
-                  <div className="p-2 bg-[#161B26] rounded-lg border border-[#1F2937]">
-                    {getFileIcon(activePreviewFile.name, false, "w-5 h-5 text-blue-400")}
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-white font-mono leading-tight">{activePreviewFile.name}</h3>
-                    <div className="flex items-center gap-2 mt-1">
-                      <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20 text-[10px] px-1.5 h-4 uppercase tracking-tighter">
-                        {getFileBadgeCategory(activePreviewFile)}
-                      </Badge>
-                      <span className="text-[10px] text-[#4B5E7A] font-mono">ID: {activePreviewFile.id.substring(0, 8)}...</span>
-                    </div>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => setActivePreviewFile(null)}
-                  className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/5 text-[#4B5E7A] hover:text-white transition-colors"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {/* Viewer Area */}
-              <div className="flex-1 overflow-auto bg-[#050505] relative flex items-center justify-center p-4">
-                {(() => {
-                  const category = getFileBadgeCategory(activePreviewFile);
-                  const url = getAuthenticatedUrl(`/api/node/${shareCode}/file?path=${encodeURIComponent(activePreviewFile.path)}`);
-                  
-                  if (category === 'image') {
-                    return (
-                      <div className="relative group max-w-full max-h-full">
-                        <img 
-                          src={url} 
-                          alt={activePreviewFile.name}
-                          className="max-w-full max-h-full object-contain rounded-sm"
-                          onLoad={() => logActivity(`RENDER_COMPLETE: ${activePreviewFile.name}`, 'io')}
-                        />
-                      </div>
-                    );
-                  }
-                  
-                  if (category === 'video') {
-                    return (
-                      <div className="w-full max-w-3xl flex flex-col gap-6">
-                        <div className="aspect-video bg-black rounded-lg border border-[#1F2937] overflow-hidden group relative">
-                          <video 
-                            src={url} 
-                            controls 
-                            autoPlay
-                            className="w-full h-full"
-                            onPlay={() => logActivity(`STREAMING_ACTIVE: ${activePreviewFile.name}`, 'net')}
-                          />
-                          <div className="absolute top-4 right-4 px-2 py-1 bg-black/60 backdrop-blur-md rounded border border-white/10 flex items-center gap-2">
-                             <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                             <span className="text-[10px] font-mono text-white/80 uppercase">P2P LIVE</span>
-                          </div>
-                        </div>
-                        
-                        {/* Mock Buffer Health Bar */}
-                        <div className="space-y-2">
-                          <div className="flex justify-between items-end">
-                            <span className="text-[10px] font-mono text-[#4B5E7A] uppercase tracking-widest">P2P SWARM BUFFER HEALTH</span>
-                            <span className="text-[10px] font-mono text-[#10B981]">98.4%</span>
-                          </div>
-                          <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden flex gap-0.5">
-                            {Array.from({ length: 40 }).map((_, i) => (
-                              <motion.div 
-                                key={i}
-                                initial={{ opacity: 0.3 }}
-                                animate={{ opacity: [0.3, 0.8, 0.3] }}
-                                transition={{ duration: 2, repeat: Infinity, delay: i * 0.05 }}
-                                className="flex-1 h-full bg-[#10B981]"
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  }
-                  
-                  if (category === 'pdf') {
-                    return (
-                      <div className="w-full h-full max-w-4xl bg-white/5 rounded-lg border border-[#1F2937] flex flex-col items-center justify-center p-12 text-center">
-                        <div className="w-20 h-20 bg-red-500/10 rounded-2xl flex items-center justify-center border border-red-500/20 mb-6">
-                           <FileText className="w-10 h-10 text-red-500" />
-                        </div>
-                        <h4 className="text-lg font-bold text-white mb-2">Secure PDF Viewer</h4>
-                        <p className="text-sm text-[#7A8099] max-w-md mb-8">
-                          The document "{activePreviewFile.name}" is being decrypted and streamed from the peer node. 
-                          Partial rendering is currently enabled for performance.
-                        </p>
-                        <div className="w-full max-w-sm space-y-3">
-                           {[1, 2, 3].map(i => (
-                             <div key={i} className="h-4 bg-white/5 rounded animate-pulse" style={{ width: `${100 - (i * 15)}%` }} />
-                           ))}
-                        </div>
-                      </div>
-                    );
-                  }
-                  
-                  return <div>No Preview Available</div>;
-                })()}
-              </div>
-
-              {/* Footer */}
-              <div className="px-6 py-4 border-t border-[#1F2937] bg-[#0D0F16] flex items-center justify-between">
-                <div className="flex gap-8">
-                   <div className="flex flex-col">
-                      <span className="text-[10px] text-[#4B5E7A] font-medium uppercase tracking-[0.2em] mb-0.5">RESOLUTION</span>
-                      <span className="text-xs text-white font-mono">{getFileBadgeCategory(activePreviewFile) === 'image' ? '3840 x 2160' : '1920 x 1080'}</span>
-                   </div>
-                   <div className="flex flex-col">
-                      <span className="text-[10px] text-[#4B5E7A] font-medium uppercase tracking-[0.2em] mb-0.5">CODEC / FORMAT</span>
-                      <span className="text-xs text-white font-mono">{activePreviewFile.name.split('.').pop()?.toUpperCase() || 'RAW'}</span>
-                   </div>
-                   <div className="flex flex-col">
-                      <span className="text-[10px] text-[#4B5E7A] font-medium uppercase tracking-[0.2em] mb-0.5">SIZE</span>
-                      <span className="text-xs text-white font-mono">{formatSize(activePreviewFile.size)}</span>
-                   </div>
-                </div>
-                
-                <Button 
-                  className="bg-[#22C55E] hover:bg-[#16a34a] text-[#050505] font-bold px-6 rounded-lg gap-2"
-                  onClick={() => handleDownload(activePreviewFile)}
-                >
-                  <Download className="w-4 h-4" /> DOWNLOAD NATIVE
-                </Button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <PreviewModal
+        selectedFile={activePreviewFile}
+        currentPath={currentPath}
+        apiFetch={apiFetch}
+        onClose={() => setActivePreviewFile(null)}
+        onRename={handleRename}
+        onShare={() => setShowShareModal(true)}
+        onMove={(file) => {
+          const dest = prompt("Enter destination folder path (e.g. Documents):");
+          if (dest !== null) {
+            setSelectedFiles(new Set([file.id]));
+            handleBulkAction('move', dest);
+          }
+        }}
+        onDelete={handleDelete}
+        formatSize={formatSize}
+        formatDate={formatDate}
+        getFileIcon={getFileIcon}
+      />
 
       <svg width="0" height="0" style={{ position: "absolute" }}>
         <defs>
