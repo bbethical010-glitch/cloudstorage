@@ -16,7 +16,7 @@ import { toast } from "sonner";
 import { AppStateContext } from "../../App";
 import { androidBridge } from "../../bridge";
 import { ShareQRDialog } from "./ShareQRDialog";
-import "../../styles/node-switch.css";
+import "../../../styles/node-switch.css";
 
 export function AndroidDashboard() {
   const ctx = useContext(AppStateContext);
