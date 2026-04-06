@@ -7,7 +7,7 @@
     "doc": "docs"
   },
   "scripts": {
-    "build:ui": "cd ui && npm run build && rm -rf ../app/src/main/assets/web/* && mkdir -p ../app/src/main/assets/web && cp -r dist/* ../app/src/main/assets/web/",
+    "build:ui": "sh -c \"cd ui && npm run build && mkdir -p ../app/src/main/assets/web && rm -rf ../app/src/main/assets/web/* && cp -rv dist/* ../app/src/main/assets/web/\"",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
