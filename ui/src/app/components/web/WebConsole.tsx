@@ -68,7 +68,6 @@ import {
 import { PreviewModal } from "./PreviewModal";
 import "../../../styles/console.css";
 import "../../../styles/animated-inputs.css";
-import "./node-skeleton.css";
 import "./animated-folder.css";
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1235,61 +1234,33 @@ export function WebConsole() {
   if (p2pState === 'connecting' || p2pState === 'signaling' || p2pState === 'ice-gathering' || p2pState === 'dc-opening' || (p2pState === 'connected' && !isDataChannelReady)) {
     const getP2PMessage = () => {
       switch (p2pState) {
-        case 'connecting': return 'Initializing Node Stack';
-        case 'signaling': return 'Negotiating Handshake';
-        case 'ice-gathering': return 'Gathering Network Nodes';
-        case 'dc-opening': return 'Opening Secure Bridge';
-        case 'connected': return 'Finalizing Link';
-        default: return 'Establishing Secure Bridge';
+        case 'connecting': return 'Initializing Node Stack...';
+        case 'signaling': return 'Negotiating Handshake...';
+        case 'ice-gathering': return 'Gathering Network Nodes...';
+        case 'dc-opening': return 'Opening Secure Bridge...';
+        case 'connected': return 'Finalizing Bridge...';
+        default: return 'Establishing Secure Connection...';
       }
     };
 
     return (
       <div className="h-screen bg-[#0B1220] flex flex-col items-center justify-center p-6 text-[#E5E7EB] relative overflow-hidden">
-        {/* 3D Rotating Background Carousel */}
-        <div className="node-skeleton-wrapper">
-          <div className="node-carousel-inner" style={{ "--quantity": 8 } as any}>
-            {[...Array(8)].map((_, i) => (
-              <div key={i} className="node-carousel-card" style={{ "--index": i } as any}>
-                <Cloud className="animate-pulse" />
-                <span className="node-label">STORAGE NODE</span>
-              </div>
-            ))}
+        {/* Previous Green Buffering UI design — glow and simple centering */}
+        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-[#22C55E]/10 blur-[120px] rounded-full pointer-events-none" />
+        <div className="z-10 flex flex-col items-center justify-center text-center">
+          <div className="relative mb-8 h-32 flex items-center justify-center">
+            <SquareLoader size="lg" color="#22C55E" />
+          </div>
+          <h1 className="text-3xl font-bold mb-3 tracking-tight text-white">{getP2PMessage()}</h1>
+          <p className="text-sm text-[#9CA3AF] max-w-sm mx-auto leading-relaxed">
+            Creating a direct peer-to-peer connection for fast, private file transfers.
+            No data passes through the relay.
+          </p>
+          <div className="mt-8 flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full">
+            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">{p2pState}</span>
           </div>
         </div>
-
-        {/* Central Animated Status Card */}
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.9, y: 20 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          className="bridge-status-card group"
-        >
-          <div className="card-accent-border" />
-          <div className="card-tag-text">Security Protocol V3</div>
-          
-          <div className="logo-container">
-            <div className="relative flex items-center justify-center">
-              <div className="logo-pulse-ring" />
-              <Cloud className="main-logo-icon" />
-            </div>
-            <div className="status-detail-text">{getP2PMessage()}</div>
-          </div>
-
-          <div className="card-status-bottom">Bridge: {p2pState.toUpperCase()}</div>
-        </motion.div>
-
-        {/* Loading Description */}
-        <motion.div 
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.5 }}
-          className="z-20 mt-12 text-center"
-        >
-          <h1 className="text-xl font-bold mb-2 text-white">Connecting to {shareCode || "Remote Node"}</h1>
-          <p className="text-xs text-[#9CA3AF] max-w-xs mx-auto leading-relaxed">
-            Establishing a direct P2P link to your Android device for encrypted end-to-end file management.
-          </p>
-        </motion.div>
       </div>
     );
   }
