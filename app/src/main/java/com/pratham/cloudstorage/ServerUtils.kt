@@ -37,8 +37,13 @@ fun generateShareCode(): String {
         .uppercase(Locale.US)
 }
 
-fun normalizeRelayBaseUrl(value: String): String {
-    return value.trim().trimEnd('/')
+fun sanitizeUrl(url: String): String {
+    var sanitized = url.trim().trimEnd('/')
+    if (sanitized.isEmpty()) return sanitized
+    if (!sanitized.startsWith("http://") && !sanitized.startsWith("https://")) {
+        sanitized = "https://$sanitized"
+    }
+    return sanitized
 }
 
 fun isLocalDevelopmentRelayBaseUrl(value: String): Boolean {

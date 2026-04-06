@@ -28,7 +28,7 @@ android {
         versionName = "1.4"
         manifestPlaceholders["appLinkHost"] = readConfig("APP_LINK_HOST").ifBlank { "invite.easystoragecloud.app" }
         buildConfigField("String", "APP_LINK_HOST", "\"${readConfig("APP_LINK_HOST")}\"")
-        buildConfigField("String", "RELAY_BASE_URL", "\"${readConfig("RELAY_BASE_URL")}\"")
+        buildConfigField("String", "RELAY_BASE_URL", "\"${readConfig("RELAY_BASE_URL").ifBlank { "https://easy-storage-relay.onrender.com" }}\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

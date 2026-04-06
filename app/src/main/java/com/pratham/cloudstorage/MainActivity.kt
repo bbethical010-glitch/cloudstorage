@@ -224,10 +224,10 @@ class MainActivity : ComponentActivity() {
         
         val savedRelayUrl = preferences.getString(PREF_RELAY_BASE_URL, null).orEmpty()
         if (savedRelayUrl.isBlank()) {
-            relayBaseUrl = BuildConfig.RELAY_BASE_URL
+            relayBaseUrl = sanitizeUrl(BuildConfig.RELAY_BASE_URL)
             preferences.edit().putString(PREF_RELAY_BASE_URL, relayBaseUrl).apply()
         } else {
-            relayBaseUrl = savedRelayUrl
+            relayBaseUrl = sanitizeUrl(savedRelayUrl)
         }
 
 
@@ -248,6 +248,9 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 ServerService.tunnelStatusFlow.collect { status ->
+                    if (status == TunnelStatus.Error && isNodeRunning) {
+                        Toast.makeText(this@MainActivity, "Relay Connection Error: Check Endpoint URL & Internet", Toast.LENGTH_LONG).show()
+                    }
                     tunnelStatus = status.name
                     updateWebState()
                 }
@@ -885,8 +888,14 @@ class MainActivity : ComponentActivity() {
     }
 
     fun updateRelayBaseUrl(url: String) {
-        relayBaseUrl = url.trim()
+        val sanitized = sanitizeUrl(url)
+        if (sanitized.isBlank()) {
+            Toast.makeText(this, "Endpoint cannot be empty", Toast.LENGTH_SHORT).show()
+            return
+        }
+        relayBaseUrl = sanitized
         preferences.edit().putString(PREF_RELAY_BASE_URL, relayBaseUrl).apply()
+        Toast.makeText(this, "Relay Endpoint Updated", Toast.LENGTH_SHORT).show()
         updateWebState()
     }
 

@@ -370,13 +370,13 @@ export function WebConsole() {
     <div className="sidebar" style={{ background: 'transparent', border: 'none' }}>
       {/* Upload buttons */}
       <div className="sidebar-upload-section">
-        <button className="sidebar-btn sidebar-btn-primary" onClick={() => { fileInputRef.current?.click(); setIsMobileMenuOpen(false); }}>
+        <button className="sidebar-btn sidebar-btn-primary" disabled={isNodeOffline} onClick={() => { fileInputRef.current?.click(); setIsMobileMenuOpen(false); }}>
           <Upload className="w-4 h-4" /> Upload File
         </button>
-        <button className="sidebar-btn sidebar-btn-primary" onClick={() => { folderInputRef.current?.click(); setIsMobileMenuOpen(false); }}>
+        <button className="sidebar-btn sidebar-btn-primary" disabled={isNodeOffline} onClick={() => { folderInputRef.current?.click(); setIsMobileMenuOpen(false); }}>
           <Folder className="w-4 h-4" /> Upload Folder
         </button>
-        <button className="sidebar-btn sidebar-btn-ghost" onClick={() => { handleCreateFolder(); setIsMobileMenuOpen(false); }}>
+        <button className="sidebar-btn sidebar-btn-ghost" disabled={isNodeOffline} onClick={() => { handleCreateFolder(); setIsMobileMenuOpen(false); }}>
           <Plus className="w-4 h-4" /> New Folder
         </button>
         <input type="file" ref={fileInputRef} className="hidden" multiple onChange={handleUpload} />
@@ -1397,19 +1397,105 @@ export function WebConsole() {
             )}
 
             {isNodeOffline && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="offline-overlay">
-                <div style={{ width: 80, height: 80, background: "rgba(239,68,68,0.08)", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 20 }}>
-                  <Cloud className="w-10 h-10" style={{ color: "rgba(239,68,68,0.35)" }} />
+              <motion.div 
+                initial={{ opacity: 0 }} 
+                animate={{ opacity: 1 }} 
+                exit={{ opacity: 0 }} 
+                className="offline-overlay"
+                style={{ 
+                  background: "rgba(11, 18, 32, 0.95)",
+                  backdropFilter: "blur(12px)",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  zIndex: 100
+                }}
+              >
+                <div style={{ position: "relative", marginBottom: 32 }}>
+                  <div className="absolute inset-0 bg-emerald-500/20 blur-3xl rounded-full scale-150 animate-pulse" />
+                  <div style={{ 
+                    width: 100, 
+                    height: 100, 
+                    background: "rgba(16, 185, 129, 0.05)", 
+                    border: "1px solid rgba(16, 185, 129, 0.2)",
+                    borderRadius: "24px", 
+                    display: "flex", 
+                    alignItems: "center", 
+                    justifyContent: "center",
+                    position: "relative",
+                    transform: "rotate(-5deg)"
+                  }}>
+                    <Cloud className="w-12 h-12 text-emerald-500/40" />
+                    <div className="absolute top-2 right-2 flex gap-1">
+                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                    </div>
+                  </div>
                 </div>
-                <h2 style={{ fontSize: 24, fontWeight: 700, color: "white", marginBottom: 8 }}>Node is Offline</h2>
-                <p style={{ fontSize: 13, color: "#7C8798", maxWidth: 280, marginBottom: 24, lineHeight: 1.6 }}>
-                  The storage node <b>{shareCode}</b> is unreachable. Ensure the phone is active and the app is running.
-                </p>
-                <button className="launch-node-btn" onClick={handleRetryConnection}>
-                  <RefreshCw className="w-5 h-5" />
-                  <span>Retry Connection</span>
-                </button>
-                <p style={{ fontSize: 9, color: "#4B5E7A", marginTop: 12, textTransform: "uppercase", letterSpacing: "0.16em", fontWeight: 700 }}>Last check: {new Date(lastCheck).toLocaleTimeString()}</p>
+
+                <div style={{ textAlign: "center", maxWidth: 400 }}>
+                  <h2 style={{ 
+                    fontSize: 28, 
+                    fontWeight: 800, 
+                    color: "white", 
+                    marginBottom: 12,
+                    letterSpacing: "-0.02em",
+                    fontFamily: "Inter, sans-serif"
+                  }}>
+                    AWAITING SECURE UPLINK
+                  </h2>
+                  <p style={{ 
+                    fontSize: 14, 
+                    color: "#94A3B8", 
+                    lineHeight: 1.6,
+                    marginBottom: 32,
+                    fontFamily: "Inter, sans-serif"
+                  }}>
+                    The encrypted bridge to node <span className="text-emerald-400 font-mono font-bold">{shareCode}</span> is currently in standby. 
+                    Launch the <span className="text-white font-semibold">Easy Storage</span> app on your mobile device to establish a direct connection.
+                  </p>
+                </div>
+
+                <div style={{ display: "flex", gap: 12 }}>
+                  <button 
+                    className="launch-node-btn" 
+                    onClick={() => refreshNodeStatus()} 
+                    style={{ background: "#10B981", boxShadow: "0 0 20px rgba(16, 185, 129, 0.2)" }}
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} />
+                    <span>Establish Handshake</span>
+                  </button>
+                  <button 
+                    className="topbar-icon-btn" 
+                    onClick={() => window.open(getRelayUrl(), '_blank')}
+                    style={{ border: "1px solid #1E293B", background: "#1E293B/50" }}
+                  >
+                    <Info className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div style={{ 
+                  marginTop: 40,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "8px 16px",
+                  background: "rgba(16, 185, 129, 0.05)",
+                  border: "1px solid rgba(16, 185, 129, 0.1)",
+                  borderRadius: "12px"
+                }}>
+                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                  <span style={{ 
+                    fontSize: 10, 
+                    color: "#10B981", 
+                    textTransform: "uppercase", 
+                    letterSpacing: "0.1em",
+                    fontWeight: 700 
+                  }}>
+                    Relay Protocol: {getRelayUrl()}
+                  </span>
+                </div>
               </motion.div>
             )}
           </AnimatePresence>
@@ -1461,7 +1547,7 @@ export function WebConsole() {
               <button
                 className="topbar-icon-btn"
                 onClick={() => loadFiles(currentPath)}
-                disabled={isRefreshing}
+                disabled={isRefreshing || isNodeOffline}
                 style={{ width: "32px", height: "32px", border: "1px solid #1C2035", background: "#161B26", borderRadius: "8px" }}
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
