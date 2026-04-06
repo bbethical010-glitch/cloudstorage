@@ -1,0 +1,43 @@
+/* From Uiverse.io by vinodjangid07 - Adapted for AndroidCloudStorageApp */ 
+#checkbox {
+  display: none;
+}
+
+.node-switch-container .switch {
+  position: relative;
+  width: fit-content;
+  padding: 12px 28px;
+  background-color: #1F2937; /* Dark Slate - Matching app theme */
+  border-radius: 50px;
+  z-index: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: white;
+  font-size: 0.95em;
+  font-weight: 600;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid #374151;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.node-switch-container .switch svg {
+  transition: transform 0.3s ease;
+}
+
+.node-switch-container .switch:hover {
+  background-color: #374151;
+  transform: translateY(-1px);
+}
+
+#checkbox:checked + .switch {
+  background-color: #2563EB; /* Primary Blue from app */
+  border-color: #3B82F6;
+  box-shadow: 0px 0px 30px rgba(37, 99, 235, 0.4);
+}
+
+#checkbox:checked + .switch svg {
+  transform: scale(1.1);
+}

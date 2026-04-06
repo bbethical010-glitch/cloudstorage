@@ -4,7 +4,6 @@ import {
   Server,
   Link2,
   FolderOpen,
-  Share2,
   Power,
   QrCode
 } from "lucide-react";
@@ -17,6 +16,7 @@ import { toast } from "sonner";
 import { AppStateContext } from "../../App";
 import { androidBridge } from "../../bridge";
 import { ShareQRDialog } from "./ShareQRDialog";
+import "../../styles/node-switch.css";
 
 export function AndroidDashboard() {
   const ctx = useContext(AppStateContext);
@@ -57,17 +57,27 @@ export function AndroidDashboard() {
         {/* Top Card: Node Controller */}
         <div className="px-6 pt-10 pb-6">
           <Card className="bg-[#111827] border-[#1F2937] p-8 flex flex-col items-center text-center">
-            <div 
-              onClick={handleToggleNode}
-              className={`w-28 h-28 md:w-32 md:h-32 max-w-64 max-h-64 rounded-full flex items-center justify-center cursor-pointer transition-colors shadow-2xl ${
-                isOnline ? "bg-[#2563EB] shadow-[#2563EB]/20" : "bg-[#1F2937] shadow-black/50"
-              }`}
-            >
-              <Power className="w-12 h-12 text-white" />
+            
+            <div className="node-switch-container mb-8">
+              <input 
+                type="checkbox" 
+                id="checkbox"
+                checked={isOnline}
+                onChange={handleToggleNode}
+              />
+              <label htmlFor="checkbox" className="switch">
+                {isOnline ? (
+                  <Server className="w-5 h-5 text-white" />
+                ) : (
+                  <Power className="w-5 h-5 text-white" />
+                )}
+                <span>{isOnline ? "Node Running" : "Launch Engine"}</span>
+              </label>
             </div>
-            <div className="mt-8 flex flex-col items-center gap-2 w-full max-w-md mx-auto">
+
+            <div className="flex flex-col items-center gap-2 w-full max-w-md mx-auto">
               <span className="text-[10px] font-bold text-[#9CA3AF] uppercase tracking-[0.2em]">
-                {isOnline ? "STOP NODE" : "START NODE"}
+                {isOnline ? "STATUS: ACTIVE" : "STATUS: OFFLINE"}
               </span>
               <h2 className="text-2xl font-bold text-white tracking-tight">
                 {folderName || "No Storage"} • {displayStorageTotalGB} GB
@@ -81,7 +91,7 @@ export function AndroidDashboard() {
               <Button 
                 onClick={() => {
                   if (!isOnline) {
-                    toast.error("Start the node first.");
+                    toast.error("Launch the engine first.");
                     return;
                   }
                   setShowShareQR(true);
@@ -249,8 +259,6 @@ export function AndroidDashboard() {
         tunnelConnected={appState?.node?.tunnelStatus === 'Connected'}
       />
 
-      {/* Bottom Removed for Full Scroll */}
     </div>
   );
 }
-

@@ -67,10 +67,25 @@ import {
 } from "../ui/dropdown-menu";
 import { PreviewModal } from "./PreviewModal";
 import "../../../styles/console.css";
+import "../../../styles/animated-inputs.css";
+import "./node-skeleton.css";
+import "./animated-folder.css";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // STABILITY UTILS
 // ──────────────────────────────────────────────────────────────────────────────
+
+const AnimatedFolder = ({ size = "small" }: { size?: "small" | "large" }) => (
+  <div className={`folder-3d-wrapper folder-3d-${size}`}>
+    <div className="file-v3">
+      <div className="work-5"></div>
+      <div className="work-4"></div>
+      <div className="work-3"></div>
+      <div className="work-2"></div>
+      <div className="work-1"></div>
+    </div>
+  </div>
+);
 
 /**
  * Enhanced fetch that enforces JSON response and handles common errors.
@@ -244,8 +259,10 @@ export function WebConsole() {
   
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup' | 'none'>('none');
+  const [authUsername, setAuthUsername] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
+  const [isFirstHandshake, setIsFirstHandshake] = useState(true);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     return (localStorage.getItem("cloud_storage_theme") as "dark" | "light") || "dark";
   });
@@ -1143,6 +1160,8 @@ export function WebConsole() {
     setIsAuthenticated(false);
     setAuthMode('login');
     setFiles([]);
+    setAuthUsername('');
+    setAuthPassword('');
   };
 
   if (!isAuthenticated && authMode !== 'none') {
@@ -1168,16 +1187,35 @@ export function WebConsole() {
                 : 'Authenticate to access your synchronized files.'}
             </p>
 
-            <form onSubmit={handleAuth} className="space-y-4">
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-[#9CA3AF] uppercase px-1">Passkey</label>
-                <Input 
-                  type="password" required
-                  placeholder="••••••••"
-                  value={authPassword} onChange={e => setAuthPassword(e.target.value)}
-                  className="bg-[#0B1220] border-[#374151] text-white focus:ring-[#2563EB] h-12 rounded-xl"
+            <form onSubmit={handleAuth} className="space-y-2 pt-4">
+              <div className="form-control">
+                <input 
+                  type="text" 
+                  required 
+                  value={authUsername} 
+                  onChange={e => setAuthUsername(e.target.value)} 
+                  autoComplete="username"
                 />
+                <label>
+                  {"Username".split('').map((char, index) => (
+                    <span key={index} style={{ transitionDelay: `${index * 30}ms` }}>{char}</span>
+                  ))}
+                </label>
+              </div>
+
+              <div className="form-control">
+                <input 
+                  type="password" 
+                  required 
+                  value={authPassword} 
+                  onChange={e => setAuthPassword(e.target.value)} 
+                  autoComplete="current-password"
+                />
+                <label>
+                  { (authMode === 'signup' ? "Create Passkey" : "Node Passkey").split('').map((char, index) => (
+                    <span key={index} style={{ transitionDelay: `${index * 30}ms` }}>{char}</span>
+                  ))}
+                </label>
               </div>
 
               {authError && <div className="text-red-400 text-xs font-medium text-center bg-red-500/10 py-2 rounded-lg">{authError}</div>}
@@ -1197,29 +1235,61 @@ export function WebConsole() {
   if (p2pState === 'connecting' || p2pState === 'signaling' || p2pState === 'ice-gathering' || p2pState === 'dc-opening' || (p2pState === 'connected' && !isDataChannelReady)) {
     const getP2PMessage = () => {
       switch (p2pState) {
-        case 'connecting': return 'Initializing P2P stack...';
-        case 'signaling': return 'Negotiating signaling handshake...';
-        case 'ice-gathering': return 'Gathering ICE networking candidates...';
-        case 'dc-opening': return 'Opening secure DataChannel...';
-        case 'connected': return 'Finalizing secure bridge...';
-        default: return 'Establishing Secure Bridge...';
+        case 'connecting': return 'Initializing Node Stack';
+        case 'signaling': return 'Negotiating Handshake';
+        case 'ice-gathering': return 'Gathering Network Nodes';
+        case 'dc-opening': return 'Opening Secure Bridge';
+        case 'connected': return 'Finalizing Link';
+        default: return 'Establishing Secure Bridge';
       }
     };
 
     return (
       <div className="h-screen bg-[#0B1220] flex flex-col items-center justify-center p-6 text-[#E5E7EB] relative overflow-hidden">
-        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-[#2563EB]/10 blur-[120px] rounded-full pointer-events-none" />
-        <div className="z-10 flex flex-col items-center justify-center text-center">
-        <div className="relative mb-8 h-32 flex items-center justify-center">
-            <SquareLoader size="lg" />
-        </div>
-          <h1 className="text-3xl font-bold mb-3 tracking-tight text-white">{getP2PMessage()}</h1>
-          <p className="text-sm text-[#9CA3AF] max-w-sm mx-auto">Creating a direct peer-to-peer connection for fast, private file transfers. No data passes through the relay.</p>
-          <div className="mt-6 flex items-center gap-2 px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded-full">
-            <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-            <span className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">{p2pState}</span>
+        {/* 3D Rotating Background Carousel */}
+        <div className="node-skeleton-wrapper">
+          <div className="node-carousel-inner" style={{ "--quantity": 8 } as any}>
+            {[...Array(8)].map((_, i) => (
+              <div key={i} className="node-carousel-card" style={{ "--index": i } as any}>
+                <Cloud className="animate-pulse" />
+                <span className="node-label">STORAGE NODE</span>
+              </div>
+            ))}
           </div>
         </div>
+
+        {/* Central Animated Status Card */}
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.9, y: 20 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          className="bridge-status-card group"
+        >
+          <div className="card-accent-border" />
+          <div className="card-tag-text">Security Protocol V3</div>
+          
+          <div className="logo-container">
+            <div className="relative flex items-center justify-center">
+              <div className="logo-pulse-ring" />
+              <Cloud className="main-logo-icon" />
+            </div>
+            <div className="status-detail-text">{getP2PMessage()}</div>
+          </div>
+
+          <div className="card-status-bottom">Bridge: {p2pState.toUpperCase()}</div>
+        </motion.div>
+
+        {/* Loading Description */}
+        <motion.div 
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.5 }}
+          className="z-20 mt-12 text-center"
+        >
+          <h1 className="text-xl font-bold mb-2 text-white">Connecting to {shareCode || "Remote Node"}</h1>
+          <p className="text-xs text-[#9CA3AF] max-w-xs mx-auto leading-relaxed">
+            Establishing a direct P2P link to your Android device for encrypted end-to-end file management.
+          </p>
+        </motion.div>
       </div>
     );
   }
@@ -1489,7 +1559,9 @@ export function WebConsole() {
                       >
                         <td className="col-name">
                           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                            <div className={`file-icon-wrap ${file.isDirectory ? "folder-icon" : ""}`}>{getFileIcon(file.name, file.isDirectory, "w-4 h-4")}</div>
+                            <div className={`file-icon-wrap ${file.isDirectory ? "folder-icon" : ""}`}>
+                              {file.isDirectory ? <AnimatedFolder size="small" /> : getFileIcon(file.name, file.isDirectory, "w-4 h-4")}
+                            </div>
                             <span style={{ fontSize: "13px", color: "#E2E5F0" }}>{file.name}</span>
                             <span className={`file-type-badge ${getFileBadgeCategory(file)}`}>{getFileKindLabel(file)}</span>
                           </div>
@@ -1509,7 +1581,9 @@ export function WebConsole() {
                     className={`file-grid-item ${selectedFile?.id === file.id ? "selected" : ""}`}
                     onClick={() => (file.isDirectory ? navigateTo(file.path) : setSelectedFile(file))}
                   >
-                    <div className="file-grid-icon">{getFileIcon(file.name, file.isDirectory, "w-6 h-6")}</div>
+                    <div className="file-grid-icon">
+                      {file.isDirectory ? <AnimatedFolder size="large" /> : getFileIcon(file.name, file.isDirectory, "w-6 h-6")}
+                    </div>
                     <span className="file-grid-name">{file.name}</span>
                     <span className="file-grid-meta">{formatSize(file.size)}</span>
                   </div>

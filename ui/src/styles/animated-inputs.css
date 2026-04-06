@@ -1,0 +1,59 @@
+/* From Uiverse.io by liyaxu123 - Adapted for Easy Storage */
+.form-control {
+  position: relative;
+  margin: 24px 0 32px;
+  width: 100%;
+}
+
+.form-control input {
+  background-color: transparent;
+  border: 0;
+  border-bottom: 2px #374151 solid;
+  display: block;
+  width: 100%;
+  padding: 12px 0;
+  font-size: 16px;
+  color: #fff;
+  transition: border-bottom-color 0.3s ease;
+}
+
+.form-control input:focus,
+.form-control input:valid {
+  outline: 0;
+  border-bottom-color: #2563EB; /* Premium Blue */
+}
+
+/* For password fields, ensure dots look good */
+.form-control input[type="password"] {
+  letter-spacing: 0.1em;
+}
+
+.form-control label {
+  position: absolute;
+  top: 12px;
+  left: 0;
+  pointer-events: none;
+}
+
+.form-control label span {
+  display: inline-block;
+  font-size: 15px;
+  font-weight: 500;
+  min-width: 4px;
+  color: #9CA3AF;
+  transition: 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+.form-control input:focus + label span,
+.form-control input:valid + label span {
+  color: #2563EB;
+  transform: translateY(-28px);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* Custom error message positioning */
+.auth-error-wrap {
+  margin-top: -12px;
+  margin-bottom: 16px;
+}

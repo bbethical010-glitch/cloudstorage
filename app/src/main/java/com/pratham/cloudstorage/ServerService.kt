@@ -127,18 +127,26 @@ class ServerService : Service() {
             server = embeddedServer(Netty, port = DEFAULT_PORT) {
                 install(CORS) {
                     allowMethod(HttpMethod.Options)
+                    allowMethod(HttpMethod.Get)
+                    allowMethod(HttpMethod.Post)
                     allowMethod(HttpMethod.Put)
                     allowMethod(HttpMethod.Delete)
                     allowMethod(HttpMethod.Patch)
-                    allowMethod(HttpMethod.Post)
+
                     allowHeader(io.ktor.http.HttpHeaders.Authorization)
                     allowHeader(io.ktor.http.HttpHeaders.ContentType)
                     allowHeader(io.ktor.http.HttpHeaders.Range)
                     allowHeader(io.ktor.http.HttpHeaders.AcceptRanges)
+                    allowHeader(io.ktor.http.HttpHeaders.Accept)
+                    allowHeader(io.ktor.http.HttpHeaders.AccessControlAllowOrigin)
+                    allowHeader("X-Node-Id")
+                    allowHeader("X-Requested-With")
                     allowHeader("pwd")
+
                     exposeHeader(io.ktor.http.HttpHeaders.ContentLength)
                     exposeHeader(io.ktor.http.HttpHeaders.ContentRange)
                     exposeHeader(io.ktor.http.HttpHeaders.AcceptRanges)
+                    
                     anyHost() // Allow Web Console origin
                 }
 

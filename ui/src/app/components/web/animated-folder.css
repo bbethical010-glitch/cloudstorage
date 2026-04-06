@@ -1,0 +1,144 @@
+/* 3D Animated Folder - Adapted from Uiverse.io by Cobp */
+/* Using standard CSS for broader compatibility and sizing control */
+
+.folder-3d-wrapper {
+  --folder-w: 24px;
+  --folder-h: 18px;
+  --folder-color: #2563EB;
+  --folder-color-light: #60A5FA;
+  --folder-color-dark: #1D4ED8;
+  
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: var(--folder-w);
+  height: var(--folder-h);
+}
+
+.file-v3 {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  perspective: 1000px;
+  z-index: 5;
+  transform-origin: bottom;
+}
+
+/* Back flap */
+.work-5 {
+  background-color: var(--folder-color-dark);
+  width: 100%;
+  height: 100%;
+  transform-origin: top;
+  border-radius: 4px;
+  border-top-left-radius: 0;
+  transition: all 0.3s ease;
+  position: relative;
+}
+
+.work-5::after {
+  content: '';
+  position: absolute;
+  bottom: 99%;
+  left: 0;
+  width: 40%;
+  height: 20%;
+  background-color: var(--folder-color-dark);
+  border-top-left-radius: 4px;
+  border-top-right-radius: 4px;
+}
+
+.work-5::before {
+  content: '';
+  position: absolute;
+  top: -15%;
+  left: 38%;
+  width: 15%;
+  height: 16%;
+  background-color: var(--folder-color-dark);
+  clip-path: polygon(0 35%, 0% 100%, 50% 100%);
+}
+
+/* Paper layers */
+.work-4, .work-3, .work-2 {
+  position: absolute;
+  inset: 1px;
+  border-radius: 3px;
+  transition: all 0.3s ease;
+  transform-origin: bottom;
+  pointer-events: none;
+}
+
+.work-4 { background-color: #9CA3AF; z-index: 1; }
+.work-3 { background-color: #D1D5DB; z-index: 2; }
+.work-2 { background-color: #E5E7EB; z-index: 3; }
+
+/* Front flap */
+.work-1 {
+  position: absolute;
+  bottom: 0;
+  background: linear-gradient(to top, var(--folder-color-dark), var(--folder-color));
+  width: 100%;
+  height: 98%;
+  border-radius: 4px;
+  border-top-right-radius: 0;
+  transition: all 0.3s ease;
+  transform-origin: bottom;
+  display: flex;
+  align-items: flex-end;
+  z-index: 4;
+}
+
+.work-1::after {
+  content: '';
+  position: absolute;
+  bottom: 99%;
+  right: 0;
+  width: 70%;
+  height: 10%;
+  background-color: var(--folder-color);
+  border-top-left-radius: 4px;
+  border-top-right-radius: 4px;
+}
+
+.work-1::before {
+  content: '';
+  position: absolute;
+  top: -8%;
+  right: 68%;
+  width: 10%;
+  height: 10%;
+  background-color: var(--folder-color);
+  clip-path: polygon(100% 14%, 50% 100%, 100% 100%);
+}
+
+/* Hover Animations */
+.folder-3d-wrapper:hover .work-5 {
+  box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+}
+
+.folder-3d-wrapper:hover .work-4 { transform: rotateX(-20deg); }
+.folder-3d-wrapper:hover .work-3 { transform: rotateX(-30deg); }
+.folder-3d-wrapper:hover .work-2 { transform: rotateX(-38deg); }
+.folder-3d-wrapper:hover .work-1 {
+  box-shadow: inset 0 10px 20px rgba(96, 165, 250, 0.3);
+  transform: rotateX(-46deg) translateY(1px);
+}
+
+/* Large variant for Grid View */
+.folder-3d-large {
+  --folder-w: 64px;
+  --folder-h: 44px;
+}
+
+.folder-3d-large .work-5::after { width: 35%; height: 6px; }
+.folder-3d-large .work-1::after { width: 68%; height: 5px; }
+
+/* Small variant for List View */
+.folder-3d-small {
+  --folder-w: 20px;
+  --folder-h: 14px;
+}
