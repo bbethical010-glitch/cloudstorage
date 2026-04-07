@@ -26,6 +26,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import android.Manifest
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -222,6 +225,14 @@ class MainActivity : ComponentActivity() {
         selectedUri = preferences.getString(PREF_SELECTED_URI, null)?.let(Uri::parse)
         shareCode = preferences.getString(PREF_SHARE_CODE, null) ?: generateAndPersistShareCode()
         
+        val requestPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
+        val requiredPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_AUDIO)
+        } else {
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        requestPermissionLauncher.launch(requiredPermissions)
+        
         val savedRelayUrl = preferences.getString(PREF_RELAY_BASE_URL, null).orEmpty()
         if (savedRelayUrl.isBlank()) {
             relayBaseUrl = sanitizeUrl(BuildConfig.RELAY_BASE_URL)
@@ -247,7 +258,10 @@ class MainActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                ServerService.tunnelStatusFlow.collect { status ->
+                ServerService.tunnelStatusFlow
+                    .debounce(1000L)
+                    .distinctUntilChanged()
+                    .collect { status ->
                     if (status == TunnelStatus.Error && isNodeRunning) {
                         Toast.makeText(this@MainActivity, "Relay Connection Error: Check Endpoint URL & Internet", Toast.LENGTH_LONG).show()
                     }

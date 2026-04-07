@@ -615,7 +615,16 @@ export function WebConsole() {
         return;
       }
       
-      if (!res.ok) throw new Error("Failed to load files");
+      if (!res.ok) {
+        let errMessage = `Failed to load files (${res.status})`;
+        try {
+          const errData = await res.json();
+          if (errData?.error) {
+             errMessage = `[API Error] ${errData.error}: ${errData.details || ''}`;
+          }
+        } catch (_) {}
+        throw new Error(errMessage);
+      }
       
       const data = await res.json();
       setFiles(Array.isArray(data) ? data : []);

@@ -424,49 +424,63 @@ class ServerService : Service() {
 
                             val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(rootUri, targetDocId)
 
-                            val jsonList = mutableListOf<String>()
+                            val fileList = mutableListOf<Map<String, Any>>()
                             var currentIndex = 0
 
-                            contentResolver.query(
-                                childrenUri,
-                                arrayOf(
-                                    android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                                    android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                                    android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
-                                    android.provider.DocumentsContract.Document.COLUMN_SIZE,
-                                    android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED
-                                ),
-                                null, null, null
-                            )?.use { cursor ->
-                                val idIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                                val nameIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                                val mimeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE)
-                                val sizeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_SIZE)
-                                val modIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+                            try {
+                                contentResolver.query(
+                                    childrenUri,
+                                    arrayOf(
+                                        android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                                        android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                                        android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
+                                        android.provider.DocumentsContract.Document.COLUMN_SIZE,
+                                        android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED
+                                    ),
+                                    null, null, null
+                                )?.use { cursor ->
+                                    val idIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                                    val nameIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                                    val mimeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE)
+                                    val sizeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_SIZE)
+                                    val modIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED)
 
-                                while (cursor.moveToNext()) {
-                                    val name = if (nameIdx != -1) cursor.getString(nameIdx) else continue
-                                    if (name?.startsWith(".Trash") == true) continue
+                                    while (cursor.moveToNext()) {
+                                        val name = if (nameIdx != -1) cursor.getString(nameIdx) else continue
+                                        if (name?.startsWith(".Trash") == true) continue
 
-                                    if (currentIndex < offset) {
+                                        if (currentIndex < offset) {
+                                            currentIndex++
+                                            continue
+                                        }
+                                        if (fileList.size >= limit) break
+
+                                        val id = if (idIdx != -1) cursor.getString(idIdx) else ""
+                                        val uri = android.provider.DocumentsContract.buildDocumentUriUsingTree(rootUri, id)
+                                        val mime = if (mimeIdx != -1) cursor.getString(mimeIdx) else ""
+                                        val isDirectory = mime == android.provider.DocumentsContract.Document.MIME_TYPE_DIR
+                                        val size = if (sizeIdx != -1) cursor.getLong(sizeIdx) else 0L
+                                        val mod = if (modIdx != -1) cursor.getLong(modIdx) else 0L
+
+                                        val itemPath = if (path.isNullOrBlank()) name else "$path/$name"
+                                        fileList.add(
+                                            mapOf(
+                                                "id" to uri.toString(),
+                                                "name" to name,
+                                                "path" to itemPath,
+                                                "isDirectory" to isDirectory,
+                                                "size" to size,
+                                                "lastModified" to mod
+                                            )
+                                        )
                                         currentIndex++
-                                        continue
                                     }
-                                    if (jsonList.size >= limit) break
-
-                                    val id = if (idIdx != -1) cursor.getString(idIdx) else ""
-                                    val uri = android.provider.DocumentsContract.buildDocumentUriUsingTree(rootUri, id)
-                                    val mime = if (mimeIdx != -1) cursor.getString(mimeIdx) else ""
-                                    val isDirectory = mime == android.provider.DocumentsContract.Document.MIME_TYPE_DIR
-                                    val size = if (sizeIdx != -1) cursor.getLong(sizeIdx) else 0L
-                                    val mod = if (modIdx != -1) cursor.getLong(modIdx) else 0L
-
-                                    val itemPath = if (path.isNullOrBlank()) name else "$path/$name"
-                                    jsonList.add("""{"id":"${uri}","name":"${name}","path":"${itemPath}","isDirectory":${isDirectory},"size":${size},"lastModified":${mod}}""")
-                                    currentIndex++
                                 }
+                                call.respond(fileList)
+                            } catch (e: Exception) {
+                                android.util.Log.e("ServerService", "Error reading files", e)
+                                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "read_failed", "details" to e.message))
                             }
-                            call.respondText(jsonList.joinToString(prefix = "[", postfix = "]"), ContentType.Application.Json)
                         }
 
                         get("/trash") {
@@ -478,38 +492,52 @@ class ServerService : Service() {
                             }
 
                             val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(rootUri, trashDocId)
-                            val jsonList = mutableListOf<String>()
+                            val fileList = mutableListOf<Map<String, Any>>()
 
-                            contentResolver.query(
-                                childrenUri,
-                                arrayOf(
-                                    android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                                    android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                                    android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
-                                    android.provider.DocumentsContract.Document.COLUMN_SIZE,
-                                    android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED
-                                ),
-                                null, null, null
-                            )?.use { cursor ->
-                                val idIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                                val nameIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                                val mimeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE)
-                                val sizeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_SIZE)
-                                val modIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+                            try {
+                                contentResolver.query(
+                                    childrenUri,
+                                    arrayOf(
+                                        android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                                        android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                                        android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
+                                        android.provider.DocumentsContract.Document.COLUMN_SIZE,
+                                        android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED
+                                    ),
+                                    null, null, null
+                                )?.use { cursor ->
+                                    val idIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                                    val nameIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                                    val mimeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE)
+                                    val sizeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_SIZE)
+                                    val modIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED)
 
-                                while (cursor.moveToNext()) {
-                                    val name = if (nameIdx != -1) cursor.getString(nameIdx) else continue
-                                    val id = if (idIdx != -1) cursor.getString(idIdx) else ""
-                                    val uri = android.provider.DocumentsContract.buildDocumentUriUsingTree(rootUri, id)
-                                    val mime = if (mimeIdx != -1) cursor.getString(mimeIdx) else ""
-                                    val isDirectory = mime == android.provider.DocumentsContract.Document.MIME_TYPE_DIR
-                                    val size = if (sizeIdx != -1) cursor.getLong(sizeIdx) else 0L
-                                    val mod = if (modIdx != -1) cursor.getLong(modIdx) else 0L
+                                    while (cursor.moveToNext()) {
+                                        val name = if (nameIdx != -1) cursor.getString(nameIdx) else continue
+                                        val id = if (idIdx != -1) cursor.getString(idIdx) else ""
+                                        val uri = android.provider.DocumentsContract.buildDocumentUriUsingTree(rootUri, id)
+                                        val mime = if (mimeIdx != -1) cursor.getString(mimeIdx) else ""
+                                        val isDirectory = mime == android.provider.DocumentsContract.Document.MIME_TYPE_DIR
+                                        val size = if (sizeIdx != -1) cursor.getLong(sizeIdx) else 0L
+                                        val mod = if (modIdx != -1) cursor.getLong(modIdx) else 0L
 
-                                    jsonList.add("""{"id":"${uri}","name":"${name}","isDirectory":${isDirectory},"size":${size},"lastModified":${mod}}""")
+                                        fileList.add(
+                                            mapOf(
+                                                "id" to uri.toString(),
+                                                "name" to name,
+                                                "path" to name, // Assuming path is just name in trash or handled elsewhere
+                                                "isDirectory" to isDirectory,
+                                                "size" to size,
+                                                "lastModified" to mod
+                                            )
+                                        )
+                                    }
                                 }
+                                call.respond(fileList)
+                            } catch (e: Exception) {
+                                android.util.Log.e("ServerService", "Error reading trash", e)
+                                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "read_failed", "details" to e.message))
                             }
-                            call.respondText(jsonList.joinToString(prefix = "[", postfix = "]"), ContentType.Application.Json)
                         }
 
                         post("/folder") {
