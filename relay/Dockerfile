@@ -30,7 +30,11 @@ WORKDIR /app
 # Copy the built Ktor application (which now contains the React UI inside its JAR/classpath)
 COPY --from=backend-build /workspace/build/install/easy-storage-relay/ ./
 
+# Port logic for Render
 ENV PORT=10000
 EXPOSE 10000
+
+# Ensure binary is executable and check it exists
+RUN chmod +x ./bin/easy-storage-relay && ls -l ./bin/
 
 CMD ["./bin/easy-storage-relay"]

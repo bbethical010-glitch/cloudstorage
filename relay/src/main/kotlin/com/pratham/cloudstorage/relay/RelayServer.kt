@@ -11,6 +11,7 @@ import io.ktor.util.flattenEntries
 import io.ktor.server.routing.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
+import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.http.*
 import io.ktor.websocket.*
 import io.ktor.server.websocket.*
@@ -35,6 +36,8 @@ private val gson = Gson()
 
 fun main() {
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8787
+    println("RELAY_BOOT: Easy Storage Relay starting on 0.0.0.0:$port")
+    
     embeddedServer(Netty, host = "0.0.0.0", port = port) {
         relayModule()
     }.start(wait = true)
@@ -42,6 +45,17 @@ fun main() {
 
 fun Application.relayModule() {
     install(IgnoreTrailingSlash)
+    install(CORS) {
+        allowMethod(HttpMethod.Options)
+        allowMethod(HttpMethod.Get)
+        allowMethod(HttpMethod.Post)
+        allowMethod(HttpMethod.Put)
+        allowMethod(HttpMethod.Delete)
+        allowHeader(HttpHeaders.ContentType)
+        allowHeader(HttpHeaders.Authorization)
+        allowHeader("X-Node-Id")
+        anyHost() // Since this is a public relay Gateway
+    }
     install(WebSockets) {
         pingPeriod = Duration.ofSeconds(20)
         timeout = Duration.ofSeconds(60)
