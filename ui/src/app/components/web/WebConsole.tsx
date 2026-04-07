@@ -367,7 +367,12 @@ export function WebConsole() {
   };
 
   const SidebarContent = () => (
-    <div className="sidebar" style={{ background: 'transparent', border: 'none' }}>
+    <div className="sidebar-content-wrapper" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* Sidebar Header */}
+      <div className="sidebar-nav-label" style={{ padding: '24px 20px 12px', fontSize: '11px', color: '#E2E5F0', fontWeight: 800, letterSpacing: '0.1em' }}>
+        THE VAULT
+      </div>
+
       {/* Upload buttons */}
       <div className="sidebar-upload-section">
         <button className="sidebar-btn sidebar-btn-primary" disabled={isNodeOffline} onClick={() => { fileInputRef.current?.click(); setIsMobileMenuOpen(false); }}>
@@ -1347,7 +1352,7 @@ export function WebConsole() {
       </AnimatePresence>
 
       <div className="console-layout">
-        {/* ═══════════ LEFT SIDEBAR — fixed 260px ═══════════ */}
+        {/* ═══════════ LEFT SIDEBAR — fixed width ═══════════ */}
         <aside className="sidebar">
           <SidebarContent />
         </aside>

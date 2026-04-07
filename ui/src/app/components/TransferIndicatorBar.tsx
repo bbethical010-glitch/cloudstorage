@@ -34,8 +34,10 @@ export function TransferIndicatorBar() {
     const [transfers, setTransfers] = useState<TransferStatus[]>([])
     const [showCompletionFlash, setShowCompletionFlash] = useState(false)
     const [animatedProgress, setAnimatedProgress] = useState(0)
+    const [failureCount, setFailureCount] = useState(0)
     const previousActiveCount = useRef(0)
     const animFrameRef = useRef<number | null>(null)
+    const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
     // Determine the correct API base URL
     const getApiBase = useCallback((): string => {
@@ -63,31 +65,51 @@ export function TransferIndicatorBar() {
         let cancelled = false
         const apiBase = getApiBase()
 
+        // Extract node ID for identification in relay mode
+        const shareCode = window.location.pathname.split('/')[2] || "";
+
         async function poll() {
+            if (failureCount >= 5) {
+                if (pollingIntervalRef.current) {
+                    clearInterval(pollingIntervalRef.current);
+                    pollingIntervalRef.current = null;
+                }
+                return;
+            }
+
             try {
-                const res = await fetch(`${apiBase}/api/transfer_status`, {
+                // Ensure nodeId is passed so the relay server knows which node to query
+                const url = new URL(`${apiBase || window.location.origin}/api/transfer_status`);
+                if (shareCode) url.searchParams.set('nodeId', shareCode);
+
+                const res = await fetch(url.toString(), {
                     headers: getHeaders()
                 })
-                if (!res.ok) return
+                
+                if (!res.ok) {
+                    setFailureCount(prev => prev + 1);
+                    return;
+                }
+
                 const data: TransferStatus[] = await res.json()
                 if (!cancelled) {
-                    // Only show transfers that are active, or finished/failed within the last 3-5 seconds
-                    // The backend TransferRegistry already performs cleanup, but we filter here for safety.
                     setTransfers(data)
+                    setFailureCount(0); // Reset on success
                 }
-            } catch {
-                // Silently ignore polling errors
+            } catch (err) {
+                setFailureCount(prev => prev + 1);
             }
         }
 
-        const interval = setInterval(poll, 1000)
-        poll() // Immediate first poll
+        const interval = setInterval(poll, 1500); // 1.5s for stability
+        pollingIntervalRef.current = interval;
+        poll(); // Immediate first poll
 
         return () => {
             cancelled = true
-            clearInterval(interval)
+            if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current)
         }
-    }, [getApiBase, getHeaders])
+    }, [getApiBase, getHeaders, failureCount])
 
     // Detect transition from active → empty for completion flash
     useEffect(() => {
