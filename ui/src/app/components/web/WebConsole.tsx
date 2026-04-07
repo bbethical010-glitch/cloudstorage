@@ -268,6 +268,7 @@ export function WebConsole() {
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
   const [isFirstHandshake, setIsFirstHandshake] = useState(true);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     return (localStorage.getItem("cloud_storage_theme") as "dark" | "light") || "dark";
   });
@@ -335,11 +336,19 @@ export function WebConsole() {
   /* logic moved below to use webrtc hook status */
 
   useEffect(() => {
+    if (!shareCode) {
+      setIsCheckingAuth(false);
+      return;
+    }
+
     const checkAuth = async () => {
+      setIsCheckingAuth(true);
       try {
-        const data = await fetchJson<{hasAccount: boolean}>(buildApiUrl('/api/auth/status'));
+        const authStatusUrl = buildApiUrl('/api/auth/status');
+        const data = await fetchJson<{hasAccount: boolean}>(authStatusUrl);
+        
         const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token');
-        const params = new URLSearchParams(window.location.hash.split('?')[1]);
+        const params = new URLSearchParams(window.location.hash.includes('?') ? window.location.hash.split('?')[1] : '');
         const pwd = params.get('pwd') || token;
 
         if (pwd) {
@@ -354,10 +363,14 @@ export function WebConsole() {
         setAuthMode(data.hasAccount ? 'login' : 'signup');
       } catch (e) {
         console.error("Auth check failed:", e);
+        setIsAuthenticated(false);
+        // If 400/401 occurred, it will be handled by the fact that isAuthenticated remains false
+      } finally {
+        setIsCheckingAuth(false);
       }
     };
     void checkAuth();
-  }, [buildApiUrl, getHeaders]);
+  }, [shareCode, buildApiUrl, getHeaders]);
 
   const logActivity = useCallback((msg: string, type: 'sys' | 'net' | 'io' = 'sys') => {
     const id = Math.random().toString(36).substring(7);
@@ -1306,13 +1319,15 @@ export function WebConsole() {
                 exit={{ opacity: 0 }} 
                 className="offline-overlay"
                 style={{ 
+                  position: "absolute",
+                  inset: 0,
                   background: "rgba(11, 18, 32, 0.98)",
                   backdropFilter: "blur(20px)",
                   display: "flex",
                   flexDirection: "column",
                   alignItems: "center",
                   justifyContent: "center",
-                  zIndex: 50
+                  zIndex: 60
                 }}
               >
                 <div className="w-full max-w-sm px-6">
@@ -1382,21 +1397,23 @@ export function WebConsole() {
               </motion.div>
             )}
 
-            {/* P2P Connection Loader Gate — now integrated into layout */}
-            {(p2pState === 'connecting' || p2pState === 'signaling' || p2pState === 'ice-gathering' || p2pState === 'dc-opening' || (p2pState === 'connected' && !isDataChannelReady)) && (
+            {/* P2P Connection & Auth Loader Gate — now synchronized */}
+            {(isCheckingAuth || p2pState === 'connecting' || p2pState === 'signaling' || p2pState === 'ice-gathering' || p2pState === 'dc-opening' || (p2pState === 'connected' && !isDataChannelReady)) && (
               <motion.div 
                 initial={{ opacity: 0 }} 
                 animate={{ opacity: 1 }} 
                 exit={{ opacity: 0 }} 
                 className="offline-overlay"
                 style={{ 
+                  position: "absolute",
+                  inset: 0,
                   background: "rgba(11, 18, 32, 0.98)",
                   backdropFilter: "blur(20px)",
                   display: "flex",
                   flexDirection: "column",
                   alignItems: "center",
                   justifyContent: "center",
-                  zIndex: 40,
+                  zIndex: 100,
                   textAlign: "center",
                   padding: "2rem"
                 }}
@@ -1405,7 +1422,8 @@ export function WebConsole() {
                   <SquareLoader size="lg" color="#22C55E" />
                 </div>
                 <h1 className="text-3xl font-bold mb-3 tracking-tight text-white">
-                  {p2pState === 'connecting' ? 'Initializing Node Stack...' :
+                  {isCheckingAuth ? 'Securing Bridge Connection...' :
+                   p2pState === 'connecting' ? 'Initializing Node Stack...' :
                    p2pState === 'signaling' ? 'Negotiating Handshake...' :
                    p2pState === 'ice-gathering' ? 'Gathering Network Nodes...' :
                    p2pState === 'dc-opening' ? 'Opening Secure Bridge...' :
@@ -1413,17 +1431,20 @@ export function WebConsole() {
                    'Establishing Secure Connection...'}
                 </h1>
                 <p className="text-sm text-[#9CA3AF] max-w-sm mx-auto leading-relaxed">
-                  Creating a direct peer-to-peer connection for fast, private file transfers.
-                  No data passes through the relay.
+                  {isCheckingAuth 
+                    ? 'Verifying node credentials and establishing a secure signaling channel.' 
+                    : 'Creating a direct peer-to-peer connection for fast, private file transfers.'}
                 </p>
                 <div className="mt-8 flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full">
                   <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">{p2pState}</span>
+                  <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">
+                    {isCheckingAuth ? 'Authenticating' : p2pState}
+                  </span>
                 </div>
               </motion.div>
             )}
 
-            {isNodeOffline && (
+            {!isCheckingAuth && isNodeOffline && (
 
               <motion.div 
                 initial={{ opacity: 0 }} 
@@ -1431,13 +1452,15 @@ export function WebConsole() {
                 exit={{ opacity: 0 }} 
                 className="offline-overlay"
                 style={{ 
+                  position: "absolute",
+                  inset: 0,
                   background: "rgba(11, 18, 32, 0.95)",
                   backdropFilter: "blur(12px)",
                   display: "flex",
                   flexDirection: "column",
                   alignItems: "center",
                   justifyContent: "center",
-                  zIndex: 100
+                  zIndex: 40
                 }}
               >
                 <div style={{ position: "relative", marginBottom: 32 }}>

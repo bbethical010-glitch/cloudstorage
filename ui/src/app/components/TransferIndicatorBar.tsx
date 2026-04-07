@@ -47,11 +47,15 @@ export function TransferIndicatorBar() {
 
     const getHeaders = useCallback(() => {
         const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token') || '';
-        const params = new URLSearchParams(window.location.hash.split('?')[1]);
+        const paramsStr = window.location.hash.includes('?') ? window.location.hash.split('?')[1] : '';
+        const params = new URLSearchParams(paramsStr);
         const pwd = params.get('pwd') || token;
         
-        // Extract node ID if present in the URL (for relay mode)
-        const shareCode = window.location.pathname.split('/')[2] || "";
+        // Extract node ID correctly from hash or path (e.g. #/console/ID)
+        const pattern = /(?:node|console)\/([A-Z0-9]{5,20})/i;
+        const pathMatch = window.location.pathname.match(pattern);
+        const hashMatch = window.location.hash.match(pattern);
+        const shareCode = (pathMatch?.[1] || hashMatch?.[1] || '').toUpperCase();
 
         return {
             'Authorization': `Bearer ${pwd}`,
@@ -65,10 +69,15 @@ export function TransferIndicatorBar() {
         let cancelled = false
         const apiBase = getApiBase()
 
-        // Extract node ID for identification in relay mode
-        const shareCode = window.location.pathname.split('/')[2] || "";
+        // Extract node ID correctly for signaling/relay
+        const pattern = /(?:node|console)\/([A-Z0-9]{5,20})/i;
+        const pathMatch = window.location.pathname.match(pattern);
+        const hashMatch = window.location.hash.match(pattern);
+        const shareCode = (pathMatch?.[1] || hashMatch?.[1] || '').toUpperCase();
 
         async function poll() {
+            if (!shareCode && !window.Android) return; // Don't poll if we don't have a node and aren't in-app
+            
             if (failureCount >= 5) {
                 if (pollingIntervalRef.current) {
                     clearInterval(pollingIntervalRef.current);
