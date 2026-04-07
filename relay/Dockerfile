@@ -9,28 +9,34 @@ COPY ui/ ./
 # Build the Vite React app
 RUN npm run build
 
-# Stage 2: Build Ktor Backend
-FROM gradle:8.7.0-jdk17 AS backend-build
+# Stage 2: Build Ktor Backend (Multi-Module Context)
+FROM eclipse-temurin:17-jdk AS backend-build
 WORKDIR /workspace
 
-# Copy gradle config
-COPY relay/build.gradle.kts relay/settings.gradle.kts ./
-# Copy backend source
-COPY relay/src ./src
+# Copy Gradle wrapper and root configuration
+COPY gradlew ./
+COPY gradle/ ./gradle/
+COPY build.gradle.kts settings.gradle.kts gradle.properties ./
 
-# Copy built frontend into the Ktor resources directory BEFORE building
-COPY --from=frontend-build /ui/dist ./src/main/resources/static
+# Copy the relay module source and config
+COPY relay/build.gradle.kts relay/settings.gradle.kts ./relay/
+COPY relay/src ./relay/src
 
-# Build the complete bundled application
-RUN gradle --no-daemon installDist
+# Copy built frontend into the relay resources directory
+COPY --from=frontend-build /ui/dist ./relay/src/main/resources/static
+
+# Build the relay module using the wrapper
+RUN ./gradlew :relay:installDist --no-daemon
 
 # Stage 3: Minimal Runtime
 FROM eclipse-temurin:17-jre
 WORKDIR /app
-# Copy the built Ktor application (which now contains the React UI inside its JAR/classpath)
-COPY --from=backend-build /workspace/build/install/easy-storage-relay/ ./
 
-# Port logic for Render
+# Copy the built Ktor application from the module output
+# Note the path: relay/build/install/easy-storage-relay
+COPY --from=backend-build /workspace/relay/build/install/easy-storage-relay/ ./
+
+# Port for Render
 ENV PORT=10000
 EXPOSE 10000
 
