@@ -67,7 +67,17 @@ fun Application.relayModule() {
     routing {
         // 1. HEALTH CHECK MUST BE AT THE VERY TOP
         get("/health") {
-            call.respondText("relay_online", status = HttpStatusCode.OK)
+            val hasIndex = registry.javaClass.classLoader.getResource("static/index.html") != null
+            call.respondJson(mapOf(
+                "status" to "ok",
+                "version" to "1.1.20",
+                "index_ready" to hasIndex,
+                "nodes_connected" to registry.connectedAgentCount()
+            ))
+        }
+
+        get("/api/health") {
+            call.respondText("ok", status = HttpStatusCode.OK)
         }
 
         // 2. STATIC ASSETS SECOND
