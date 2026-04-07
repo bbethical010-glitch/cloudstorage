@@ -19,7 +19,8 @@ COPY gradle/ ./gradle/
 COPY build.gradle.kts settings.gradle.kts gradle.properties ./
 
 # Copy the relay module source and config
-COPY relay/build.gradle.kts relay/src ./relay/src
+COPY relay/build.gradle.kts ./relay/
+COPY relay/src ./relay/src
 # We don't copy relay/settings.gradle.kts because it's ignored in multi-module builds
 
 # COPY built frontend into the relay resources directory
