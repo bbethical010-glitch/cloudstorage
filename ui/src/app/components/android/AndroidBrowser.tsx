@@ -188,7 +188,7 @@ export function AndroidBrowser() {
       }
 
       setUploadProgress(null);
-      toast.success(`Uploaded: ${file.name}`);
+      // toast.success(`Uploaded: ${file.name}`);
       const appSet = JSON.parse(localStorage.getItem('appSettings') || '{}');
       if (appSet.notifications !== 'None') {
         androidBridge.showNotification("Upload Complete", file.name);

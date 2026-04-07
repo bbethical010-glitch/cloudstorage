@@ -916,6 +916,8 @@ export function WebConsole() {
         fileProgressMap[fileId] = 0;
 
         let relativePath = file.webkitRelativePath || "";
+        // Sanitize backslashes to forward slashes, and remove leading slashes
+        relativePath = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
         let filename = file.name;
         if (relativePath) {
             filename = relativePath.split('/').pop() || file.name;
@@ -1003,7 +1005,7 @@ export function WebConsole() {
     } else {
         setUploadStatus('success');
         setUploadProgress(100);
-        toast.success("All files uploaded successfully!");
+        // Removed intrusive top toast: toast.success("All files uploaded successfully!");
     }
     
     if (fileInputRef.current) fileInputRef.current.value = "";

@@ -39,7 +39,8 @@ object TransferRegistry {
     val transfers: StateFlow<Map<String, TransferStatus>> = _transfers.asStateFlow()
 
     val activeTransfers: StateFlow<List<TransferStatus>> = _transfers
-        .map { map -> map.values.filter { it.isActive }.sortedByDescending { it.startedAt } }
+        .sample(250L)
+        .map { map -> map.values.sortedByDescending { it.startedAt } }
         .stateIn(
             scope = scope,
             started = SharingStarted.Eagerly,
