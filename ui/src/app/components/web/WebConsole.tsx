@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useParams } from "react-router";
-import { useWebRTC } from '../../hooks/useWebRTC';
+import { useWebRTC, type P2PConnectionState } from '../../hooks/useWebRTC';
 import type { P2PResponse } from '../../hooks/p2pTransport';
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -235,13 +235,19 @@ export function WebConsole() {
 
   const getShareCode = () => {
     if (paramShareCode) return paramShareCode.toUpperCase();
+    
     const searchParams = new URLSearchParams(window.location.search);
     const queryCode = searchParams.get('code') || searchParams.get('shareCode');
     if (queryCode) return queryCode.toUpperCase();
+    
     const path = window.location.pathname;
     const hash = window.location.hash;
-    const pathMatch = path.match(/\/(?:node|console)\/([A-Z0-9]{5,20})/i);
-    const hashMatch = hash.match(/\/(?:node|console|#\/console)\/([A-Z0-9]{5,20})/i);
+    
+    // Improved regex to handle /console/ and #/console/ patterns without requiring a leading slash
+    const pattern = /(?:node|console)\/([A-Z0-9]{5,20})/i;
+    const pathMatch = path.match(pattern);
+    const hashMatch = hash.match(pattern);
+    
     return (pathMatch?.[1] || hashMatch?.[1] || '').toUpperCase();
   };
 
@@ -475,7 +481,9 @@ export function WebConsole() {
 
   // Unified "Online" Detection: Node is online if signaling OR P2P is healthy OR we are on a direct local connection
   useEffect(() => {
-    const isOnline = isLocalSession || isSignalingOnline || (p2pState === 'connected' && isDataChannelReady);
+    // We are NOT offline if we are actively connecting
+    const isConnecting = (p2pState === 'connecting' || p2pState === 'signaling' || p2pState === 'ice-gathering' || p2pState === 'dc-opening' || (p2pState === 'connected' && !isDataChannelReady));
+    const isOnline = isLocalSession || isSignalingOnline || (p2pState === 'connected' && isDataChannelReady) || isConnecting;
     setIsNodeOffline(!isOnline);
   }, [isLocalSession, isSignalingOnline, p2pState, isDataChannelReady]);
 
@@ -1168,107 +1176,6 @@ export function WebConsole() {
     setAuthPassword('');
   };
 
-  if (!isAuthenticated && authMode !== 'none') {
-    return (
-      <div className="h-screen bg-[#0B1220] flex flex-col items-center justify-center p-6 text-[#E5E7EB] relative overflow-hidden">
-        {/* Decorative Gradients */}
-        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-[#2563EB]/20 blur-[120px] rounded-full pointer-events-none" />
-        <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-[#A855F7]/20 blur-[120px] rounded-full pointer-events-none" />
-        
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="z-10 w-full max-w-md">
-          <Card className="bg-[#111827]/80 backdrop-blur-xl border-[#1F2937] p-8 shadow-2xl rounded-3xl">
-            <div className="flex justify-center mb-6">
-              <div className="w-16 h-16 bg-gradient-to-br from-[#2563EB] to-[#A855F7] rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/20">
-                <Cloud className="w-8 h-8 text-white" />
-              </div>
-            </div>
-            <h2 className="text-3xl font-bold text-center text-white mb-2">
-              {authMode === 'signup' ? 'Claim Your Node' : 'Node Locked'}
-            </h2>
-            <p className="text-center text-[#9CA3AF] mb-8 text-sm">
-              {authMode === 'signup' 
-                ? 'Register credentials directly onto your physical Android device to secure this bridge.' 
-                : 'Authenticate to access your synchronized files.'}
-            </p>
-
-            <form onSubmit={handleAuth} className="space-y-2 pt-4">
-              <div className="form-control">
-                <input 
-                  type="text" 
-                  required 
-                  value={authUsername} 
-                  onChange={e => setAuthUsername(e.target.value)} 
-                  autoComplete="username"
-                />
-                <label>
-                  {"Username".split('').map((char, index) => (
-                    <span key={index} style={{ transitionDelay: `${index * 30}ms` }}>{char}</span>
-                  ))}
-                </label>
-              </div>
-
-              <div className="form-control">
-                <input 
-                  type="password" 
-                  required 
-                  value={authPassword} 
-                  onChange={e => setAuthPassword(e.target.value)} 
-                  autoComplete="current-password"
-                />
-                <label>
-                  { (authMode === 'signup' ? "Create Passkey" : "Node Passkey").split('').map((char, index) => (
-                    <span key={index} style={{ transitionDelay: `${index * 30}ms` }}>{char}</span>
-                  ))}
-                </label>
-              </div>
-
-              {authError && <div className="text-red-400 text-xs font-medium text-center bg-red-500/10 py-2 rounded-lg">{authError}</div>}
-
-              <button type="submit" className="w-full launch-node-btn mt-4">
-                <Cloud className="w-5 h-5" />
-                <span>{authMode === 'signup' ? 'Secure Node Bridge' : 'Unlock Node Bridge'}</span>
-              </button>
-            </form>
-          </Card>
-        </motion.div>
-      </div>
-    );
-  }
-
-
-  if (p2pState === 'connecting' || p2pState === 'signaling' || p2pState === 'ice-gathering' || p2pState === 'dc-opening' || (p2pState === 'connected' && !isDataChannelReady)) {
-    const getP2PMessage = () => {
-      switch (p2pState) {
-        case 'connecting': return 'Initializing Node Stack...';
-        case 'signaling': return 'Negotiating Handshake...';
-        case 'ice-gathering': return 'Gathering Network Nodes...';
-        case 'dc-opening': return 'Opening Secure Bridge...';
-        case 'connected': return 'Finalizing Bridge...';
-        default: return 'Establishing Secure Connection...';
-      }
-    };
-
-    return (
-      <div className="h-screen bg-[#0B1220] flex flex-col items-center justify-center p-6 text-[#E5E7EB] relative overflow-hidden">
-        {/* Previous Green Buffering UI design — glow and simple centering */}
-        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-[#22C55E]/10 blur-[120px] rounded-full pointer-events-none" />
-        <div className="z-10 flex flex-col items-center justify-center text-center">
-          <div className="relative mb-8 h-32 flex items-center justify-center">
-            <SquareLoader size="lg" color="#22C55E" />
-          </div>
-          <h1 className="text-3xl font-bold mb-3 tracking-tight text-white">{getP2PMessage()}</h1>
-          <p className="text-sm text-[#9CA3AF] max-w-sm mx-auto leading-relaxed">
-            Creating a direct peer-to-peer connection for fast, private file transfers.
-            No data passes through the relay.
-          </p>
-          <div className="mt-8 flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full">
-            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">{p2pState}</span>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="app-shell">
@@ -1391,6 +1298,80 @@ export function WebConsole() {
         >
           {/* Drag overlay */}
           <AnimatePresence>
+            {/* Auth Gate — Integrated into layout */}
+            {!isAuthenticated && authMode !== 'none' && (
+              <motion.div 
+                initial={{ opacity: 0 }} 
+                animate={{ opacity: 1 }} 
+                exit={{ opacity: 0 }} 
+                className="offline-overlay"
+                style={{ 
+                  background: "rgba(11, 18, 32, 0.98)",
+                  backdropFilter: "blur(20px)",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  zIndex: 50
+                }}
+              >
+                <div className="w-full max-w-sm px-6">
+                  <div className="flex justify-center mb-8">
+                    <div className="w-16 h-16 bg-gradient-to-br from-[#2563EB] to-[#A855F7] rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+                      <Cloud className="w-8 h-8 text-white" />
+                    </div>
+                  </div>
+                  <h2 className="text-2xl font-bold text-center text-white mb-2">
+                    {authMode === 'signup' ? 'Claim Your Node' : 'Node Locked'}
+                  </h2>
+                  <p className="text-center text-[#9CA3AF] mb-8 text-xs leading-relaxed">
+                    {authMode === 'signup' 
+                      ? 'Register credentials directly onto your physical Android device to secure this bridge.' 
+                      : 'Authenticate to access your synchronized files.'}
+                  </p>
+
+                  <form onSubmit={handleAuth} className="space-y-4">
+                    <div className="form-control">
+                      <input 
+                        type="text" 
+                        required 
+                        value={authUsername} 
+                        onChange={e => setAuthUsername(e.target.value)} 
+                        autoComplete="username"
+                      />
+                      <label>
+                        {"Username".split('').map((char, index) => (
+                          <span key={index} style={{ transitionDelay: `${index * 30}ms` }}>{char}</span>
+                        ))}
+                      </label>
+                    </div>
+
+                    <div className="form-control">
+                      <input 
+                        type="password" 
+                        required 
+                        value={authPassword} 
+                        onChange={e => setAuthPassword(e.target.value)} 
+                        autoComplete="current-password"
+                      />
+                      <label>
+                        { (authMode === 'signup' ? "Create Passkey" : "Node Passkey").split('').map((char, index) => (
+                          <span key={index} style={{ transitionDelay: `${index * 30}ms` }}>{char}</span>
+                        ))}
+                      </label>
+                    </div>
+
+                    {authError && <div className="text-red-400 text-xs font-medium text-center bg-red-500/10 py-2 rounded-lg">{authError}</div>}
+
+                    <button type="submit" className="w-full launch-node-btn mt-6">
+                      <Cloud className="w-5 h-5" />
+                      <span>{authMode === 'signup' ? 'Secure Node Bridge' : 'Unlock Node Bridge'}</span>
+                    </button>
+                  </form>
+                </div>
+              </motion.div>
+            )}
+
             {isDragging && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="drag-overlay">
                 <div style={{ width: 56, height: 56, background: "rgba(37,99,235,0.15)", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
@@ -1401,7 +1382,49 @@ export function WebConsole() {
               </motion.div>
             )}
 
+            {/* P2P Connection Loader Gate — now integrated into layout */}
+            {(p2pState === 'connecting' || p2pState === 'signaling' || p2pState === 'ice-gathering' || p2pState === 'dc-opening' || (p2pState === 'connected' && !isDataChannelReady)) && (
+              <motion.div 
+                initial={{ opacity: 0 }} 
+                animate={{ opacity: 1 }} 
+                exit={{ opacity: 0 }} 
+                className="offline-overlay"
+                style={{ 
+                  background: "rgba(11, 18, 32, 0.98)",
+                  backdropFilter: "blur(20px)",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  zIndex: 40,
+                  textAlign: "center",
+                  padding: "2rem"
+                }}
+              >
+                <div className="relative mb-8 h-32 flex items-center justify-center">
+                  <SquareLoader size="lg" color="#22C55E" />
+                </div>
+                <h1 className="text-3xl font-bold mb-3 tracking-tight text-white">
+                  {p2pState === 'connecting' ? 'Initializing Node Stack...' :
+                   p2pState === 'signaling' ? 'Negotiating Handshake...' :
+                   p2pState === 'ice-gathering' ? 'Gathering Network Nodes...' :
+                   p2pState === 'dc-opening' ? 'Opening Secure Bridge...' :
+                   p2pState === 'connected' ? 'Finalizing Bridge...' :
+                   'Establishing Secure Connection...'}
+                </h1>
+                <p className="text-sm text-[#9CA3AF] max-w-sm mx-auto leading-relaxed">
+                  Creating a direct peer-to-peer connection for fast, private file transfers.
+                  No data passes through the relay.
+                </p>
+                <div className="mt-8 flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full">
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">{p2pState}</span>
+                </div>
+              </motion.div>
+            )}
+
             {isNodeOffline && (
+
               <motion.div 
                 initial={{ opacity: 0 }} 
                 animate={{ opacity: 1 }} 
