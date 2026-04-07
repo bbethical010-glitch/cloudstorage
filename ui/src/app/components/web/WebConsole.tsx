@@ -1860,25 +1860,33 @@ export function WebConsole() {
       </AnimatePresence>
 
       {/* Preview Modal */}
-      <PreviewModal
-        selectedFile={activePreviewFile}
-        currentPath={currentPath}
-        apiFetch={apiFetch}
-        onClose={() => setActivePreviewFile(null)}
-        onRename={handleRename}
-        onShare={() => setShowShareModal(true)}
-        onMove={(file) => {
-          const dest = prompt("Enter destination folder path (e.g. Documents):");
-          if (dest !== null) {
-            setSelectedFiles(new Set([file.id]));
-            handleBulkAction('move', dest);
-          }
-        }}
-        onDelete={handleDelete}
-        formatSize={formatSize}
-        formatDate={formatDate}
-        getFileIcon={getFileIcon}
-      />
+      <AnimatePresence>
+        {activePreviewFile && (
+          <div className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-md p-4 md:p-8 flex items-center justify-center">
+            <div className="w-full max-w-5xl h-[90vh] bg-[#08090E] rounded-[2rem] border border-[#1C2035] shadow-2xl overflow-hidden relative">
+              <PreviewModal
+                selectedFile={activePreviewFile}
+                currentPath={currentPath}
+                apiFetch={apiFetch}
+                onClose={() => setActivePreviewFile(null)}
+                onRename={handleRename}
+                onShare={() => setShowShareModal(true)}
+                onMove={(file) => {
+                  const dest = prompt("Enter destination folder path (e.g. Documents):");
+                  if (dest !== null) {
+                    setSelectedFiles(new Set([file.id]));
+                    handleBulkAction('move', dest);
+                  }
+                }}
+                onDelete={handleDelete}
+                formatSize={formatSize}
+                formatDate={formatDate}
+                getFileIcon={getFileIcon}
+              />
+            </div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <svg width="0" height="0" style={{ position: "absolute" }}>
         <defs>
