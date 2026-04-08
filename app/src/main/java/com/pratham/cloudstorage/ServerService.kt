@@ -817,14 +817,12 @@ class ServerService : Service() {
                                     val relativePath = item.optString("relativePath", "")
                                     if (relativePath.isBlank()) continue
                                     
-                                    // Align separators as requested
-                                    val normalizedRelPath = relativePath.replace("/", File.separator).replace("\\", File.separator)
-                                    val cleanPath = sanitizeRelativePath(normalizedRelPath)
+                                    val cleanPath = validateAndNormalizeRelativePath(relativePath)
                                     
                                     // Extract parent directory tree (everything before the last separator)
-                                    if (!cleanPath.contains(File.separator)) continue
-                                    val parentDirPath = cleanPath.substringBeforeLast(File.separator)
-                                    val dirSegments = parentDirPath.split(File.separator).filter { it.isNotBlank() }
+                                    if (!cleanPath.contains("/")) continue
+                                    val parentDirPath = cleanPath.substringBeforeLast("/")
+                                    val dirSegments = parentDirPath.split("/").filter { it.isNotBlank() }
 
                                     var currentDir: DocumentFile = baseDir
                                     var currentKey = ""
@@ -849,7 +847,7 @@ class ServerService : Service() {
                                     }
                                 }
                                 call.respondJson(true, data = mapOf("directoriesCreated" to directoriesCreated))
-                            } catch (e: IllegalArgumentException) {
+                            } catch (e: SecurityException) {
                                 android.util.Log.e("ServerService", "Invalid path traversal in manifest", e)
                                 call.respondJson(false, "Invalid path traversal detected", "INVALID_PATH")
                             } catch (e: Exception) {
@@ -964,7 +962,7 @@ class ServerService : Service() {
 
                                 if (!relativePath.isNullOrBlank()) {
                                     try {
-                                        val cleanPath = sanitizeRelativePath(relativePath)
+                                        val cleanPath = validateAndNormalizeRelativePath(relativePath)
                                         val originalFileName = cleanPath.substringAfterLast("/")
                                         finalFileName = sanitizeFilename(originalFileName)
                                         val dirPath = cleanPath.substringBeforeLast("/", "")
@@ -977,6 +975,8 @@ class ServerService : Service() {
                                         for (segment in segments) {
                                             targetDir = resolveOrCreateDirectory(targetDir, segment)
                                         }
+                                    } catch (e: SecurityException) {
+                                        return@post call.respondJson(false, e.message ?: "Invalid path traversal detected", "INVALID_PATH")
                                     } catch (e: Exception) {
                                         return@post call.respondJson(false, "Directory resolution failed: ${e.message}", "DIR_ERROR")
                                     }
@@ -1235,18 +1235,39 @@ class ServerService : Service() {
         return name
             .replace(' ', '_')
             .replace(Regex("[()\\[\\]]"), "")
-            .replace(Regex("\\.{2,}"), ".")
             .replace(Regex("[^a-zA-Z0-9._\\-]"), "_")
             .trimEnd('.')
             .ifEmpty { "unnamed_file" }
     }
 
-    private fun sanitizeRelativePath(relativePath: String): String {
-        val clean = relativePath.removePrefix("/").removePrefix("./")
-        if (clean.contains("..") || clean.contains("./") || clean.contains("//")) {
-            throw IllegalArgumentException("Invalid path traversal detected")
+    private fun validateAndNormalizeRelativePath(relativePath: String): String {
+        val normalized = relativePath
+            .replace('\\', '/')
+            .trim()
+            .trimStart('/')
+
+        if (normalized.isBlank()) {
+            throw SecurityException("Invalid path traversal detected")
         }
-        return clean
+
+        val baseDir = File(applicationContext.getExternalFilesDir(null) ?: applicationContext.filesDir, "EasyStorage")
+        val canonicalBaseDir = baseDir.canonicalFile
+        val targetFile = File(canonicalBaseDir, normalized)
+        val canonicalTargetFile = targetFile.canonicalFile
+
+        val safeBasePath = canonicalBaseDir.path
+        val allowedPrefix = if (safeBasePath.endsWith(File.separator)) safeBasePath else "$safeBasePath${File.separator}"
+        val targetPath = canonicalTargetFile.path
+
+        // canonicalPath resolves traversal segments like "../../etc/passwd" while preserving
+        // legitimate filenames such as "script..py", so only true directory escapes are blocked.
+        if (targetPath != safeBasePath && !targetPath.startsWith(allowedPrefix)) {
+            throw SecurityException("Invalid path traversal detected")
+        }
+
+        return canonicalTargetFile
+            .relativeTo(canonicalBaseDir)
+            .invariantSeparatorsPath
     }
 
     private fun resolveSafeDocIdFast(rootUri: Uri, path: String?): String? {
