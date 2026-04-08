@@ -786,70 +786,74 @@ class ServerService : Service() {
                                 val basePath = call.request.queryParameters["path"] ?: ""
                                 val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
                                 if (root == null) {
-                                    call.respondText("{\"error\":\"storage_unavailable\"}", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
+                                    call.respondJson(false, "Storage unavailable", "STORAGE_OFFLINE")
                                     return@post
                                 }
-                                val baseDir = ensureSafePathFast(rootUri, basePath)
-                                if (baseDir == null) {
-                                    call.respondText("{\"error\":\"storage_unavailable\"}", ContentType.Application.Json, HttpStatusCode.NotFound)
+
+                                // Use helper to get base directory reliably
+                                val baseDir = if (basePath.isBlank() || basePath == "/") root 
+                                              else resolveSafePath(root, basePath)
+
+                                if (baseDir == null || !baseDir.isDirectory) {
+                                    call.respondJson(false, "Upload target directory not found", "TARGET_NOT_FOUND")
                                     return@post
                                 }
 
                                 val jsonStr: String = call.receiveText()
                                 if (jsonStr.isBlank() || !jsonStr.startsWith("[")) {
-                                    android.util.Log.e("ServerService", "Empty or malformed JSON received for folder manifest: $jsonStr")
-                                    call.respondText("{\"error\":\"empty_or_malformed_manifest\"}", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                                    call.respondJson(false, "Empty or malformed manifest", "BAD_MANIFEST")
                                     return@post
                                 }
 
                                 val jsonArray = org.json.JSONArray(jsonStr)
                                 var directoriesCreated = 0
 
+                                // Unified directory cache for efficiency during bulk manifest processing
                                 val dirCache = mutableMapOf<String, DocumentFile>()
-                                dirCache[""] = baseDir
-
+                                
                                 for (i in 0 until jsonArray.length()) {
                                     val item = jsonArray.getJSONObject(i)
                                     val relativePath = item.optString("relativePath", "")
-                                    if (relativePath.isBlank() || !relativePath.contains("/")) continue
+                                    if (relativePath.isBlank()) continue
                                     
-                                    val cleanPath = sanitizeRelativePath(relativePath)
-                                    val dirPath = cleanPath.substringBeforeLast("/")
-                                    val dirSegments = dirPath.split("/").filter { it.isNotBlank() }
+                                    // Align separators as requested
+                                    val normalizedRelPath = relativePath.replace("/", File.separator).replace("\\", File.separator)
+                                    val cleanPath = sanitizeRelativePath(normalizedRelPath)
+                                    
+                                    // Extract parent directory tree (everything before the last separator)
+                                    if (!cleanPath.contains(File.separator)) continue
+                                    val parentDirPath = cleanPath.substringBeforeLast(File.separator)
+                                    val dirSegments = parentDirPath.split(File.separator).filter { it.isNotBlank() }
 
-                                    var currentDir: DocumentFile = baseDir!!
-                                    var currentPath = ""
+                                    var currentDir: DocumentFile = baseDir
+                                    var currentKey = ""
 
                                     for (segment in dirSegments) {
                                         val safeSegment = sanitizeFilename(segment)
-                                        currentPath = if (currentPath.isEmpty()) safeSegment else "$currentPath/$safeSegment"
-                                        if (dirCache.containsKey(currentPath)) {
-                                            currentDir = dirCache[currentPath]!!
+                                        currentKey = if (currentKey.isEmpty()) safeSegment else "$currentKey${File.separator}$safeSegment"
+                                        
+                                        if (dirCache.containsKey(currentKey)) {
+                                            currentDir = dirCache[currentKey]!!
                                         } else {
-                                            var nextDir = findFileReliable(currentDir, safeSegment)
-                                            if (nextDir != null && !nextDir.isDirectory) {
-                                                call.respondText("{\"error\":\"path_conflict_at_segment: $safeSegment\"}", ContentType.Application.Json, HttpStatusCode.Conflict)
-                                                return@post
-                                            }
-                                            if (nextDir == null) {
-                                                nextDir = currentDir.createDirectory(safeSegment)
-                                                if (nextDir == null) {
-                                                    throw Exception("Failed to create directory at segment: $safeSegment")
-                                                }
+                                            // Robustly resolve or create the directory segment
+                                            try {
+                                                val nextDir = resolveOrCreateDirectory(currentDir, safeSegment)
+                                                currentDir = nextDir
+                                                dirCache[currentKey] = nextDir
                                                 directoriesCreated++
+                                            } catch (e: Exception) {
+                                                throw Exception("Failed to pre-create directory tree at segment '$safeSegment': ${e.message}")
                                             }
-                                            currentDir = nextDir!!
-                                            dirCache[currentPath] = nextDir!!
                                         }
                                     }
                                 }
                                 call.respondJson(true, data = mapOf("directoriesCreated" to directoriesCreated))
                             } catch (e: IllegalArgumentException) {
                                 android.util.Log.e("ServerService", "Invalid path traversal in manifest", e)
-                                call.respondJson(false, "Invalid path traversal", "INVALID_PATH")
+                                call.respondJson(false, "Invalid path traversal detected", "INVALID_PATH")
                             } catch (e: Exception) {
                                 android.util.Log.e("ServerService", "Folder manifest processing failed", e)
-                                call.respondJson(false, e.message ?: "Unknown error", "MANIFEST_FAILED")
+                                call.respondJson(false, e.message ?: "Failed to generate directory tree", "MANIFEST_FAILED")
                             }
                         }
 

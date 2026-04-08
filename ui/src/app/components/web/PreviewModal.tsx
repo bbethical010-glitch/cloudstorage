@@ -10,20 +10,18 @@ import {
   Trash2, 
   HardDrive,
   Eye,
-  AlertCircle
+  AlertCircle,
+  FileQuestion,
+  ExternalLink
 } from "lucide-react";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
 import { toast } from "sonner";
-
-interface FileNode {
-  id: string;
-  name: string;
-  path: string;
-  isDirectory: boolean;
-  size: number;
-  lastModified: number;
-}
+import { 
+  fetchFileBlob, 
+  SUPPORTED_PREVIEW_TYPES, 
+  type FileNode 
+} from "./PreviewManager";
 
 interface PreviewModalProps {
   selectedFile: FileNode | null;
@@ -67,49 +65,34 @@ export function PreviewModal({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const ext = selectedFile?.name.split('.').pop()?.toLowerCase() || '';
+  const isSupported = SUPPORTED_PREVIEW_TYPES.includes(ext);
+
   useEffect(() => {
-    if (!selectedFile || selectedFile.isDirectory) {
-      setObjectUrl(null);
-      setError(null);
-      return;
-    }
-
-    const ext = selectedFile.name.split('.').pop()?.toLowerCase() || '';
-    const isPreviewable = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'mp4', 'webm', 'mov', 'avi', 'pdf'].includes(ext);
-
-    if (!isPreviewable) {
+    if (!selectedFile || selectedFile.isDirectory || !isSupported) {
       setObjectUrl(null);
       setError(null);
       return;
     }
 
     let isMounted = true;
-    const controller = new AbortController();
+    let currentUrl: string | null = null;
 
-    const fetchMedia = async () => {
+    const loadPreview = async () => {
       setIsLoading(true);
       setError(null);
       
       try {
-        const endpoint = `/api/download?path=${encodeURIComponent(selectedFile.path || currentPath)}&file=${encodeURIComponent(selectedFile.name)}`;
+        const blob = await fetchFileBlob(selectedFile, apiFetch);
         
-        const res = await apiFetch(endpoint, { 
-          signal: controller.signal 
-        });
-
-        if (!res.ok) {
-          throw new Error(res.status === 401 ? "Unauthorized: Incorrect node password." : "Failed to load media.");
-        }
-
-        const blob = await res.blob();
         if (isMounted) {
           const url = URL.createObjectURL(blob);
+          currentUrl = url;
           setObjectUrl(url);
         }
       } catch (err: any) {
-        if (err.name === 'AbortError') return;
         if (isMounted) {
-          setError(err.message || "Failed to load media: Node unauthorized or offline.");
+          setError(err.message || "Failed to load preview. Device might be offline.");
         }
       } finally {
         if (isMounted) {
@@ -118,33 +101,44 @@ export function PreviewModal({
       }
     };
 
-    void fetchMedia();
+    void loadPreview();
 
     return () => {
       isMounted = false;
-      controller.abort();
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
+      if (currentUrl) {
+        URL.revokeObjectURL(currentUrl);
       }
     };
-  }, [selectedFile, currentPath, apiFetch]);
+  }, [selectedFile, isSupported, apiFetch]);
 
   const handleDownload = useCallback(() => {
     if (!selectedFile) return;
 
     if (objectUrl) {
-      // Efficiently reuse the existing Blob for native download
       const a = document.createElement('a');
       a.href = objectUrl;
       a.download = selectedFile.name;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      toast.success("Download started (from cache)");
+      toast.success("Download started (from preview cache)");
     } else {
-      // Fallback for non-previewable files or if Blob failed (will use native fetch check)
-      // This is handled by the parent WebConsole.handleDownload
-      toast.info("Preparing native download...");
+      // Logic for non-previewable files or if fetching failed
+      // The parent handleDownload would typically handle this via building a fresh URL
+      toast.info("Preparing direct download...");
+      // For now, we manually trigger a relay-style download or let parent handle
+      const a = document.createElement('a');
+      const token = localStorage.getItem('cloud_storage_token') || '';
+      const query = new URLSearchParams({
+        path: selectedFile.path,
+        file: selectedFile.name,
+        pwd: token
+      });
+      a.href = `/api/download?${query.toString()}`;
+      a.download = selectedFile.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
     }
   }, [selectedFile, objectUrl]);
 
@@ -175,22 +169,41 @@ export function PreviewModal({
             {isLoading ? (
               <div className="flex flex-col items-center gap-4">
                 <SquareLoader size="lg" color="#2563EB" />
-                <p className="text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] animate-pulse">Buffering...</p>
+                <p className="text-[10px] font-bold text-[#4B5563] uppercase tracking-[0.2em] animate-pulse">Streaming Data...</p>
               </div>
             ) : error ? (
-              <div className="flex flex-col items-center gap-4 p-8 text-center">
+              <div className="flex flex-col items-center gap-4 p-8 text-center animate-in fade-in zoom-in">
                 <AlertCircle className="w-12 h-12 text-[#EF4444] opacity-50" />
                 <p className="text-xs text-[#EF4444] font-medium leading-relaxed">{error}</p>
+                <Button variant="outline" size="sm" className="mt-2 border-[#EF4444]/20 text-[#EF4444] hover:bg-[#EF4444]/10 h-8 text-[10px] font-bold uppercase tracking-widest" onClick={() => window.location.reload()}>
+                    Retry Connection
+                </Button>
+              </div>
+            ) : !isSupported ? (
+              <div className="flex flex-col items-center gap-6 p-8 text-center">
+                <div className="relative">
+                  <div className="absolute inset-0 bg-[#2563EB]/20 blur-2xl rounded-full" />
+                  <FileQuestion className="w-16 h-16 text-[#4B5563] relative z-10" />
+                </div>
+                <div className="space-y-2 relative z-10">
+                  <h4 className="text-xs font-bold text-[#E5E7EB] uppercase tracking-[0.15em]">Preview Not Available</h4>
+                  <p className="text-[10px] text-[#4B5563] leading-relaxed max-w-[200px]">Native preview is not supported for this file type.</p>
+                </div>
+                <Button 
+                  onClick={handleDownload}
+                  className="bg-[#111827] border border-[#1F2937] hover:bg-[#1F2937] text-white hover:text-[#2563EB] h-9 px-6 rounded-xl gap-2 font-bold text-[10px] uppercase tracking-widest transition-all shadow-xl"
+                >
+                  <Download className="w-3.5 h-3.5" /> Download to View
+                </Button>
               </div>
             ) : objectUrl ? (
-              <div className="w-full h-full relative flex items-center justify-center">
+              <div className="w-full h-full relative flex items-center justify-center animate-in fade-in duration-700">
                 {(() => {
-                  const ext = selectedFile.name.split('.').pop()?.toLowerCase() || '';
-                  if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
+                  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) {
                     return (
                       <img 
                         src={objectUrl} 
-                        className="object-contain w-full h-full absolute inset-0 text-transparent" 
+                        className="object-contain w-full h-full absolute inset-0 p-4" 
                         alt="Preview"
                       />
                     );
@@ -207,28 +220,27 @@ export function PreviewModal({
                   if (ext === 'pdf') {
                     return <iframe src={objectUrl} className="w-full h-full bg-white rounded-2xl" title="PDF Preview" />;
                   }
+                  if (['txt', 'md', 'json', 'log'].includes(ext)) {
+                    return (
+                      <div className="w-full h-full p-6 overflow-auto bg-[#0a0f18] font-mono text-[10px] text-[#9CA3AF] leading-relaxed scrollbar-hide">
+                         <PreviewText contentUrl={objectUrl} />
+                      </div>
+                    );
+                  }
                   return null;
                 })()}
               </div>
             ) : (
               getFileIcon(selectedFile.name, selectedFile.isDirectory, "w-20 h-20 transition-transform group-hover:scale-110 duration-500 z-10 relative")
             )}
-            
-            <div className="absolute bottom-4 left-4 right-4 pointer-events-none">
-               <div className="bg-[#0B1220]/80 backdrop-blur-md p-3 rounded-2xl border border-[#374151]/30 opacity-0 group-hover:opacity-100 translate-y-4 group-hover:translate-y-0 transition-all">
-                  <p className="text-[10px] text-center font-bold text-[#2563EB] uppercase tracking-widest">
-                      {selectedFile.isDirectory ? "Folder" : "File"}
-                  </p>
-               </div>
-            </div>
           </div>
           
-          <div className="flex-1 overflow-y-auto space-y-8 pr-2">
+          <div className="flex-1 overflow-y-auto space-y-8 pr-2 scrollbar-hide">
             <div>
               <h3 className="text-xl font-bold break-words pr-4 text-white leading-tight">{selectedFile.name}</h3>
               <div className="flex items-center gap-2 mt-2">
                  <Badge className="bg-[#2563EB]/10 text-[#2563EB] border-transparent text-[10px] uppercase font-bold tracking-widest">
-                     {selectedFile.isDirectory ? "Folder" : selectedFile.name.split('.').pop() || 'Unknown'}
+                     {selectedFile.isDirectory ? "Folder" : ext.toUpperCase() || 'Unknown'}
                  </Badge>
                  <span className="text-[10px] text-[#4B5563] font-mono uppercase tracking-widest">{formatSize(selectedFile.size)}</span>
               </div>
@@ -242,17 +254,17 @@ export function PreviewModal({
                  </div>
               </div>
               <div className="space-y-2">
-                <label className="text-[9px] font-bold text-[#4B5563] uppercase tracking-widest block">Location</label>
+                <label className="text-[9px] font-bold text-[#4B5563] uppercase tracking-widest block">Unified Path</label>
                 <div className="flex items-center gap-2 px-3 py-2 bg-[#111827] border border-[#1F2937] rounded-xl flex-wrap">
                   <HardDrive className="w-3.5 h-3.5 text-[#2563EB] shrink-0" />
-                  <p className="text-[10px] font-mono text-[#9CA3AF] break-all">/Storage/{currentPath}</p>
+                  <p className="text-[10px] font-mono text-[#9CA3AF] break-all">/Storage/{selectedFile.path || "root"}</p>
                 </div>
               </div>
             </div>
 
             <div className="pt-8 space-y-3 pb-4">
               <Button 
-                className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] h-11 rounded-xl gap-2 font-bold shadow-lg shadow-blue-500/10 active:scale-95 transition-all outline-none"
+                className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] h-11 rounded-xl gap-2 font-bold shadow-lg shadow-blue-500/10 active:scale-95 transition-all"
                 onClick={handleDownload}
               >
                 <Download className="w-4 h-4" /> Download
@@ -279,10 +291,26 @@ export function PreviewModal({
           <div className="w-20 h-20 bg-[#111827] rounded-[2.5rem] border border-[#1F2937] flex items-center justify-center mb-6">
             <Eye className="w-8 h-8 opacity-20" />
           </div>
-          <h3 className="text-sm font-bold uppercase tracking-widest text-[#E5E7EB]">No Preview</h3>
-          <p className="text-xs mt-3 leading-relaxed">Select a file to view its preview and details</p>
+          <h3 className="text-sm font-bold uppercase tracking-widest text-[#E5E7EB]">Vault Details</h3>
+          <p className="text-xs mt-3 leading-relaxed">Select a file to inspect metadata and generated previews</p>
         </div>
       )}
     </AnimatePresence>
   );
+}
+
+/**
+ * Sub-component for rendering text-based previews.
+ */
+function PreviewText({ contentUrl }: { contentUrl: string }) {
+  const [text, setText] = useState<string>("Loading content...");
+
+  useEffect(() => {
+    fetch(contentUrl)
+      .then(res => res.text())
+      .then(setText)
+      .catch(() => setText("Failed to load text preview."));
+  }, [contentUrl]);
+
+  return <pre className="whitespace-pre-wrap">{text}</pre>;
 }

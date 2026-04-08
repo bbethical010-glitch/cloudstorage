@@ -903,6 +903,12 @@ export function WebConsole() {
         setIsUploading(false);
         setUploadStatus('error');
         toast.error(`Folder manifest creation failed: ${e.message}`);
+        
+        // Recover UI state and dismiss failed card after 3s as requested
+        setTimeout(() => {
+          setUploadStatus('idle');
+          setUploadProgress(0);
+        }, 3000);
         return;
       }
     }
