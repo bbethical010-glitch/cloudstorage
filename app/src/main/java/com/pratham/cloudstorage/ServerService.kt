@@ -42,6 +42,7 @@ import io.ktor.utils.io.core.readBytes
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import java.io.InputStream
+import java.io.File
 import io.ktor.utils.io.*
 import io.ktor.utils.io.jvm.javaio.*
 import io.ktor.utils.io.core.readAvailable
