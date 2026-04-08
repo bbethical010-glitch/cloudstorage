@@ -70,10 +70,6 @@ fun Application.relayModule() {
 
     routing {
         // 1. HEALTH CHECK MUST BE AT THE VERY TOP
-        get("/") {
-            call.respondText("OK", status = HttpStatusCode.OK)
-        }
-
         get("/health") {
             call.respondText("OK", status = HttpStatusCode.OK)
         }
