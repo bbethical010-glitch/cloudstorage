@@ -7,8 +7,34 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
+
+/**
+ * States for the UI transfer card
+ */
+sealed class TransferCardState {
+    object Idle : TransferCardState()
+    
+    data class Active(
+        val fileName: String,
+        val progressPercent: Int,        // 0–100
+        val bytesWritten: Long,
+        val totalBytes: Long,
+        val speedBytesPerSecond: Long,
+        val activeCount: Int,            // total simultaneous uploads
+        val elapsedMs: Long
+    ) : TransferCardState()
+    
+    data class Completing(
+        val fileName: String,
+        val totalBytes: Long
+    ) : TransferCardState()
+}
 
 /**
  * Manages reliable Android foreground notifications for file uploads.
@@ -22,10 +48,20 @@ class UploadNotificationManager(private val context: Context) {
     // Tracks active uploads for aggregate summary calculation
     private val activeUploads = ConcurrentHashMap<String, UploadProgress>()
     private val serverActionId = 1 // Matches ServerService foreground ID to keep them in same group if desired
+
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var completionJob: Job? = null
     
     companion object {
         const val CHANNEL_ID = "UploadProgressChannel"
         const val SUMMARY_ID = 1000
+
+        private val _cardState = MutableStateFlow<TransferCardState>(TransferCardState.Idle)
+        val cardState: StateFlow<TransferCardState> = _cardState.asStateFlow()
+
+        fun updateCardState(newState: TransferCardState) {
+            _cardState.value = newState
+        }
     }
 
     data class UploadProgress(
@@ -61,20 +97,70 @@ class UploadNotificationManager(private val context: Context) {
     }
 
     fun onUploadStarted(transferId: String, filename: String, totalBytes: Long) {
+        completionJob?.cancel() // Cancel any pending transition to idle
         activeUploads[transferId] = UploadProgress(filename, 0L, totalBytes)
+        
+        updateCardState(TransferCardState.Active(
+            fileName = filename,
+            progressPercent = 0,
+            bytesWritten = 0L,
+            totalBytes = totalBytes,
+            speedBytesPerSecond = 0L,
+            activeCount = activeUploads.size,
+            elapsedMs = 0L
+        ))
+        
         updateNotification(transferId)
         updateSummaryNotification()
     }
 
     fun onProgressUpdate(transferId: String, bytesWritten: Long) {
         val progress = activeUploads[transferId] ?: return
-        activeUploads[transferId] = progress.copy(bytesTransferred = bytesWritten)
+        val updated = progress.copy(bytesTransferred = bytesWritten)
+        activeUploads[transferId] = updated
+        
+        // Update card state
+        val current = _cardState.value
+        if (current is TransferCardState.Active) {
+            updateCardState(current.copy(
+                progressPercent = updated.percent,
+                bytesWritten = bytesWritten,
+                speedBytesPerSecond = updated.speedBps,
+                activeCount = activeUploads.size
+            ))
+        }
+        
         updateNotification(transferId)
         updateSummaryNotification()
     }
 
     fun onUploadComplete(transferId: String) {
         val progress = activeUploads.remove(transferId) ?: return
+        
+        if (activeUploads.isEmpty()) {
+            // Last upload done — show completing state then transition to idle
+            updateCardState(TransferCardState.Completing(
+                fileName = progress.filename,
+                totalBytes = progress.totalBytes
+            ))
+            
+            completionJob = scope.launch {
+                delay(2500) // Hold completing state for 2.5 seconds
+                updateCardState(TransferCardState.Idle)
+            }
+        } else {
+            // More uploads still active — update card with next one
+            val next = activeUploads.values.first()
+            updateCardState(TransferCardState.Active(
+                fileName = next.filename,
+                progressPercent = next.percent,
+                bytesWritten = next.bytesTransferred,
+                totalBytes = next.totalBytes,
+                speedBytesPerSecond = next.speedBps,
+                activeCount = activeUploads.size,
+                elapsedMs = (System.currentTimeMillis() - next.startTime)
+            ))
+        }
         
         // Brief completion notification that is dismissible
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
@@ -92,6 +178,10 @@ class UploadNotificationManager(private val context: Context) {
     fun onUploadFailed(transferId: String, error: String) {
         val progress = activeUploads.remove(transferId)
         val filename = progress?.filename ?: "File"
+        
+        if (activeUploads.isEmpty()) {
+            updateCardState(TransferCardState.Idle)
+        }
         
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_error)

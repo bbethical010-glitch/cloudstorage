@@ -404,10 +404,31 @@ class MainActivity : ComponentActivity() {
     
     @Composable
     private fun MainScreen() {
-        Box(modifier = Modifier.fillMaxSize()) {
-            AndroidView(
-                factory = { webView },
-                modifier = Modifier.fillMaxSize()
+        val transferState by UploadNotificationManager.cardState.collectAsState()
+        
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+        ) {
+            // Main WebView area
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                AndroidView(
+                    factory = { webView },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            
+            // Native Transfer Status Card at the bottom
+            TransferStatusCard(
+                state = transferState,
+                modifier = Modifier
+                    .padding(16.dp)
+                    .padding(bottom = 8.dp) // Extra spacing from edge
             )
         }
     }

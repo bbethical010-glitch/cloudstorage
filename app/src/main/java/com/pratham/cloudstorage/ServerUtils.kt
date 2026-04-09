@@ -38,12 +38,25 @@ fun generateShareCode(): String {
 }
 
 fun normalizeRelayBaseUrl(value: String): String {
-    var normalized = value.trim().trimEnd('/')
-    if (normalized.isEmpty()) return normalized
-    if (!normalized.startsWith("http://") && !normalized.startsWith("https://")) {
+    var normalized = value.trim()
+    
+    // Strip recurring protocol segments (fix for https://https:// bug)
+    while (normalized.startsWith("https://https://", ignoreCase = true)) {
+        normalized = normalized.substring(8)
+    }
+    while (normalized.startsWith("http://http://", ignoreCase = true)) {
+        normalized = normalized.substring(7)
+    }
+
+    if (normalized.isEmpty()) return ""
+    
+    // Ensure it has a protocol
+    if (!normalized.startsWith("http://", ignoreCase = true) && 
+        !normalized.startsWith("https://", ignoreCase = true)) {
         normalized = "https://$normalized"
     }
-    return normalized
+    
+    return normalized.trimEnd('/')
 }
 
 fun sanitizeUrl(url: String): String = normalizeRelayBaseUrl(url)

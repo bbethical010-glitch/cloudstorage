@@ -119,7 +119,7 @@ object TransferManager {
             0L
         }
 
-        val primaryFile = currentActive.maxByOrNull { it.totalBytes }?.filename ?: "Processing..."
+        val primaryFile = currentActive.maxByOrNull { it.totalBytes }?.filename ?: ""
         val isDownload = currentActive.any { it.isDownload }
 
         _transferState.value = TransferState(
