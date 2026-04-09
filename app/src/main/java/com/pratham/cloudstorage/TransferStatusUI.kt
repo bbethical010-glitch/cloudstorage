@@ -189,7 +189,7 @@ private fun ActiveContent(state: TransferCardState.Active) {
         // Progress bar — smooth animated fill
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             LinearProgressIndicator(
-                progress = { animatedProgress },
+                progress = animatedProgress,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(4.dp)
