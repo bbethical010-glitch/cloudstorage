@@ -49,12 +49,15 @@ import io.ktor.utils.io.core.readAvailable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.serialization.gson.*
 
 class ServerService : Service() {
     private val fileLocks = java.util.concurrent.ConcurrentHashMap<String, Any>()
+    private val manifestMutex = Mutex()
 
     private var server: ApplicationEngine? = null
     private var relayTunnelClient: RelayTunnelClient? = null
@@ -760,7 +763,8 @@ class ServerService : Service() {
                                 val basePath = call.request.queryParameters["path"] ?: ""
                                 val jsonStr: String = call.receiveText()
 
-                                // Run all SAF operations on IO dispatcher
+                                // Run all SAF operations on IO dispatcher, serialized by Mutex
+                                // to prevent concurrent manifest batches from racing on intermediate directories
                                 val result = kotlinx.coroutines.withContext(Dispatchers.IO) {
                                     val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
                                         ?: throw IllegalStateException("Storage unavailable")
@@ -776,50 +780,49 @@ class ServerService : Service() {
                                     }
 
                                     val jsonArray = org.json.JSONArray(jsonStr)
-                                    var directoriesCreated = 0
-                                    val dirCache = java.util.concurrent.ConcurrentHashMap<String, DocumentFile>()
-                                    
-                                    for (i in 0 until jsonArray.length()) {
-                                        val item = jsonArray.getJSONObject(i)
-                                        val relativePath = item.optString("relativePath", "")
-                                        if (relativePath.isBlank()) continue
-                                        
-                                        val cleanPath = validateAndNormalizeRelativePath(relativePath)
-                                        
-                                        // Guard: root-level files have no parent directory to create
-                                        if (!cleanPath.contains("/")) continue
-                                        val parentDirPath = cleanPath.substringBeforeLast("/")
-                                        if (parentDirPath.isBlank() || parentDirPath == "/") continue
 
-                                        val dirSegments = parentDirPath.split("/").filter { it.isNotBlank() }
-                                        if (dirSegments.isEmpty()) continue
+                                    // Mutex serializes concurrent manifest batches so only one
+                                    // creates directories at a time. withLock auto-releases on
+                                    // exceptions, so subsequent batches never hang.
+                                    manifestMutex.withLock {
+                                        var directoriesCreated = 0
+                                        val dirCache = mutableMapOf<String, DocumentFile>()
 
-                                        var currentDir: DocumentFile = baseDir
-                                        var currentKey = ""
+                                        for (i in 0 until jsonArray.length()) {
+                                            val item = jsonArray.getJSONObject(i)
+                                            val relativePath = item.optString("relativePath", "")
+                                            if (relativePath.isBlank()) continue
 
-                                        for (segment in dirSegments) {
-                                            val safeSegment = sanitizeFilename(segment)
-                                            currentKey = if (currentKey.isEmpty()) safeSegment else "$currentKey${File.separator}$safeSegment"
-                                            
-                                            // Thread-safe cache lookup via ConcurrentHashMap
-                                            val cached = dirCache[currentKey]
-                                            if (cached != null) {
-                                                currentDir = cached
-                                            } else {
-                                                try {
+                                            val cleanPath = validateAndNormalizeRelativePath(relativePath)
+
+                                            // Guard: root-level files (e.g. "123.py") have no parent dir
+                                            if (!cleanPath.contains("/")) continue
+                                            val parentDirPath = cleanPath.substringBeforeLast("/")
+                                            if (parentDirPath.isBlank() || parentDirPath == "/") continue
+
+                                            val dirSegments = parentDirPath.split("/").filter { it.isNotBlank() }
+                                            if (dirSegments.isEmpty()) continue
+
+                                            var currentDir: DocumentFile = baseDir
+                                            var currentKey = ""
+
+                                            for (segment in dirSegments) {
+                                                val safeSegment = sanitizeFilename(segment)
+                                                currentKey = if (currentKey.isEmpty()) safeSegment else "$currentKey${File.separator}$safeSegment"
+
+                                                val cached = dirCache[currentKey]
+                                                if (cached != null) {
+                                                    currentDir = cached
+                                                } else {
                                                     val nextDir = resolveOrCreateDirectory(currentDir, safeSegment)
                                                     currentDir = nextDir
                                                     dirCache[currentKey] = nextDir
                                                     directoriesCreated++
-                                                } catch (e: Exception) {
-                                                    // Log but don't crash the entire batch for one bad segment
-                                                    android.util.Log.e("FolderManifest", "Segment '$safeSegment' failed: ${e.message}")
-                                                    throw Exception("Failed to pre-create directory tree at segment '$safeSegment': ${e.message}")
                                                 }
                                             }
                                         }
+                                        directoriesCreated
                                     }
-                                    directoriesCreated
                                 }
                                 call.respondJson(true, data = mapOf("directoriesCreated" to result))
                             } catch (e: SecurityException) {
