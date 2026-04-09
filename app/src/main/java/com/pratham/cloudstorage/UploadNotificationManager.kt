@@ -15,6 +15,16 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
+ * Node lifecycle status — controls when the status card is visible
+ */
+enum class NodeStatus {
+    STOPPED,      // Node not running — card hidden
+    STARTING,     // Node starting — show boot animation
+    ACTIVE,       // Node running and routing — show live metrics
+    ERROR         // Node failed to start
+}
+
+/**
  * States for the UI transfer card
  */
 sealed class TransferCardState {
@@ -59,8 +69,15 @@ class UploadNotificationManager(private val context: Context) {
         private val _cardState = MutableStateFlow<TransferCardState>(TransferCardState.Idle)
         val cardState: StateFlow<TransferCardState> = _cardState.asStateFlow()
 
+        private val _nodeStatus = MutableStateFlow(NodeStatus.STOPPED)
+        val nodeStatus: StateFlow<NodeStatus> = _nodeStatus.asStateFlow()
+
         fun updateCardState(newState: TransferCardState) {
             _cardState.value = newState
+        }
+
+        fun updateNodeStatus(status: NodeStatus) {
+            _nodeStatus.value = status
         }
     }
 

@@ -130,6 +130,7 @@ class ServerService : Service() {
     private fun startKtorServer(rootUri: Uri, shareCode: String, relayBaseUrl: String, consolePassword: String?) {
         if (server != null) return
 
+        UploadNotificationManager.updateNodeStatus(NodeStatus.STARTING)
         scope.launch {
             server = embeddedServer(Netty, port = DEFAULT_PORT) {
                 install(CORS) {
@@ -757,68 +758,62 @@ class ServerService : Service() {
                             if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
                             try {
                                 val basePath = call.request.queryParameters["path"] ?: ""
-                                val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
-                                if (root == null) {
-                                    call.respondJson(false, "Storage unavailable", "STORAGE_OFFLINE")
-                                    return@post
-                                }
-
-                                // Use helper to get base directory reliably
-                                val baseDir = if (basePath.isBlank() || basePath == "/") root 
-                                              else resolveSafePath(root, basePath)
-
-                                if (baseDir == null || !baseDir.isDirectory) {
-                                    call.respondJson(false, "Upload target directory not found", "TARGET_NOT_FOUND")
-                                    return@post
-                                }
-
                                 val jsonStr: String = call.receiveText()
-                                if (jsonStr.isBlank() || !jsonStr.startsWith("[")) {
-                                    call.respondJson(false, "Empty or malformed manifest", "BAD_MANIFEST")
-                                    return@post
-                                }
 
-                                val jsonArray = org.json.JSONArray(jsonStr)
-                                var directoriesCreated = 0
+                                // Run all SAF operations on IO dispatcher
+                                val result = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                                    val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
+                                        ?: throw IllegalStateException("Storage unavailable")
 
-                                // Unified directory cache for efficiency during bulk manifest processing
-                                val dirCache = mutableMapOf<String, DocumentFile>()
-                                
-                                for (i in 0 until jsonArray.length()) {
-                                    val item = jsonArray.getJSONObject(i)
-                                    val relativePath = item.optString("relativePath", "")
-                                    if (relativePath.isBlank()) continue
+                                    val baseDir = if (basePath.isBlank() || basePath == "/") root 
+                                                  else resolveSafePath(root, basePath)
+                                        ?: throw IllegalStateException("Upload target directory not found")
+
+                                    if (!baseDir.isDirectory) throw IllegalStateException("Upload target is not a directory")
+
+                                    if (jsonStr.isBlank() || !jsonStr.startsWith("[")) {
+                                        throw IllegalArgumentException("Empty or malformed manifest")
+                                    }
+
+                                    val jsonArray = org.json.JSONArray(jsonStr)
+                                    var directoriesCreated = 0
+                                    val dirCache = mutableMapOf<String, DocumentFile>()
                                     
-                                    val cleanPath = validateAndNormalizeRelativePath(relativePath)
-                                    
-                                    // Extract parent directory tree (everything before the last separator)
-                                    if (!cleanPath.contains("/")) continue
-                                    val parentDirPath = cleanPath.substringBeforeLast("/")
-                                    val dirSegments = parentDirPath.split("/").filter { it.isNotBlank() }
-
-                                    var currentDir: DocumentFile = baseDir
-                                    var currentKey = ""
-
-                                    for (segment in dirSegments) {
-                                        val safeSegment = sanitizeFilename(segment)
-                                        currentKey = if (currentKey.isEmpty()) safeSegment else "$currentKey${File.separator}$safeSegment"
+                                    for (i in 0 until jsonArray.length()) {
+                                        val item = jsonArray.getJSONObject(i)
+                                        val relativePath = item.optString("relativePath", "")
+                                        if (relativePath.isBlank()) continue
                                         
-                                        if (dirCache.containsKey(currentKey)) {
-                                            currentDir = dirCache[currentKey]!!
-                                        } else {
-                                            // Robustly resolve or create the directory segment
-                                            try {
-                                                val nextDir = resolveOrCreateDirectory(currentDir, safeSegment)
-                                                currentDir = nextDir
-                                                dirCache[currentKey] = nextDir
-                                                directoriesCreated++
-                                            } catch (e: Exception) {
-                                                throw Exception("Failed to pre-create directory tree at segment '$safeSegment': ${e.message}")
+                                        val cleanPath = validateAndNormalizeRelativePath(relativePath)
+                                        
+                                        if (!cleanPath.contains("/")) continue
+                                        val parentDirPath = cleanPath.substringBeforeLast("/")
+                                        val dirSegments = parentDirPath.split("/").filter { it.isNotBlank() }
+
+                                        var currentDir: DocumentFile = baseDir
+                                        var currentKey = ""
+
+                                        for (segment in dirSegments) {
+                                            val safeSegment = sanitizeFilename(segment)
+                                            currentKey = if (currentKey.isEmpty()) safeSegment else "$currentKey${File.separator}$safeSegment"
+                                            
+                                            if (dirCache.containsKey(currentKey)) {
+                                                currentDir = dirCache[currentKey]!!
+                                            } else {
+                                                try {
+                                                    val nextDir = resolveOrCreateDirectory(currentDir, safeSegment)
+                                                    currentDir = nextDir
+                                                    dirCache[currentKey] = nextDir
+                                                    directoriesCreated++
+                                                } catch (e: Exception) {
+                                                    throw Exception("Failed to pre-create directory tree at segment '$safeSegment': ${e.message}")
+                                                }
                                             }
                                         }
                                     }
+                                    directoriesCreated
                                 }
-                                call.respondJson(true, data = mapOf("directoriesCreated" to directoriesCreated))
+                                call.respondJson(true, data = mapOf("directoriesCreated" to result))
                             } catch (e: SecurityException) {
                                 android.util.Log.e("ServerService", "Invalid path traversal in manifest", e)
                                 call.respondJson(false, "Invalid path traversal detected", "INVALID_PATH")
@@ -1085,11 +1080,14 @@ class ServerService : Service() {
                 }
             }
 
-            server?.start(wait = true)
+            server?.start(wait = false)
+            // Server is now listening — emit ACTIVE
+            UploadNotificationManager.updateNodeStatus(NodeStatus.ACTIVE)
         }
     }
 
     private fun stopServer() {
+        UploadNotificationManager.updateNodeStatus(NodeStatus.STOPPED)
         relayTunnelClient?.stop()
         relayTunnelClient = null
         tunnelStatusFlow.value = TunnelStatus.Offline

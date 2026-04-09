@@ -405,6 +405,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun MainScreen() {
         val transferState by UploadNotificationManager.cardState.collectAsState()
+        val nodeStatus by UploadNotificationManager.nodeStatus.collectAsState()
         
         Column(
             modifier = Modifier
@@ -423,12 +424,13 @@ class MainActivity : ComponentActivity() {
                 )
             }
             
-            // Native Transfer Status Card at the bottom
-            TransferStatusCard(
-                state = transferState,
+            // Node Status Section at the bottom — handles boot animation, live card, and transfers
+            NodeStatusSection(
+                nodeStatus = nodeStatus,
+                transferState = transferState,
                 modifier = Modifier
                     .padding(16.dp)
-                    .padding(bottom = 8.dp) // Extra spacing from edge
+                    .padding(bottom = 8.dp)
             )
         }
     }

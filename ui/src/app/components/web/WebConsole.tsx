@@ -859,6 +859,92 @@ export function WebConsole() {
     });
   }, [buildApiUrl, currentPath, getHeaders, isDataChannelReady, p2pReady, p2pTransport]);
 
+  /**
+   * Verify the DataChannel is truly stable before sending large payloads.
+   * Sends a small test ping via apiFetch and confirms it returns successfully.
+   */
+  const waitForStableDataChannel = useCallback(async (): Promise<boolean> => {
+    if (!p2pReady || !isDataChannelReady || !p2pTransport?.ready) return false;
+    try {
+      // Small ping to verify the channel handles a round-trip
+      const res = await apiFetch('/api/status', { method: 'GET' });
+      if (!res.ok) return false;
+      // Brief cooldown to let the channel settle after the test
+      await new Promise(r => setTimeout(r, 400));
+      return true;
+    } catch {
+      return false;
+    }
+  }, [apiFetch, isDataChannelReady, p2pReady, p2pTransport]);
+
+  /**
+   * Send a folder manifest batch via apiFetch with retry logic.
+   * On failure, retries up to 3 times with exponential backoff.
+   */
+  const sendManifestBatch = useCallback(async (
+    batch: Array<{ relativePath: string; size: number; totalChunks: number }>,
+    path: string
+  ): Promise<void> => {
+    const MAX_RETRIES = 3;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        const res = await apiFetch(`/api/folder_manifest?path=${encodeURIComponent(path)}`, {
+          method: 'POST',
+          headers: { ...getHeaders(), 'Content-Type': 'application/json' } as any,
+          body: JSON.stringify(batch)
+        });
+        const resp = await res.json().catch(() => ({}));
+        if (!res.ok || !resp.success) {
+          throw new Error(resp.error || 'Failed to pre-create directory tree');
+        }
+        return; // Success — exit retry loop
+      } catch (err: any) {
+        console.warn(`Manifest batch attempt ${attempt + 1} failed: ${err.message}`);
+        if (attempt === MAX_RETRIES - 1) throw err;
+        // Exponential backoff: 1s, 2s, 4s
+        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+        // Re-verify channel stability on P2P path before retrying
+        if (p2pReady && isDataChannelReady) {
+          await waitForStableDataChannel();
+        }
+      }
+    }
+  }, [apiFetch, getHeaders, isDataChannelReady, p2pReady, waitForStableDataChannel]);
+
+  /**
+   * Send folder manifest in chunks (batches of BATCH_SIZE) to avoid
+   * overwhelming the DataChannel with a single large JSON payload.
+   */
+  const sendChunkedManifest = useCallback(async (
+    manifest: Array<{ relativePath: string; size: number; totalChunks: number }>,
+    path: string
+  ) => {
+    const BATCH_SIZE = 150;
+
+    // For P2P connections, verify DataChannel stability first
+    if (p2pReady && isDataChannelReady) {
+      const stable = await waitForStableDataChannel();
+      if (!stable) {
+        console.warn('DataChannel not stable, falling back to relay for manifest');
+      }
+    }
+
+    if (manifest.length <= BATCH_SIZE) {
+      // Small enough to send in one shot
+      await sendManifestBatch(manifest, path);
+    } else {
+      // Send in sequential batches with inter-batch pauses
+      for (let i = 0; i < manifest.length; i += BATCH_SIZE) {
+        const batch = manifest.slice(i, i + BATCH_SIZE);
+        await sendManifestBatch(batch, path);
+        // Brief pause between batches to let the channel + SAF operations settle
+        if (i + BATCH_SIZE < manifest.length) {
+          await new Promise(r => setTimeout(r, 200));
+        }
+      }
+    }
+  }, [isDataChannelReady, p2pReady, sendManifestBatch, waitForStableDataChannel]);
+
   const processFiles = async (files: File[]) => {
     if (!files || files.length === 0) return;
     
@@ -878,7 +964,7 @@ export function WebConsole() {
       setUploadProgress(Math.round((uploadedBytes / totalBytes) * 100));
     };
 
-    // Pre-flight Folder Manifest if applicable
+    // Pre-flight Folder Manifest if applicable — uses chunked, stability-checked pipeline
     const manifest = files.filter(f => f.webkitRelativePath && f.webkitRelativePath.includes('/')).map(f => {
       const CHUNK_SIZE = 5 * 1024 * 1024;
       return {
@@ -890,15 +976,7 @@ export function WebConsole() {
 
     if (manifest.length > 0) {
       try {
-        const res = await apiFetch(`/api/folder_manifest?path=${encodeURIComponent(currentPath)}`, {
-          method: 'POST',
-          headers: { ...getHeaders(), 'Content-Type': 'application/json' } as any,
-          body: JSON.stringify(manifest)
-        });
-        const resp = await res.json().catch(() => ({}));
-        if (!res.ok || !resp.success) {
-          throw new Error(resp.error || "Failed to pre-create directory tree");
-        }
+        await sendChunkedManifest(manifest, currentPath);
       } catch (e: any) {
         setIsUploading(false);
         setUploadStatus('error');

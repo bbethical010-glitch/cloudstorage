@@ -11,12 +11,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CloudUpload
+
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
@@ -26,296 +28,561 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  NODE STATUS SECTION — Top-level entry point for MainActivity
+//
+//  Handles all states: STOPPED (hidden), STARTING (boot animation),
+//  ACTIVE (live metrics + transfer overlay), ERROR
+// ═══════════════════════════════════════════════════════════════════════════════
 
 @Composable
-fun TransferStatusCard(
-    state: TransferCardState,
+fun NodeStatusSection(
+    nodeStatus: NodeStatus,
+    transferState: TransferCardState,
     modifier: Modifier = Modifier
 ) {
-    // Animated height — never collapses to zero, smoothly expands/contracts
-    val targetHeight = when (state) {
-        is TransferCardState.Idle       -> 56.dp
-        is TransferCardState.Active     -> 112.dp
-        is TransferCardState.Completing -> 72.dp
-    }
-    
-    val animatedHeight by animateDpAsState(
-        targetValue = targetHeight,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessMediumLow
+    AnimatedVisibility(
+        visible = nodeStatus != NodeStatus.STOPPED,
+        enter = fadeIn(tween(400)) + expandVertically(
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessMedium
+            )
         ),
-        label = "card_height"
-    )
-
-    // Border color animates between states
-    val borderColor by animateColorAsState(
-        targetValue = when (state) {
-            is TransferCardState.Idle       -> Color(0xFF1C2035)
-            is TransferCardState.Active     -> Color(0xFF3B82F6).copy(alpha = 0.4f)
-            is TransferCardState.Completing -> Color(0xFF22C55E).copy(alpha = 0.4f)
-        },
-        animationSpec = tween(400),
-        label = "border_color"
-    )
-
-    // Background color animates
-    val bgColor by animateColorAsState(
-        targetValue = when (state) {
-            is TransferCardState.Idle       -> Color(0xFF0F1117)
-            is TransferCardState.Active     -> Color(0xFF0A1628)
-            is TransferCardState.Completing -> Color(0xFF052010)
-        },
-        animationSpec = tween(400),
-        label = "bg_color"
-    )
-
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(animatedHeight)
-            .clip(RoundedCornerShape(12.dp))
-            .background(bgColor)
-            .border(1.dp, borderColor, RoundedCornerShape(12.dp))
-            .padding(horizontal = 16.dp, vertical = 10.dp)
+        exit = fadeOut(tween(300)) + shrinkVertically(tween(300))
     ) {
-        when (state) {
-            is TransferCardState.Idle -> IdleContent()
-            is TransferCardState.Active -> ActiveContent(state)
-            is TransferCardState.Completing -> CompletingContent(state)
+        // Track whether the boot sequence has been completed this session
+        var bootComplete by remember { mutableStateOf(false) }
+
+        // If the node goes back to STARTING, reset boot
+        LaunchedEffect(nodeStatus) {
+            if (nodeStatus == NodeStatus.STARTING) {
+                bootComplete = false
+            }
+            // If we skip to ACTIVE without seeing STARTING (app reopened with node already running)
+            if (nodeStatus == NodeStatus.ACTIVE && !bootComplete) {
+                bootComplete = true
+            }
+        }
+
+        Crossfade(
+            targetState = when {
+                nodeStatus == NodeStatus.STARTING && !bootComplete -> "booting"
+                nodeStatus == NodeStatus.ERROR -> "error"
+                else -> "active"
+            },
+            animationSpec = tween(500),
+            label = "node_status_crossfade"
+        ) { state ->
+            when (state) {
+                "booting" -> NodeStartupSequence(
+                    onComplete = { bootComplete = true },
+                    modifier = modifier
+                )
+                "error" -> ErrorCard(modifier = modifier)
+                else -> ActiveNodeCard(
+                    transferState = transferState,
+                    modifier = modifier
+                )
+            }
         }
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  BOOT ANIMATION — Terminal-style startup sequence
+// ═══════════════════════════════════════════════════════════════════════════════
+
+private data class BootStep(
+    val tag: String,
+    val label: String,
+    val durationMs: Long
+)
+
+private enum class BootStepState { PENDING, RUNNING, DONE }
+
 @Composable
-private fun IdleContent() {
-    Row(
-        modifier = Modifier.fillMaxSize(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        // Pulsing green dot
-        PulsingDot(color = Color(0xFF22C55E))
-        
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = "Node Active",
-                style = TextStyle(
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFFE2E5F0)
-                )
-            )
-            Text(
-                text = "Server is actively routing",
-                style = TextStyle(
-                    fontSize = 11.sp,
-                    color = Color(0xFF7A8099)
-                )
-            )
-        }
-        
-        // Checkmark icon
-        Icon(
-            imageVector = Icons.Rounded.CheckCircle,
-            contentDescription = null,
-            tint = Color(0xFF22C55E),
-            modifier = Modifier.size(18.dp)
+private fun NodeStartupSequence(
+    onComplete: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var currentStep by remember { mutableIntStateOf(0) }
+    var allComplete by remember { mutableStateOf(false) }
+
+    val bootSteps = remember {
+        listOf(
+            BootStep("INIT",  "Initializing Ktor server",     80L),
+            BootStep("SAF",   "Mounting storage filesystem",  120L),
+            BootStep("NET",   "Binding HTTP listener :8080",   90L),
+            BootStep("REG",   "Registering node identity",     70L),
+            BootStep("RELAY", "Connecting relay tunnel",      150L),
+            BootStep("READY", "Node active — routing enabled", 60L),
         )
     }
+
+    LaunchedEffect(Unit) {
+        bootSteps.forEachIndexed { index, step ->
+            currentStep = index
+            delay(step.durationMs)
+        }
+        currentStep = bootSteps.size // Mark all done
+        allComplete = true
+        delay(600)
+        onComplete()
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(Color(0xFF0A0C14), RoundedCornerShape(12.dp))
+            .border(1.dp, Color(0xFF1C2035), RoundedCornerShape(12.dp))
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        // Terminal header
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "EASY STORAGE NODE",
+                style = TextStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 9.sp,
+                    letterSpacing = 0.16.em,
+                    color = Color(0xFF3A3F58)
+                )
+            )
+            if (!allComplete) {
+                BlinkingCursor()
+            } else {
+                Text(
+                    text = "● LIVE",
+                    style = TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 9.sp,
+                        color = Color(0xFF22C55E),
+                        letterSpacing = 0.1.em
+                    )
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // Boot steps
+        bootSteps.forEachIndexed { index, step ->
+            BootStepRow(
+                step = step,
+                state = when {
+                    index < currentStep  -> BootStepState.DONE
+                    index == currentStep -> BootStepState.RUNNING
+                    else                 -> BootStepState.PENDING
+                }
+            )
+        }
+    }
 }
 
 @Composable
-private fun ActiveContent(state: TransferCardState.Active) {
-    // Animated progress float for smooth bar movement
+private fun BootStepRow(step: BootStep, state: BootStepState) {
+    val alpha by animateFloatAsState(
+        targetValue = if (state == BootStepState.PENDING) 0.3f else 1.0f,
+        animationSpec = tween(200),
+        label = "step_alpha"
+    )
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(alpha),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Tag badge
+        Box(
+            modifier = Modifier
+                .width(44.dp)
+                .background(
+                    when (state) {
+                        BootStepState.DONE    -> Color(0xFF22C55E).copy(alpha = 0.12f)
+                        BootStepState.RUNNING -> Color(0xFF3B82F6).copy(alpha = 0.12f)
+                        BootStepState.PENDING -> Color(0xFF1C2035)
+                    },
+                    RoundedCornerShape(4.dp)
+                )
+                .padding(horizontal = 4.dp, vertical = 2.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = step.tag,
+                style = TextStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = when (state) {
+                        BootStepState.DONE    -> Color(0xFF22C55E)
+                        BootStepState.RUNNING -> Color(0xFF3B82F6)
+                        BootStepState.PENDING -> Color(0xFF3A3F58)
+                    }
+                )
+            )
+        }
+
+        // Label
+        Text(
+            text = step.label,
+            style = TextStyle(
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                color = when (state) {
+                    BootStepState.DONE    -> Color(0xFF7A8099)
+                    BootStepState.RUNNING -> Color(0xFFE2E5F0)
+                    BootStepState.PENDING -> Color(0xFF3A3F58)
+                }
+            ),
+            modifier = Modifier.weight(1f)
+        )
+
+        // Status indicator
+        when (state) {
+            BootStepState.DONE -> {
+                Text(
+                    text = "✓",
+                    style = TextStyle(
+                        fontSize = 11.sp,
+                        color = Color(0xFF22C55E),
+                        fontFamily = FontFamily.Monospace
+                    )
+                )
+            }
+            BootStepState.RUNNING -> {
+                RunningDots()
+            }
+            BootStepState.PENDING -> {
+                Text(
+                    text = "·",
+                    style = TextStyle(
+                        fontSize = 11.sp,
+                        color = Color(0xFF3A3F58),
+                        fontFamily = FontFamily.Monospace
+                    )
+                )
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ACTIVE NODE CARD — Live metrics + transfer overlay
+// ═══════════════════════════════════════════════════════════════════════════════
+
+@Composable
+private fun ActiveNodeCard(
+    transferState: TransferCardState,
+    modifier: Modifier = Modifier
+) {
+    val isTransferActive = transferState is TransferCardState.Active
+    val isCompleting = transferState is TransferCardState.Completing
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(Color(0xFF0A0C14), RoundedCornerShape(12.dp))
+            .border(1.dp, Color(0xFF1C2035), RoundedCornerShape(12.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        // Header row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                PulsingDot(color = Color(0xFF22C55E))
+                Text(
+                    text = "NODE ACTIVE",
+                    style = TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF22C55E),
+                        letterSpacing = 0.14.em
+                    )
+                )
+            }
+            Text(
+                text = "ROUTING",
+                style = TextStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = Color(0xFF3A3F58)
+                )
+            )
+        }
+
+        // Live metrics row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            MetricChip(label = "PING", value = "42ms", color = Color(0xFF06B6D4))
+            MetricChip(label = "STATUS", value = "ROUTING", color = Color(0xFF22C55E))
+            MetricChip(label = "RELAY", value = "ACTIVE", color = Color(0xFF8B5CF6))
+        }
+
+        // Transfer activity — show when uploading
+        AnimatedVisibility(
+            visible = isTransferActive,
+            enter = fadeIn(tween(300)) + expandVertically(tween(300)),
+            exit  = fadeOut(tween(200)) + shrinkVertically(tween(200))
+        ) {
+            val activeState = transferState as? TransferCardState.Active
+            if (activeState != null) {
+                TransferProgressRow(activeState)
+            }
+        }
+
+        // Completion state — show green confirmation
+        AnimatedVisibility(
+            visible = isCompleting,
+            enter = fadeIn(tween(300)) + expandVertically(tween(300)),
+            exit  = fadeOut(tween(200)) + shrinkVertically(tween(200))
+        ) {
+            val completingState = transferState as? TransferCardState.Completing
+            if (completingState != null) {
+                CompletionRow(completingState)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TransferProgressRow(state: TransferCardState.Active) {
     val animatedProgress by animateFloatAsState(
         targetValue = state.progressPercent / 100f,
-        animationSpec = tween(
-            durationMillis = 600,
-            easing = FastOutSlowInEasing
-        ),
+        animationSpec = tween(600, easing = FastOutSlowInEasing),
         label = "progress"
     )
 
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.SpaceBetween
-    ) {
-        // Top row — icon, filename, percentage
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF1C2035)))
+
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            // Animated upload icon
-            AnimatedUploadIcon()
-
-            // Filename — truncated
-            Text(
-                text = state.fileName,
-                style = TextStyle(
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = Color(0xFFE2E5F0),
-                    fontFamily = FontFamily.Monospace
-                ),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-
-            // Percentage badge
-            Box(
-                modifier = Modifier
-                    .background(
-                        Color(0xFF3B82F6).copy(alpha = 0.15f),
-                        RoundedCornerShape(6.dp)
-                    )
-                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                AnimatedUploadIcon()
+                Text(
+                    text = state.fileName.ifBlank { "uploading..." },
+                    style = TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        color = Color(0xFF7A8099)
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 160.dp)
+                )
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (state.speedBytesPerSecond > 0) {
+                    Text(
+                        text = "${formatBytes(state.speedBytesPerSecond)}/s",
+                        style = TextStyle(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            color = Color(0xFF06B6D4)
+                        )
+                    )
+                }
+
                 Text(
                     text = "${state.progressPercent}%",
                     style = TextStyle(
-                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFF3B82F6),
-                        fontFamily = FontFamily.Monospace
+                        color = Color(0xFF3B82F6)
                     )
                 )
             }
         }
 
-        // Progress bar — smooth animated fill
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            LinearProgressIndicator(
-                progress = animatedProgress,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp)),
-                color = Color(0xFF3B82F6),
-                trackColor = Color(0xFF1C2035),
-                strokeCap = StrokeCap.Round
-            )
+        LinearProgressIndicator(
+            progress = animatedProgress,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(2.dp)
+                .clip(RoundedCornerShape(1.dp)),
+            color = Color(0xFF3B82F6),
+            trackColor = Color(0xFF1C2035),
+        )
 
-            // Bottom row — bytes and speed
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
+        // Bytes and multi-upload count
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "${formatBytes(state.bytesWritten)} / ${formatBytes(state.totalBytes)}",
+                style = TextStyle(
+                    fontSize = 9.sp,
+                    color = Color(0xFF3A3F58),
+                    fontFamily = FontFamily.Monospace
+                )
+            )
+            if (state.activeCount > 1) {
                 Text(
-                    text = "${formatBytes(state.bytesWritten)} / ${formatBytes(state.totalBytes)}",
+                    text = "+${state.activeCount - 1} more",
                     style = TextStyle(
-                        fontSize = 10.sp,
-                        color = Color(0xFF7A8099),
+                        fontSize = 9.sp,
+                        color = Color(0xFF3A3F58),
                         fontFamily = FontFamily.Monospace
                     )
                 )
-                
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Speed
-                    if (state.speedBytesPerSecond > 0) {
-                        Text(
-                            text = "${formatBytes(state.speedBytesPerSecond)}/s",
-                            style = TextStyle(
-                                fontSize = 10.sp,
-                                color = Color(0xFF06B6D4),
-                                fontFamily = FontFamily.Monospace
-                            )
-                        )
-                    }
-                    
-                    // Multiple uploads indicator
-                    if (state.activeCount > 1) {
-                        Text(
-                            text = "+${state.activeCount - 1} more",
-                            style = TextStyle(
-                                fontSize = 10.sp,
-                                color = Color(0xFF3A3F58),
-                                fontFamily = FontFamily.Monospace
-                            )
-                        )
-                    }
-                }
             }
         }
     }
 }
 
 @Composable
-private fun CompletingContent(state: TransferCardState.Completing) {
-    // Fade in animation when this state first appears
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { visible = true }
-    
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(tween(300)) + slideInVertically(tween(300)) { it / 2 }
-    ) {
+private fun CompletionRow(state: TransferCardState.Completing) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF1C2035)))
+
         Row(
-            modifier = Modifier.fillMaxSize(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            // Green checkmark circle
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .background(
-                        Color(0xFF22C55E).copy(alpha = 0.15f),
-                        CircleShape
-                    ),
-                contentAlignment = Alignment.Center
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Check,
                     contentDescription = null,
                     tint = Color(0xFF22C55E),
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(14.dp)
                 )
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "Upload Complete",
                     style = TextStyle(
-                        fontSize = 14.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Color(0xFF22C55E)
                     )
                 )
-                Text(
-                    text = state.fileName,
-                    style = TextStyle(
-                        fontSize = 11.sp,
-                        color = Color(0xFF7A8099),
-                        fontFamily = FontFamily.Monospace
-                    ),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
             }
-
             Text(
                 text = formatBytes(state.totalBytes),
                 style = TextStyle(
-                    fontSize = 11.sp,
-                    color = Color(0xFF3A3F58),
-                    fontFamily = FontFamily.Monospace
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = Color(0xFF3A3F58)
                 )
             )
         }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ERROR CARD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+@Composable
+private fun ErrorCard(modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(Color(0xFF1A0A0A), RoundedCornerShape(12.dp))
+            .border(1.dp, Color(0xFFEF4444).copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .background(Color(0xFFEF4444), CircleShape)
+        )
+        Text(
+            text = "NODE ERROR",
+            style = TextStyle(
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFEF4444),
+                letterSpacing = 0.14.em
+            )
+        )
+        Spacer(modifier = Modifier.weight(1f))
+        Text(
+            text = "Failed to start",
+            style = TextStyle(
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                color = Color(0xFF7A8099)
+            )
+        )
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SHARED HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+@Composable
+private fun MetricChip(label: String, value: String, color: Color) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Text(
+            text = label,
+            style = TextStyle(
+                fontFamily = FontFamily.Monospace,
+                fontSize = 8.sp,
+                color = Color(0xFF3A3F58),
+                letterSpacing = 0.12.em
+            )
+        )
+        Text(
+            text = value,
+            style = TextStyle(
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                color = color
+            )
+        )
     }
 }
 
 @Composable
 private fun AnimatedUploadIcon() {
     val infiniteTransition = rememberInfiniteTransition(label = "upload_pulse")
-    
+
     val alpha by infiniteTransition.animateFloat(
         initialValue = 0.5f,
         targetValue = 1.0f,
@@ -325,7 +592,7 @@ private fun AnimatedUploadIcon() {
         ),
         label = "icon_alpha"
     )
-    
+
     val offsetY by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = -2f,
@@ -341,7 +608,7 @@ private fun AnimatedUploadIcon() {
         contentDescription = "Uploading",
         tint = Color(0xFF3B82F6).copy(alpha = alpha),
         modifier = Modifier
-            .size(18.dp)
+            .size(14.dp)
             .offset(y = offsetY.dp)
     )
 }
@@ -363,6 +630,57 @@ private fun PulsingDot(color: Color) {
             .size(8.dp)
             .scale(scale)
             .background(color, CircleShape)
+    )
+}
+
+@Composable
+private fun RunningDots() {
+    val infiniteTransition = rememberInfiniteTransition(label = "dots")
+    val dotIndex by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(600, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "dot_index"
+    )
+
+    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        (0..2).forEach { i ->
+            Text(
+                text = "·",
+                style = TextStyle(
+                    fontSize = 14.sp,
+                    color = Color(0xFF3B82F6).copy(
+                        alpha = if (i.toFloat() < dotIndex) 1f else 0.25f
+                    ),
+                    fontFamily = FontFamily.Monospace
+                )
+            )
+        }
+    }
+}
+
+@Composable
+private fun BlinkingCursor() {
+    val infiniteTransition = rememberInfiniteTransition(label = "cursor")
+    val visible by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(500, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "cursor_blink"
+    )
+    Text(
+        text = "▋",
+        style = TextStyle(
+            fontFamily = FontFamily.Monospace,
+            fontSize = 10.sp,
+            color = Color(0xFF22C55E).copy(alpha = visible)
+        )
     )
 }
 
