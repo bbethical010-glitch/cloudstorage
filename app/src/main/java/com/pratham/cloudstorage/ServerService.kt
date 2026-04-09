@@ -764,7 +764,6 @@ class ServerService : Service() {
                                 val jsonStr: String = call.receiveText()
 
                                 // Run all SAF operations on IO dispatcher, serialized by Mutex
-                                // to prevent concurrent manifest batches from racing on intermediate directories
                                 val result = kotlinx.coroutines.withContext(Dispatchers.IO) {
                                     val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
                                         ?: throw IllegalStateException("Storage unavailable")
@@ -781,50 +780,73 @@ class ServerService : Service() {
 
                                     val jsonArray = org.json.JSONArray(jsonStr)
 
-                                    // Mutex serializes concurrent manifest batches so only one
-                                    // creates directories at a time. withLock auto-releases on
-                                    // exceptions, so subsequent batches never hang.
+                                    // Mutex serializes concurrent batches. withLock auto-releases
+                                    // on exception so subsequent batches never hang.
                                     manifestMutex.withLock {
                                         var directoriesCreated = 0
+                                        var directoriesFailed = 0
                                         val dirCache = mutableMapOf<String, DocumentFile>()
+                                        val failedPaths = mutableListOf<String>()
 
                                         for (i in 0 until jsonArray.length()) {
-                                            val item = jsonArray.getJSONObject(i)
-                                            val relativePath = item.optString("relativePath", "")
-                                            if (relativePath.isBlank()) continue
+                                            try {
+                                                val item = jsonArray.getJSONObject(i)
+                                                val relativePath = item.optString("relativePath", "")
+                                                if (relativePath.isBlank()) continue
 
-                                            val cleanPath = validateAndNormalizeRelativePath(relativePath)
+                                                // Aggressively sanitize the full path BEFORE validation
+                                                // to strip Android-illegal chars (*, ", <, >, ?, |, :)
+                                                val sanitizedPath = sanitizeRelativePath(relativePath)
+                                                val cleanPath = validateAndNormalizeRelativePath(sanitizedPath)
 
-                                            // Guard: root-level files (e.g. "123.py") have no parent dir
-                                            if (!cleanPath.contains("/")) continue
-                                            val parentDirPath = cleanPath.substringBeforeLast("/")
-                                            if (parentDirPath.isBlank() || parentDirPath == "/") continue
+                                                // Guard: root-level files have no parent dir to create
+                                                if (!cleanPath.contains("/")) continue
+                                                val parentDirPath = cleanPath.substringBeforeLast("/")
+                                                if (parentDirPath.isBlank() || parentDirPath == "/") continue
 
-                                            val dirSegments = parentDirPath.split("/").filter { it.isNotBlank() }
-                                            if (dirSegments.isEmpty()) continue
+                                                val dirSegments = parentDirPath.split("/").filter { it.isNotBlank() }
+                                                if (dirSegments.isEmpty()) continue
 
-                                            var currentDir: DocumentFile = baseDir
-                                            var currentKey = ""
+                                                var currentDir: DocumentFile = baseDir
+                                                var currentKey = ""
 
-                                            for (segment in dirSegments) {
-                                                val safeSegment = sanitizeFilename(segment)
-                                                currentKey = if (currentKey.isEmpty()) safeSegment else "$currentKey${File.separator}$safeSegment"
+                                                for (segment in dirSegments) {
+                                                    val safeSegment = sanitizeFilename(segment)
+                                                    currentKey = if (currentKey.isEmpty()) safeSegment else "$currentKey${File.separator}$safeSegment"
 
-                                                val cached = dirCache[currentKey]
-                                                if (cached != null) {
-                                                    currentDir = cached
-                                                } else {
-                                                    val nextDir = resolveOrCreateDirectory(currentDir, safeSegment)
-                                                    currentDir = nextDir
-                                                    dirCache[currentKey] = nextDir
-                                                    directoriesCreated++
+                                                    val cached = dirCache[currentKey]
+                                                    if (cached != null) {
+                                                        currentDir = cached
+                                                    } else {
+                                                        val nextDir = resolveOrCreateDirectory(currentDir, safeSegment)
+                                                        currentDir = nextDir
+                                                        dirCache[currentKey] = nextDir
+                                                        directoriesCreated++
+                                                    }
                                                 }
+                                            } catch (e: Exception) {
+                                                // Fault-tolerant: log the failure, skip this entry,
+                                                // do NOT crash the entire batch.
+                                                val failedPath = try { jsonArray.getJSONObject(i).optString("relativePath", "<unknown>") } catch (_: Exception) { "<unknown>" }
+                                                android.util.Log.e("FolderManifest", "Skipping entry [$i]: '$failedPath' — ${e.message}", e)
+                                                directoriesFailed++
+                                                failedPaths.add(failedPath)
+                                                // continue to next entry
                                             }
                                         }
-                                        directoriesCreated
+                                        Triple(directoriesCreated, directoriesFailed, failedPaths.take(10))
                                     }
                                 }
-                                call.respondJson(true, data = mapOf("directoriesCreated" to result))
+                                val (created, failed, failedPaths) = result
+
+                                if (failed > 0) {
+                                    android.util.Log.w("FolderManifest", "Batch completed with $failed failures out of ${created + failed} entries")
+                                }
+                                call.respondJson(true, data = mapOf(
+                                    "directoriesCreated" to created,
+                                    "directoriesFailed" to failed,
+                                    "failedPaths" to failedPaths
+                                ))
                             } catch (e: SecurityException) {
                                 android.util.Log.e("ServerService", "Invalid path traversal in manifest", e)
                                 call.respondJson(false, "Invalid path traversal detected", "INVALID_PATH")
@@ -1238,6 +1260,26 @@ class ServerService : Service() {
             .replace(Regex("[^a-zA-Z0-9._\\-]"), "_")
             .trimEnd('.')
             .ifEmpty { "unnamed_file" }
+    }
+
+    /**
+     * Sanitize a full relative path (with / separators) against Android-illegal
+     * filesystem characters BEFORE path validation or segmentation.
+     *
+     * Characters legal on macOS/Windows but illegal on Android storage:
+     *   * " < > ? | :
+     *
+     * Forward slashes are preserved as directory separators.
+     */
+    private fun sanitizeRelativePath(path: String): String {
+        return path
+            .replace('\\', '/')           // Normalize Windows backslashes first
+            .split('/')                    // Split into segments
+            .joinToString("/") { segment ->
+                segment
+                    .replace(Regex("[*\"<>?|:]"), "_")  // Strip Android-illegal chars
+                    .trim()                                // Trim whitespace per segment
+            }
     }
 
     private fun validateAndNormalizeRelativePath(relativePath: String): String {
