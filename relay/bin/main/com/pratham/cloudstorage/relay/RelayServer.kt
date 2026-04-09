@@ -7,6 +7,8 @@ import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
+import io.ktor.server.plugins.forwardedheaders.ForwardedHeaders
+import io.ktor.server.plugins.forwardedheaders.XForwardedHeaders
 import io.ktor.util.flattenEntries
 import io.ktor.server.routing.*
 import io.ktor.server.request.*
@@ -45,6 +47,8 @@ fun main() {
 
 fun Application.relayModule() {
     install(IgnoreTrailingSlash)
+    install(ForwardedHeaders)
+    install(XForwardedHeaders)
     install(CORS) {
         allowMethod(HttpMethod.Options)
         allowMethod(HttpMethod.Get)
@@ -67,13 +71,7 @@ fun Application.relayModule() {
     routing {
         // 1. HEALTH CHECK MUST BE AT THE VERY TOP
         get("/health") {
-            val hasIndex = registry.javaClass.classLoader.getResource("static/index.html") != null
-            call.respondJson(mapOf(
-                "status" to "ok",
-                "version" to "1.1.20",
-                "index_ready" to hasIndex,
-                "nodes_connected" to registry.connectedAgentCount()
-            ))
+            call.respondText("OK", status = HttpStatusCode.OK)
         }
 
         get("/api/health") {

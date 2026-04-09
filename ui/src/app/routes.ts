@@ -6,7 +6,6 @@ import { AndroidOnboarding } from "./components/android/AndroidOnboarding";
 import { AndroidSettings } from "./components/android/AndroidSettings";
 import { ShareLinkScreen } from "./components/android/ShareLinkScreen";
 import { WebConsole } from "./components/web/WebConsole";
-import { TransfersPage } from "./components/TransfersPage";
 
 export const router = createHashRouter([
   {
@@ -18,7 +17,6 @@ export const router = createHashRouter([
       { path: "onboarding", Component: AndroidOnboarding },
       { path: "settings", Component: AndroidSettings },
       { path: "share", Component: ShareLinkScreen },
-      { path: "transfers", Component: TransfersPage },
       { path: "console", Component: WebConsole },
       { path: "console/:shareCode", Component: WebConsole },
       { path: "node/:shareCode", Component: WebConsole },

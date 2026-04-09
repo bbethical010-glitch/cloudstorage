@@ -1,9 +1,6 @@
-import { Outlet, Link, useLocation, useNavigate } from "react-router";
-import { Smartphone, Monitor } from "lucide-react";
-import { Button } from "./ui/button";
+import { Outlet, useLocation, useNavigate } from "react-router";
 import { useEffect } from "react";
 import { Toaster } from "sonner";
-import { TransferIndicatorBar } from "./TransferIndicatorBar";
 
 export function Root() {
   const location = useLocation();
@@ -25,15 +22,9 @@ export function Root() {
   }, [location, navigate]);
 
   return (
-    <div className="w-full h-full bg-[#0B1220] font-sans selection:bg-[#2563EB]/30 overflow-hidden"
-         style={{ display: 'flex', flexDirection: 'column' }}>
+    <div className="w-full h-full bg-[#0B1220] font-sans selection:bg-[#2563EB]/30 overflow-hidden">
       <Toaster position="top-center" richColors theme="dark" />
-      {/* Transfer indicator — zero height when idle, 36px when active */}
-      <TransferIndicatorBar />
-      {/* All existing app content below */}
-      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-        <Outlet />
-      </div>
+      <Outlet />
     </div>
   );
 }

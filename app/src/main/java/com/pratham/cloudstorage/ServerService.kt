@@ -58,7 +58,13 @@ class ServerService : Service() {
 
     private var server: ApplicationEngine? = null
     private var relayTunnelClient: RelayTunnelClient? = null
+    private var uploadNotificationManager: UploadNotificationManager? = null
     private val scope = CoroutineScope(Dispatchers.IO)
+
+    override fun onCreate() {
+        super.onCreate()
+        uploadNotificationManager = UploadNotificationManager(this)
+    }
 
     companion object {
         const val ACTION_START_SERVER = "ACTION_START_SERVER"
@@ -68,7 +74,7 @@ class ServerService : Service() {
         const val EXTRA_RELAY_BASE_URL = "EXTRA_RELAY_BASE_URL"
         const val EXTRA_CONSOLE_PASSWORD = "EXTRA_CONSOLE_PASSWORD"
         private const val CHANNEL_ID = "ServerChannelId"
-        private const val UPLOAD_CHANNEL_ID = "UploadStatusChannel"
+
         
         val tunnelStatusFlow = kotlinx.coroutines.flow.MutableStateFlow(TunnelStatus.Offline)
     }
@@ -369,41 +375,7 @@ class ServerService : Service() {
                             }
                         }
 
-                        post("/upload_event") {
-                            if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
-                            val jsonStr = try { call.receiveText() } catch (e: Exception) { "" }
-                            if (jsonStr.isNotBlank()) {
-                                try {
-                                    val obj = org.json.JSONObject(jsonStr)
-                                    val filename = obj.optString("filename", "Unknown File")
-                                    val progress = obj.optInt("progress", 0)
-                                    triggerUploadNotification(filename, progress)
-                                } catch (e: Exception) {
-                                    android.util.Log.e("UploadEvent", "Failed to parse upload event JSON", e)
-                                }
-                            }
-                            call.respond(HttpStatusCode.OK)
-                        }
 
-                        get("/transfer_status") {
-                            val active = TransferManager.getActiveTransfers()
-                            val globalState = TransferManager.transferState.value
-                            val list = active.map { item ->
-                                mapOf(
-                                    "transferId" to item.id,
-                                    "fileName" to item.filename,
-                                    "totalBytes" to item.totalBytes,
-                                    "bytesWritten" to item.bytesTransferred,
-                                    "progressPercent" to (if (item.totalBytes > 0) (item.bytesTransferred * 100 / item.totalBytes).toInt() else 0),
-                                    "speedBytesPerSecond" to (globalState?.speedBps ?: 0L),
-                                    "isActive" to true,
-                                    "isComplete" to false,
-                                    "isFailed" to false,
-                                    "startedAt" to item.lastUpdateMs
-                                )
-                            }
-                            call.respond(list)
-                        }
 
                         get("/files") {
                             if (!call.hasValidAuth()) return@get call.respond(HttpStatusCode.Unauthorized, "Unauthorized")
@@ -933,16 +905,9 @@ class ServerService : Service() {
                                 val totalChunks = call.request.queryParameters["totalChunks"]?.toIntOrNull() ?: 1
                                 val totalSize = call.request.queryParameters["totalSize"]?.toLongOrNull() ?: 0L
                                 val chunkSize = 5 * 1024 * 1024L // Match frontend constant
+                                transferId = "${fileName}_${totalSize}"
 
-                                transferId = TransferRegistry.generateTransferId(fileName, totalSize)
 
-                                if (chunkIndex == 0) {
-                                    TransferRegistry.onTransferStarted(
-                                        transferId = transferId,
-                                        fileName = fileName,
-                                        totalBytes = totalSize
-                                    )
-                                }
 
                                 val combinedPath = if (!relativePath.isNullOrBlank()) {
                                     if (path.isNotBlank()) "$path/$relativePath" else relativePath
@@ -981,11 +946,15 @@ class ServerService : Service() {
                                         return@post call.respondJson(false, "Directory resolution failed: ${e.message}", "DIR_ERROR")
                                     }
                                 } else {
+                                    finalFileName = sanitizeFilename(fileName)
                                     val segments = path.split("/").filter { it.isNotBlank() }
                                     for (segment in segments) {
                                         targetDir = resolveOrCreateDirectory(targetDir, segment)
                                     }
-                                    finalFileName = sanitizeFilename(fileName)
+                                }
+                                
+                                if (chunkIndex == 0) {
+                                    uploadNotificationManager?.onUploadStarted(transferId, fileName, totalSize)
                                 }
 
                                 if (!targetDir.canWrite()) {
@@ -1037,28 +1006,22 @@ class ServerService : Service() {
                                     } ?: throw Exception("Failed to open file descriptor for writing")
                                 }
 
-                                // Calculate cumulative bytes written across all chunks
-                                val chunkSizeBytes = 5L * 1024L * 1024L
-                                val estimatedCumulativeBytes = minOf(
-                                    (chunkIndex.toLong() + 1L) * chunkSizeBytes,
-                                    if (totalSize > 0) totalSize else (chunkIndex.toLong() + 1L) * chunkSizeBytes
-                                )
-                                TransferRegistry.onChunkWritten(
-                                    transferId = transferId,
-                                    bytesWritten = estimatedCumulativeBytes
-                                )
+
+
+
 
                                 if (chunkIndex == totalChunks - 1) {
-                                    TransferRegistry.onTransferComplete(transferId)
+                                    uploadNotificationManager?.onUploadComplete(transferId)
+                                } else {
+                                    val currentBytes = (chunkIndex.toLong() + 1) * chunkSize
+                                    uploadNotificationManager?.onProgressUpdate(transferId, minOf(currentBytes, totalSize))
                                 }
 
                                 call.respondJson(true)
                             } catch (e: Exception) {
+
                                 if (transferId.isNotBlank()) {
-                                    TransferRegistry.onTransferFailed(
-                                        transferId = transferId,
-                                        error = e.message ?: "Upload failed on chunk $chunkIndex"
-                                    )
+                                    uploadNotificationManager?.onUploadFailed(transferId, e.message ?: "Chunk $chunkIndex failed")
                                 }
                                 android.util.Log.e("UploadChunk", "Error in upload_chunk for $relativePath", e)
                                 call.respondJson(false, e.message ?: "Unknown upload error", "UPLOAD_FAILED")
@@ -1070,25 +1033,7 @@ class ServerService : Service() {
                             call.respondJson(true)
                         }
 
-                        get("/transfer_status") {
-                            val active = TransferRegistry.activeTransfers.value
-                            val response = active.map { transfer ->
-                                mapOf(
-                                    "transferId" to transfer.transferId,
-                                    "fileName" to transfer.fileName,
-                                    "totalBytes" to transfer.totalBytes,
-                                    "bytesWritten" to transfer.bytesWritten,
-                                    "progressPercent" to transfer.progressPercent,
-                                    "speedBytesPerSecond" to transfer.speedBytesPerSecond,
-                                    "isComplete" to transfer.isComplete,
-                                    "isFailed" to transfer.isFailed,
-                                    "isActive" to transfer.isActive,
-                                    "startedAt" to transfer.startedAt,
-                                    "errorMessage" to transfer.errorMessage
-                                )
-                            }
-                            call.respond(response)
-                        }
+
                     }
 
                     get("/{...}") {
@@ -1182,6 +1127,7 @@ class ServerService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        uploadNotificationManager?.cancelAll()
         stopServer()
     }
 
@@ -1350,26 +1296,7 @@ class ServerService : Service() {
         return DocumentFile.fromTreeUri(this@ServerService, targetUri)
     }
 
-    private fun triggerUploadNotification(filename: String, progress: Int) {
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                UPLOAD_CHANNEL_ID,
-                "File Uploads",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            manager.createNotificationChannel(channel)
-        }
-        val builder = NotificationCompat.Builder(this, UPLOAD_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_upload)
-            .setContentTitle(if (progress == 100) "Upload Complete" else "Uploading File")
-            .setContentText(filename)
-            .setProgress(100, progress, progress == 0)
-            .setOnlyAlertOnce(true)
-            .setAutoCancel(progress == 100)
-        
-        manager.notify(filename.hashCode(), builder.build())
-    }
+
 
     private fun formatBytes(bytes: Long): String {
         return when {
