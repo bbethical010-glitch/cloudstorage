@@ -55,6 +55,24 @@ import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.serialization.gson.*
 
+/**
+ * Typed result from the folder manifest handler.
+ * Prevents unchecked casts and ensures exhaustive when() handling.
+ */
+private sealed class ManifestResult {
+    data class Success(
+        val created: Int,
+        val failed: Int,
+        val skipped: Int,
+        val results: List<Map<String, String>>
+    ) : ManifestResult()
+
+    data class Error(
+        val message: String,
+        val code: String
+    ) : ManifestResult()
+}
+
 class ServerService : Service() {
     private val fileLocks = java.util.concurrent.ConcurrentHashMap<String, Any>()
     private val manifestMutex = Mutex()
@@ -758,61 +776,152 @@ class ServerService : Service() {
                         }
 
                         post("/folder_manifest") {
-                            if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            // ═══════════════════════════════════════════════════════════
+                            // NUCLEAR OUTER CATCH — Nothing escapes this route. Ever.
+                            // If even the error-response logic throws (e.g. response
+                            // already committed), we log and eat it.
+                            // ═══════════════════════════════════════════════════════════
                             try {
-                                val basePath = call.request.queryParameters["path"] ?: ""
-                                val jsonStr: String = call.receiveText()
+                                if (!call.hasValidAuth()) {
+                                    call.respond(HttpStatusCode.Unauthorized)
+                                    return@post
+                                }
 
-                                // Run all SAF operations on IO dispatcher, serialized by Mutex
+                                // ── Parse request inputs safely ──────────────────────
+                                val basePath: String
+                                val jsonStr: String
+                                try {
+                                    basePath = call.request.queryParameters["path"] ?: ""
+                                    jsonStr = call.receiveText()
+                                } catch (e: Exception) {
+                                    android.util.Log.e("FolderManifest", "Failed to read request body", e)
+                                    call.respondJson(false, "Failed to read request body: ${e.message}", "BAD_REQUEST")
+                                    return@post
+                                }
+
+                                // ── Validate JSON format ─────────────────────────────
+                                if (jsonStr.isBlank() || (!jsonStr.trimStart().startsWith("[") && !jsonStr.trimStart().startsWith("{"))) {
+                                    call.respondJson(false, "Empty or malformed manifest body", "BAD_MANIFEST")
+                                    return@post
+                                }
+
+                                val jsonArray: org.json.JSONArray
+                                try {
+                                    jsonArray = org.json.JSONArray(jsonStr)
+                                } catch (e: Exception) {
+                                    android.util.Log.e("FolderManifest", "JSON parse failed", e)
+                                    call.respondJson(false, "Malformed JSON: ${e.message}", "JSON_PARSE_ERROR")
+                                    return@post
+                                }
+
+                                if (jsonArray.length() == 0) {
+                                    call.respondJson(true, data = mapOf(
+                                        "directoriesCreated" to 0,
+                                        "directoriesFailed" to 0,
+                                        "results" to emptyList<Any>()
+                                    ))
+                                    return@post
+                                }
+
+                                // ── Resolve base directory safely ────────────────────
                                 val result = kotlinx.coroutines.withContext(Dispatchers.IO) {
                                     val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
-                                        ?: throw IllegalStateException("Storage unavailable")
-
-                                    val baseDir = if (basePath.isBlank() || basePath == "/") root 
-                                                  else resolveSafePath(root, basePath)
-                                        ?: throw IllegalStateException("Upload target directory not found")
-
-                                    if (!baseDir.isDirectory) throw IllegalStateException("Upload target is not a directory")
-
-                                    if (jsonStr.isBlank() || !jsonStr.startsWith("[")) {
-                                        throw IllegalArgumentException("Empty or malformed manifest")
+                                    if (root == null) {
+                                        return@withContext ManifestResult.Error("Storage unavailable", "STORAGE_OFFLINE")
                                     }
 
-                                    val jsonArray = org.json.JSONArray(jsonStr)
+                                    val baseDir = try {
+                                        if (basePath.isBlank() || basePath == "/") root
+                                        else resolveSafePath(root, basePath)
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("FolderManifest", "Base path resolution failed: '$basePath'", e)
+                                        null
+                                    }
 
-                                    // Mutex serializes concurrent batches. withLock auto-releases
-                                    // on exception so subsequent batches never hang.
+                                    if (baseDir == null) {
+                                        return@withContext ManifestResult.Error("Upload target directory not found", "TARGET_NOT_FOUND")
+                                    }
+                                    if (!baseDir.isDirectory) {
+                                        return@withContext ManifestResult.Error("Upload target is not a directory", "NOT_A_DIRECTORY")
+                                    }
+
+                                    // ── Process entries under Mutex ──────────────────
                                     manifestMutex.withLock {
-                                        var directoriesCreated = 0
-                                        var directoriesFailed = 0
+                                        var created = 0
+                                        var failed = 0
+                                        var skipped = 0
                                         val dirCache = mutableMapOf<String, DocumentFile>()
-                                        val failedPaths = mutableListOf<String>()
+                                        val entryResults = mutableListOf<Map<String, String>>()
 
                                         for (i in 0 until jsonArray.length()) {
+                                            // ── Extract path from JSON safely ───────
+                                            val originalPath: String
                                             try {
                                                 val item = jsonArray.getJSONObject(i)
-                                                val relativePath = item.optString("relativePath", "")
-                                                if (relativePath.isBlank()) continue
+                                                originalPath = item.optString("relativePath", "")
+                                            } catch (e: Exception) {
+                                                android.util.Log.e("FolderManifest", "Entry [$i]: failed to parse JSON object", e)
+                                                failed++
+                                                entryResults.add(mapOf(
+                                                    "originalPath" to "<malformed JSON at index $i>",
+                                                    "sanitizedPath" to "",
+                                                    "status" to "FAILED",
+                                                    "error" to "Malformed JSON entry: ${e.message}"
+                                                ))
+                                                continue
+                                            }
 
-                                                // Aggressively sanitize the full path BEFORE validation
-                                                // to strip Android-illegal chars (*, ", <, >, ?, |, :)
-                                                val sanitizedPath = sanitizeRelativePath(relativePath)
-                                                val cleanPath = validateAndNormalizeRelativePath(sanitizedPath)
+                                            // Skip blank entries
+                                            if (originalPath.isBlank()) {
+                                                skipped++
+                                                continue
+                                            }
 
-                                                // Guard: root-level files have no parent dir to create
-                                                if (!cleanPath.contains("/")) continue
-                                                val parentDirPath = cleanPath.substringBeforeLast("/")
-                                                if (parentDirPath.isBlank() || parentDirPath == "/") continue
+                                            // ── Sanitize the path aggressively ──────
+                                            val sanitizedPath: String
+                                            try {
+                                                sanitizedPath = sanitizeManifestPath(originalPath)
+                                            } catch (e: Exception) {
+                                                android.util.Log.e("FolderManifest", "Entry [$i]: sanitization failed for '$originalPath'", e)
+                                                failed++
+                                                entryResults.add(mapOf(
+                                                    "originalPath" to originalPath,
+                                                    "sanitizedPath" to "",
+                                                    "status" to "FAILED",
+                                                    "error" to "Path sanitization failed: ${e.message}"
+                                                ))
+                                                continue
+                                            }
 
-                                                val dirSegments = parentDirPath.split("/").filter { it.isNotBlank() }
-                                                if (dirSegments.isEmpty()) continue
+                                            // Root-level files have no parent dir to create
+                                            if (!sanitizedPath.contains("/")) {
+                                                skipped++
+                                                continue
+                                            }
 
+                                            val parentDirPath = sanitizedPath.substringBeforeLast("/")
+                                            if (parentDirPath.isBlank() || parentDirPath == "/") {
+                                                skipped++
+                                                continue
+                                            }
+
+                                            val dirSegments = parentDirPath.split("/").filter { it.isNotBlank() }
+                                            if (dirSegments.isEmpty()) {
+                                                skipped++
+                                                continue
+                                            }
+
+                                            // ── Create directory tree segment by segment ──
+                                            try {
                                                 var currentDir: DocumentFile = baseDir
                                                 var currentKey = ""
 
                                                 for (segment in dirSegments) {
                                                     val safeSegment = sanitizeFilename(segment)
-                                                    currentKey = if (currentKey.isEmpty()) safeSegment else "$currentKey${File.separator}$safeSegment"
+                                                    if (safeSegment.isBlank() || safeSegment == "unnamed_file") continue
+
+                                                    currentKey = if (currentKey.isEmpty()) safeSegment
+                                                                 else "$currentKey/${safeSegment}"
 
                                                     val cached = dirCache[currentKey]
                                                     if (cached != null) {
@@ -821,38 +930,62 @@ class ServerService : Service() {
                                                         val nextDir = resolveOrCreateDirectory(currentDir, safeSegment)
                                                         currentDir = nextDir
                                                         dirCache[currentKey] = nextDir
-                                                        directoriesCreated++
                                                     }
                                                 }
+                                                created++
+                                                // Only include detailed results for failures to keep response small
                                             } catch (e: Exception) {
-                                                // Fault-tolerant: log the failure, skip this entry,
-                                                // do NOT crash the entire batch.
-                                                val failedPath = try { jsonArray.getJSONObject(i).optString("relativePath", "<unknown>") } catch (_: Exception) { "<unknown>" }
-                                                android.util.Log.e("FolderManifest", "Skipping entry [$i]: '$failedPath' — ${e.message}", e)
-                                                directoriesFailed++
-                                                failedPaths.add(failedPath)
-                                                // continue to next entry
+                                                android.util.Log.e("FolderManifest",
+                                                    "Entry [$i]: directory creation failed | original='$originalPath' | sanitized='$sanitizedPath'", e)
+                                                failed++
+                                                entryResults.add(mapOf(
+                                                    "originalPath" to originalPath,
+                                                    "sanitizedPath" to sanitizedPath,
+                                                    "status" to "FAILED",
+                                                    "error" to (e.message ?: "Unknown directory creation error")
+                                                ))
                                             }
                                         }
-                                        Triple(directoriesCreated, directoriesFailed, failedPaths.take(10))
+
+                                        ManifestResult.Success(
+                                            created = created,
+                                            failed = failed,
+                                            skipped = skipped,
+                                            results = entryResults.take(20) // Cap detailed results
+                                        )
                                     }
                                 }
-                                val (created, failed, failedPaths) = result
 
-                                if (failed > 0) {
-                                    android.util.Log.w("FolderManifest", "Batch completed with $failed failures out of ${created + failed} entries")
+                                // ── Send response based on result ────────────────────
+                                when (result) {
+                                    is ManifestResult.Error -> {
+                                        call.respondJson(false, result.message, result.code)
+                                    }
+                                    is ManifestResult.Success -> {
+                                        if (result.failed > 0) {
+                                            android.util.Log.w("FolderManifest",
+                                                "Batch: ${result.created} created, ${result.failed} failed, ${result.skipped} skipped")
+                                        }
+                                        call.respondJson(true, data = mapOf(
+                                            "directoriesCreated" to result.created,
+                                            "directoriesFailed" to result.failed,
+                                            "directoriesSkipped" to result.skipped,
+                                            "results" to result.results
+                                        ))
+                                    }
                                 }
-                                call.respondJson(true, data = mapOf(
-                                    "directoriesCreated" to created,
-                                    "directoriesFailed" to failed,
-                                    "failedPaths" to failedPaths
-                                ))
-                            } catch (e: SecurityException) {
-                                android.util.Log.e("ServerService", "Invalid path traversal in manifest", e)
-                                call.respondJson(false, "Invalid path traversal detected", "INVALID_PATH")
                             } catch (e: Exception) {
-                                android.util.Log.e("ServerService", "Folder manifest processing failed", e)
-                                call.respondJson(false, e.message ?: "Failed to generate directory tree", "MANIFEST_FAILED")
+                                // ═════════════════════════════════════════════════════
+                                // LAST RESORT — This should NEVER fire, but if it does
+                                // we absolutely refuse to let it become a 502.
+                                // ═════════════════════════════════════════════════════
+                                android.util.Log.e("FolderManifest", "CRITICAL: Unhandled exception in manifest route", e)
+                                try {
+                                    call.respondJson(false, "Internal server error: ${e.message}", "INTERNAL_ERROR")
+                                } catch (responseError: Exception) {
+                                    // Even responding failed (response already committed, etc.)
+                                    android.util.Log.e("FolderManifest", "CRITICAL: Failed to send error response", responseError)
+                                }
                             }
                         }
 
@@ -1280,6 +1413,49 @@ class ServerService : Service() {
                     .replace(Regex("[*\"<>?|:]"), "_")  // Strip Android-illegal chars
                     .trim()                                // Trim whitespace per segment
             }
+    }
+
+    /**
+     * Comprehensive manifest path sanitizer. This is the FIRST line of defense —
+     * runs before any File I/O or SAF operations.
+     *
+     * 1. Normalizes separators (backslash → forward slash)
+     * 2. Strips Android-illegal characters per segment: * " < > ? | : \\
+     * 3. Trims whitespace and trailing dots per segment
+     * 4. Collapses repeated slashes (a///b → a/b)
+     * 5. Removes leading slashes (absolute → relative)
+     * 6. Blocks path traversal (.. segments)
+     * 7. Rejects empty results
+     */
+    private fun sanitizeManifestPath(rawPath: String): String {
+        val normalized = rawPath
+            .replace('\\', '/')                              // Windows → Unix separators
+            .replace(Regex("/+"), "/")                       // Collapse repeated slashes
+            .trimStart('/')                                   // Remove leading slash
+            .trim()                                           // Trim outer whitespace
+
+        if (normalized.isBlank()) {
+            throw IllegalArgumentException("Path is blank after normalization")
+        }
+
+        val segments = normalized.split("/").map { segment ->
+            // Block traversal
+            if (segment == ".." || segment == ".") {
+                throw SecurityException("Path traversal detected: '$segment' in '$rawPath'")
+            }
+
+            segment
+                .replace(Regex("[*\"<>?|:\\\\]"), "_")       // Strip illegal chars
+                .trim()                                       // Trim whitespace
+                .trimEnd('.')                                  // Remove trailing dots
+                .ifEmpty { "_" }                              // Never leave a blank segment
+        }.filter { it.isNotBlank() && it != "_" }             // Drop degenerate segments
+
+        if (segments.isEmpty()) {
+            throw IllegalArgumentException("Path is empty after sanitization: '$rawPath'")
+        }
+
+        return segments.joinToString("/")
     }
 
     private fun validateAndNormalizeRelativePath(relativePath: String): String {
