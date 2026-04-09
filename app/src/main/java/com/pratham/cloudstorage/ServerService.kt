@@ -777,7 +777,7 @@ class ServerService : Service() {
 
                                     val jsonArray = org.json.JSONArray(jsonStr)
                                     var directoriesCreated = 0
-                                    val dirCache = mutableMapOf<String, DocumentFile>()
+                                    val dirCache = java.util.concurrent.ConcurrentHashMap<String, DocumentFile>()
                                     
                                     for (i in 0 until jsonArray.length()) {
                                         val item = jsonArray.getJSONObject(i)
@@ -786,9 +786,13 @@ class ServerService : Service() {
                                         
                                         val cleanPath = validateAndNormalizeRelativePath(relativePath)
                                         
+                                        // Guard: root-level files have no parent directory to create
                                         if (!cleanPath.contains("/")) continue
                                         val parentDirPath = cleanPath.substringBeforeLast("/")
+                                        if (parentDirPath.isBlank() || parentDirPath == "/") continue
+
                                         val dirSegments = parentDirPath.split("/").filter { it.isNotBlank() }
+                                        if (dirSegments.isEmpty()) continue
 
                                         var currentDir: DocumentFile = baseDir
                                         var currentKey = ""
@@ -797,8 +801,10 @@ class ServerService : Service() {
                                             val safeSegment = sanitizeFilename(segment)
                                             currentKey = if (currentKey.isEmpty()) safeSegment else "$currentKey${File.separator}$safeSegment"
                                             
-                                            if (dirCache.containsKey(currentKey)) {
-                                                currentDir = dirCache[currentKey]!!
+                                            // Thread-safe cache lookup via ConcurrentHashMap
+                                            val cached = dirCache[currentKey]
+                                            if (cached != null) {
+                                                currentDir = cached
                                             } else {
                                                 try {
                                                     val nextDir = resolveOrCreateDirectory(currentDir, safeSegment)
@@ -806,6 +812,8 @@ class ServerService : Service() {
                                                     dirCache[currentKey] = nextDir
                                                     directoriesCreated++
                                                 } catch (e: Exception) {
+                                                    // Log but don't crash the entire batch for one bad segment
+                                                    android.util.Log.e("FolderManifest", "Segment '$safeSegment' failed: ${e.message}")
                                                     throw Exception("Failed to pre-create directory tree at segment '$safeSegment': ${e.message}")
                                                 }
                                             }
@@ -1160,19 +1168,64 @@ class ServerService : Service() {
         }
     }
 
+    /**
+     * Thread-safe directory resolution/creation for SAF.
+     *
+     * Race condition fix: Under concurrent uploads, multiple threads may try to
+     * create the same directory simultaneously. `createDirectory()` returns null
+     * for the losing thread because the directory already exists. This is NOT a
+     * failure — it's expected. We use synchronized + post-creation re-query to
+     * handle this gracefully.
+     */
     private fun resolveOrCreateDirectory(parent: DocumentFile, segment: String): DocumentFile {
         val safeSegment = sanitizeFilename(segment)
-        val existing = findFileReliable(parent, safeSegment)
-        if (existing != null && existing.isDirectory) return existing
-        if (existing != null && !existing.isDirectory) {
-            throw IllegalStateException("Path conflict: '$safeSegment' exists as a file, not a directory")
+
+        // Fast path — directory already exists (no lock needed)
+        findFileReliable(parent, safeSegment)?.let { existing ->
+            if (existing.isDirectory) return existing
+            if (!existing.isDirectory) {
+                throw IllegalStateException("Path conflict: '$safeSegment' exists as a file, not a directory")
+            }
         }
-        val created = parent.createDirectory(safeSegment)
-        if (created != null) {
-            android.util.Log.w("UploadChunk", "Auto-healed missing directory segment: $safeSegment")
-            return created
+
+        // Slow path — need to create. Synchronize on the canonicalized path
+        // to prevent two threads from racing on the same directory segment.
+        val lockKey = "${parent.uri}/$safeSegment"
+        synchronized(lockKey.intern()) {
+            // Double-check after acquiring lock — another thread may have created it
+            findFileReliable(parent, safeSegment)?.let { existing ->
+                if (existing.isDirectory) return existing
+                if (!existing.isDirectory) {
+                    throw IllegalStateException("Path conflict: '$safeSegment' exists as a file, not a directory")
+                }
+            }
+
+            // Attempt creation — ignore null return value, it does NOT mean failure
+            val created = parent.createDirectory(safeSegment)
+            if (created != null) {
+                android.util.Log.d("DirCreate", "Created directory segment: $safeSegment")
+                return created
+            }
+
+            // createDirectory returned null — likely a race condition where another
+            // thread created it between our check and our create call.
+            // Re-query SAF as the ultimate source of truth.
+            android.util.Log.w("DirCreate", "createDirectory returned null for '$safeSegment', re-querying SAF")
+            findFileReliable(parent, safeSegment)?.let { recheck ->
+                if (recheck.isDirectory) return recheck
+            }
+
+            // Final fallback: brief delay + one more attempt (SAF caching lag)
+            Thread.sleep(100)
+            findFileReliable(parent, safeSegment)?.let { finalCheck ->
+                if (finalCheck.isDirectory) return finalCheck
+            }
+
+            // Only throw if the directory truly does not exist after all attempts
+            throw IllegalStateException(
+                "Failed to create or locate directory '$safeSegment' under ${parent.uri} after synchronized retry"
+            )
         }
-        throw IllegalStateException("createDirectory returned null for segment '$safeSegment' under ${parent.uri}")
     }
 
     private fun sanitizeFilename(name: String): String {
