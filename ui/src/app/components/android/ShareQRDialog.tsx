@@ -5,7 +5,6 @@ import {
   X,
   Globe,
   Wifi,
-  Link2,
   Copy,
   Share2,
   Check,
@@ -15,7 +14,7 @@ import { Button } from "../ui/button";
 import { androidBridge } from "../../bridge";
 import { toast } from "sonner";
 
-type Tab = "relay" | "lan" | "invite";
+type Tab = "relay" | "lan";
 
 interface ShareQRDialogProps {
   open: boolean;
@@ -29,7 +28,6 @@ interface ShareQRDialogProps {
 const TABS: { id: Tab; label: string; icon: React.ReactNode; color: string }[] = [
   { id: "relay", label: "Relay", icon: <Globe className="w-4 h-4" />, color: "#A855F7" },
   { id: "lan", label: "LAN", icon: <Wifi className="w-4 h-4" />, color: "#10B981" },
-  { id: "invite", label: "Invite", icon: <Link2 className="w-4 h-4" />, color: "#F59E0B" },
 ];
 
 export function ShareQRDialog({ open, onClose, relayBaseUrl, shareCode, lanUrl, tunnelConnected }: ShareQRDialogProps) {
@@ -39,13 +37,12 @@ export function ShareQRDialog({ open, onClose, relayBaseUrl, shareCode, lanUrl, 
   const relayUrl = relayBaseUrl
     ? `https://${relayBaseUrl.replace(/^https?:\/\//, '')}/node/${shareCode}`
     : "";
-  const inviteUrl = `easystoragecloud://join?code=${shareCode}`;
+
 
   const getQRValue = () => {
     switch (activeTab) {
       case "relay": return relayUrl;
       case "lan": return lanUrl || "";
-      case "invite": return inviteUrl;
     }
   };
 
@@ -53,7 +50,6 @@ export function ShareQRDialog({ open, onClose, relayBaseUrl, shareCode, lanUrl, 
     switch (activeTab) {
       case "relay": return relayUrl;
       case "lan": return lanUrl || "Not available";
-      case "invite": return inviteUrl;
     }
   };
 
@@ -61,7 +57,6 @@ export function ShareQRDialog({ open, onClose, relayBaseUrl, shareCode, lanUrl, 
     switch (activeTab) {
       case "relay": return "Access your storage from anywhere via the cloud relay. Works on any network.";
       case "lan": return "Direct connection over your local WiFi network. Faster speeds, no internet needed.";
-      case "invite": return "Share this deep link to let others open your node directly in the Easy Storage app.";
     }
   };
 
@@ -90,9 +85,6 @@ export function ShareQRDialog({ open, onClose, relayBaseUrl, shareCode, lanUrl, 
         break;
       case "lan":
         shareText = `📡 Connect to my Easy Storage on local network:\n${url}\n\nNote: You must be on the same WiFi network.`;
-        break;
-      case "invite":
-        shareText = `🔗 Join my Easy Storage Cloud node:\n${url}\n\nOpen this link in the Easy Storage Cloud app.`;
         break;
     }
     androidBridge.shareLink(shareText);

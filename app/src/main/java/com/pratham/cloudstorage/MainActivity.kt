@@ -99,6 +99,9 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.AlertDialog
 
 import android.webkit.JavascriptInterface
 import org.json.JSONObject
@@ -117,6 +120,7 @@ class MainActivity : ComponentActivity() {
     private var relayBaseUrl by mutableStateOf("")
     private var isNodeRunning by mutableStateOf(false)
     private var tunnelStatus by mutableStateOf(TunnelStatus.Offline.name)
+    private var showPasswordSetup by mutableStateOf(false)
     
     private lateinit var assetLoader: WebViewAssetLoader
 
@@ -254,6 +258,12 @@ class MainActivity : ComponentActivity() {
 
         setupWebView()
         webView.loadUrl("https://app.local.cloud/web/index.html")
+
+        // Check if password has been set — if not, show password setup dialog
+        val authPrefs = getSharedPreferences("NodeAuthSettings", Context.MODE_PRIVATE)
+        if (!authPrefs.contains("password_hash")) {
+            showPasswordSetup = true
+        }
 
         setContent {
             CloudStorageTheme {
@@ -432,6 +442,160 @@ class MainActivity : ComponentActivity() {
                     .padding(16.dp)
                     .padding(bottom = 8.dp)
             )
+        }
+
+        // Password Setup Dialog — blocks UI until password is set
+        if (showPasswordSetup) {
+            NodePasswordSetupDialog(
+                onPasswordSet = { password ->
+                    val md = java.security.MessageDigest.getInstance("SHA-256")
+                    val hash = java.util.Base64.getEncoder().encodeToString(md.digest(password.toByteArray()))
+                    val token = java.util.UUID.randomUUID().toString()
+                    val authPrefs = getSharedPreferences("NodeAuthSettings", Context.MODE_PRIVATE)
+                    authPrefs.edit()
+                        .putString("password_hash", hash)
+                        .putString("active_token", token)
+                        .apply()
+                    showPasswordSetup = false
+                    Toast.makeText(this@MainActivity, "Node password set successfully", Toast.LENGTH_SHORT).show()
+                }
+            )
+        }
+    }
+
+    @Composable
+    private fun NodePasswordSetupDialog(onPasswordSet: (String) -> Unit) {
+        var password by remember { mutableStateOf("") }
+        var confirmPassword by remember { mutableStateOf("") }
+        var error by remember { mutableStateOf<String?>(null) }
+
+        Dialog(onDismissRequest = { /* Block dismiss — password is mandatory */ }) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .shadow(16.dp, RoundedCornerShape(24.dp)),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(28.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // Icon
+                    Box(
+                        modifier = Modifier
+                            .size(56.dp)
+                            .background(PrimaryBlue, RoundedCornerShape(16.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "\uD83D\uDD12",
+                            style = MaterialTheme.typography.headlineMedium
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    Text(
+                        text = "Secure Your Node",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = "Set a password to protect your storage node. This will be required to access the web console.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                        textAlign = TextAlign.Center
+                    )
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it; error = null },
+                        label = { Text("Password") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = PrimaryBlue,
+                            unfocusedBorderColor = DarkDivider,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            focusedLabelColor = PrimaryBlue,
+                            unfocusedLabelColor = TextSecondary,
+                            cursorColor = PrimaryBlue
+                        )
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedTextField(
+                        value = confirmPassword,
+                        onValueChange = { confirmPassword = it; error = null },
+                        label = { Text("Confirm Password") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = PrimaryBlue,
+                            unfocusedBorderColor = DarkDivider,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            focusedLabelColor = PrimaryBlue,
+                            unfocusedLabelColor = TextSecondary,
+                            cursorColor = PrimaryBlue
+                        )
+                    )
+
+                    // Error message
+                    error?.let {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = it,
+                            color = Color(0xFFEF4444),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    Button(
+                        onClick = {
+                            when {
+                                password.length < 4 -> error = "Password must be at least 4 characters"
+                                password != confirmPassword -> error = "Passwords do not match"
+                                else -> onPasswordSet(password)
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Text(
+                            text = "Lock Node",
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = "You can change this later in Settings",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary
+                    )
+                }
+            }
         }
     }
 
@@ -684,6 +848,7 @@ class MainActivity : ComponentActivity() {
             }
             startService(stopIntent)
             isNodeRunning = false
+            preferences.edit().putBoolean("node_was_running", false).apply()
         } else {
             android.util.Log.e("NODE_DEBUG", "Launching the engine on relay: $relayBaseUrl")
             val startIntent = Intent(this, ServerService::class.java).apply {
@@ -694,6 +859,10 @@ class MainActivity : ComponentActivity() {
             }
             ContextCompat.startForegroundService(this, startIntent)
             isNodeRunning = true
+            preferences.edit().putBoolean("node_was_running", true).apply()
+
+            // Prompt battery optimization exemption on first node start
+            promptBatteryOptimization()
         }
         updateWebState()
     }
@@ -770,5 +939,20 @@ class MainActivity : ComponentActivity() {
         private const val PREF_SELECTED_URI = "selected_uri"
         private const val PREF_SHARE_CODE = "share_code"
         private const val PREF_RELAY_BASE_URL = "relay_base_url"
+    }
+
+    private fun promptBatteryOptimization() {
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                val intent = Intent(
+                    android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName")
+                )
+                startActivity(intent)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("NODE_DEBUG", "Battery optimization prompt failed", e)
+        }
     }
 }

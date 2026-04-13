@@ -337,6 +337,14 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyApiRequest(
         return
     }
 
+    if (
+        request.path().endsWith("/upload_chunk", ignoreCase = true) &&
+        request.queryParameters["filename"].isNullOrBlank()
+    ) {
+        respondJson(mapOf("error" to "Missing or malformed filename"), HttpStatusCode.BadRequest)
+        return
+    }
+
     val agent = registry.getAgent(nodeId)
     if (agent == null) {
         if (request.path().endsWith("/storage")) {

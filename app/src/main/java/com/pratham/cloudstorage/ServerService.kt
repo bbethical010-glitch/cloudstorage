@@ -1347,10 +1347,10 @@ class ServerService : Service() {
                             var transferId = ""
                             try {
                                 val path = call.request.queryParameters["path"]?.takeIf { it.isNotBlank() } ?: ""
-                                val fileName = call.request.queryParameters["filename"]
-                                    ?: call.request.queryParameters["fileName"]
+                                val fileName = call.request.queryParameters["filename"]?.takeIf { it.isNotBlank() }
+                                    ?: call.request.queryParameters["fileName"]?.takeIf { it.isNotBlank() }
                                     ?: run {
-                                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing_filename"))
+                                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing or malformed filename"))
                                         return@post
                                     }
                                 relativePath = call.request.queryParameters["relativePath"]?.takeIf { it.isNotBlank() }

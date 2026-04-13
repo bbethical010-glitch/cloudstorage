@@ -203,6 +203,33 @@ const SquareLoader = ({ size = "md", color = "var(--accent)" }: { size?: "sm" | 
   );
 };
 
+function buildEncodedUploadChunkQuery(params: {
+  filename: string;
+  chunkIndex: number;
+  totalChunks: number;
+  totalSize: number;
+  path?: string;
+  relativePath?: string;
+}) {
+  const pairs: Array<[string, string]> = [
+    ['filename', params.filename],
+    ['chunkIndex', String(params.chunkIndex)],
+    ['totalChunks', String(params.totalChunks)],
+    ['totalSize', String(params.totalSize)],
+  ];
+
+  if (params.relativePath) {
+    pairs.push(['relativePath', params.relativePath]);
+  }
+  if (params.path) {
+    pairs.push(['path', params.path]);
+  }
+
+  return pairs
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('&');
+}
+
 function DeleteConfirmModal({
   file,
   onConfirm,
@@ -347,7 +374,9 @@ export function WebConsole() {
   const buildApiUrl = useCallback((endpoint: string) => {
     const url = new URL(`${getBaseUrl()}${endpoint}`, window.location.origin);
     if (shareCode && url.pathname.startsWith('/api/')) {
-      url.searchParams.set('nodeId', shareCode);
+      url.searchParams.delete('nodeId');
+      const separator = url.search ? '&' : '?';
+      return `${url.pathname}${url.search}${separator}nodeId=${encodeURIComponent(shareCode)}${url.hash}`;
     }
     return `${url.pathname}${url.search}${url.hash}`;
   }, [shareCode]);
@@ -832,20 +861,14 @@ export function WebConsole() {
     fileProgressMap: Record<string, number>,
     updateGlobalProgress: () => void
   ) => {
-    const params = new URLSearchParams({
+    const query = buildEncodedUploadChunkQuery({
       filename,
-      chunkIndex: String(chunkIndex),
-      totalChunks: String(totalChunks),
-      totalSize: String(fileSize),
+      chunkIndex,
+      totalChunks,
+      totalSize: fileSize,
+      path: currentPath || undefined,
+      relativePath,
     });
-
-    if (relativePath) {
-      params.set('relativePath', relativePath);
-    }
-
-    if (currentPath) {
-      params.set('path', currentPath);
-    }
 
     if (p2pReady && isDataChannelReady && p2pTransport?.ready) {
       const uploadFile = new File([chunk], filename, {
@@ -857,7 +880,7 @@ export function WebConsole() {
 
       const response = await p2pTransport.upload(
         '/api/upload_chunk',
-        params.toString(),
+        query,
         uploadFile,
         getHeaders() as Record<string, string>
       );
@@ -880,7 +903,7 @@ export function WebConsole() {
 
     await new Promise<void>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      let uploadUrl = buildApiUrl(`/api/upload_chunk?${params.toString()}`);
+      let uploadUrl = buildApiUrl(`/api/upload_chunk?${query}`);
 
       xhr.open("POST", uploadUrl);
       xhr.timeout = 60000;

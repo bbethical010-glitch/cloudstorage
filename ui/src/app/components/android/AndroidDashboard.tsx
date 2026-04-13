@@ -83,7 +83,7 @@ export function AndroidDashboard() {
                 {folderName || "No Storage"} • {displayStorageTotalGB} GB
               </h2>
               <span className="text-[10px] font-bold text-[#9CA3AF] uppercase tracking-[0.2em]">
-                Local Only Mode
+                {isOnline ? "Engine Active" : "Ready to Launch"}
               </span>
             </div>
 

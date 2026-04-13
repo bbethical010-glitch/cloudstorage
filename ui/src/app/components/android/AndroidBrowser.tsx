@@ -56,6 +56,29 @@ export function formatDate(timestamp: number) {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
 }
 
+function buildEncodedUploadChunkQuery(params: {
+  filename: string;
+  chunkIndex: number;
+  totalChunks: number;
+  totalSize: number;
+  path?: string;
+}) {
+  const pairs: Array<[string, string]> = [
+    ['filename', params.filename],
+    ['chunkIndex', String(params.chunkIndex)],
+    ['totalChunks', String(params.totalChunks)],
+    ['totalSize', String(params.totalSize)],
+  ];
+
+  if (params.path) {
+    pairs.push(['path', params.path]);
+  }
+
+  return pairs
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('&');
+}
+
 export function AndroidBrowser() {
   const navigate = useNavigate();
   const ctx = useContext(AppStateContext);
@@ -146,14 +169,14 @@ export function AndroidBrowser() {
 
         await new Promise<void>((resolve, reject) => {
           const xhr = new XMLHttpRequest();
-          const uploadParams = new URLSearchParams({
+          const uploadQuery = buildEncodedUploadChunkQuery({
             filename: file.name,
-            chunkIndex: String(chunkIndex),
-            totalChunks: String(totalChunks),
-            totalSize: String(file.size),
+            chunkIndex,
+            totalChunks,
+            totalSize: file.size,
+            path: currentPath || undefined,
           });
-          if (currentPath) uploadParams.set("path", currentPath);
-          const uploadUrl = `http://127.0.0.1:8080/api/upload_chunk?${uploadParams.toString()}`;
+          const uploadUrl = `http://127.0.0.1:8080/api/upload_chunk?${uploadQuery}`;
           xhr.open("POST", uploadUrl);
           xhr.setRequestHeader('Authorization', `Bearer ${token}`);
           xhr.setRequestHeader('Content-Type', 'application/octet-stream');
