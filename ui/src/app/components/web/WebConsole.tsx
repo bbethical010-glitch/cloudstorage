@@ -47,7 +47,9 @@ import {
   Github,
   Twitter,
   Linkedin,
-  Youtube
+  Youtube,
+  FolderDown,
+  FolderX
 } from "lucide-react";
 import { Card } from "../ui/card";
 import { Button } from "../ui/button";
@@ -91,14 +93,14 @@ const AnimatedFolder = ({ size = "small" }: { size?: "small" | "large" }) => (
  * Prevents "JSON Parse error: Unrecognized token '<'" by ensuring Content-Type.
  */
 async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> {
-  const headers = { 
-    ...options.headers, 
+  const headers = {
+    ...options.headers,
     'Accept': 'application/json',
     'X-Requested-With': 'XMLHttpRequest'
   };
 
   const response = await fetch(url, { ...options, headers });
-  
+
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
   }
@@ -114,7 +116,7 @@ async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> 
 }
 
 /**
- * Hook for intelligent node status polling. 
+ * Hook for intelligent node status polling.
  * Prevents flickering to 'offline' on single-request timeouts.
  */
 function useNodeStatus(shareCode: string, intervalMs = 5000) {
@@ -171,9 +173,11 @@ function useNodeStatus(shareCode: string, intervalMs = 5000) {
     return () => clearInterval(timer);
   }, [checkStatus, intervalMs, shareCode]);
 
+  const forceCheckStatus = useCallback(() => checkStatus(true), [checkStatus]);
+
   return {
     isOnline,
-    checkStatus: () => checkStatus(true),
+    checkStatus: forceCheckStatus,
     lastCheck,
   };
 }
@@ -185,6 +189,7 @@ interface FileNode {
   isDirectory: boolean;
   size: number;
   lastModified: number;
+  mimeType?: string;
 }
 
 const SquareLoader = ({ size = "md", color = "var(--accent)" }: { size?: "sm" | "md" | "lg", color?: string }) => {
@@ -198,8 +203,61 @@ const SquareLoader = ({ size = "md", color = "var(--accent)" }: { size?: "sm" | 
   );
 };
 
+function DeleteConfirmModal({
+  file,
+  onConfirm,
+  onCancel,
+}: {
+  file: FileNode;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const [confirmed, setConfirmed] = useState(false);
+
+  return (
+    <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={onCancel}>
+      <div className="w-full max-w-md rounded-lg border border-[#3A1F2A] bg-[#111827] p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-[#EF4444]/10">
+          <AlertCircle className="h-6 w-6 text-[#EF4444]" />
+        </div>
+        <h2 className="text-xl font-bold text-white">
+          {file.isDirectory ? "Delete folder and all contents?" : "Delete this file?"}
+        </h2>
+        <p className="mt-3 break-all rounded-lg border border-[#1F2937] bg-[#0B1220] px-3 py-2 text-sm text-[#E5E7EB]">
+          {file.name}
+        </p>
+        {file.isDirectory && (
+          <p className="mt-4 text-sm leading-relaxed text-[#FCA5A5]">
+            This will permanently delete the folder and everything inside it. This action cannot be undone.
+          </p>
+        )}
+        <label className="mt-5 flex items-center gap-3 text-sm text-[#CBD5E1]">
+          <input
+            type="checkbox"
+            checked={confirmed}
+            onChange={(e) => setConfirmed(e.target.checked)}
+            className="h-4 w-4 rounded border-[#374151] bg-[#0B1220]"
+          />
+          I understand this cannot be undone
+        </label>
+        <div className="mt-6 flex justify-end gap-3">
+          <Button variant="ghost" onClick={onCancel} className="text-[#CBD5E1] hover:text-white">
+            Cancel
+          </Button>
+          <Button
+            onClick={onConfirm}
+            disabled={!confirmed}
+            className="rounded-lg bg-[#DC2626] text-white hover:bg-[#B91C1C] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {file.isDirectory ? "Delete Folder" : "Delete File"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function WebConsole() {
-  console.log("WEB_CONSOLE_RENDERED");
   const [files, setFiles] = useState<FileNode[]>([]);
   const [currentPath, setCurrentPath] = useState<string>("");
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
@@ -227,27 +285,32 @@ export function WebConsole() {
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareConfig, setShareConfig] = useState({ expiry: '24h', readOnly: true });
   const [activePreviewFile, setActivePreviewFile] = useState<FileNode | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<FileNode | null>(null);
   const [terminalLogs, setTerminalLogs] = useState<{ id: string; msg: string; type: 'sys' | 'net' | 'io'; timestamp: string }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    console.log("WEB_CONSOLE_RENDERED");
+  }, []);
 
   const { shareCode: paramShareCode } = useParams<{ shareCode: string }>();
 
   const getShareCode = () => {
     if (paramShareCode) return paramShareCode.toUpperCase();
-    
+
     const searchParams = new URLSearchParams(window.location.search);
     const queryCode = searchParams.get('code') || searchParams.get('shareCode');
     if (queryCode) return queryCode.toUpperCase();
-    
+
     const path = window.location.pathname;
     const hash = window.location.hash;
-    
+
     // Improved regex to handle /console/ and #/console/ patterns without requiring a leading slash
     const pattern = /(?:node|console)\/([A-Z0-9]{5,20})/i;
     const pathMatch = path.match(pattern);
     const hashMatch = hash.match(pattern);
-    
+
     return (pathMatch?.[1] || hashMatch?.[1] || '').toUpperCase();
   };
 
@@ -256,12 +319,12 @@ export function WebConsole() {
 
   const shareCode = getShareCode();
   const { isOnline: isSignalingOnline, checkStatus: refreshNodeStatus, lastCheck } = useNodeStatus(shareCode);
-  
+
   const isLocalSession = useMemo(() => {
     const host = window.location.hostname;
     return host === 'localhost' || host === '127.0.0.1' || /^10\./.test(host) || /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host) || /^192\.168\./.test(host);
   }, []);
-  
+
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup' | 'none'>('none');
   const [authUsername, setAuthUsername] = useState('');
@@ -295,7 +358,7 @@ export function WebConsole() {
     const auth = authList['Authorization'];
     const token = auth?.startsWith('Bearer ') ? auth.substring(7) : auth;
     if (!token) return url;
-    
+
     // Check if URL already has query params
     const separator = url.includes('?') ? '&' : '?';
     return `${url}${separator}pwd=${encodeURIComponent(token)}`;
@@ -346,7 +409,7 @@ export function WebConsole() {
       try {
         const authStatusUrl = buildApiUrl('/api/auth/status');
         const data = await fetchJson<{hasAccount: boolean}>(authStatusUrl);
-        
+
         const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token');
         const params = new URLSearchParams(window.location.hash.includes('?') ? window.location.hash.split('?')[1] : '');
         const pwd = params.get('pwd') || token;
@@ -464,7 +527,7 @@ export function WebConsole() {
     else { setSortField(field); setSortDirection("asc"); }
   };
 
-  const filteredAndSortedFiles = files
+  const filteredAndSortedFiles = useMemo(() => files
     .filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase()))
     .sort((a, b) => {
       // folders first
@@ -482,7 +545,7 @@ export function WebConsole() {
           break;
       }
       return sortDirection === "asc" ? val : -val;
-    });
+    }), [files, searchQuery, sortDirection, sortField]);
 
   const webrtc = useWebRTC({
     relayUrl: getRelayUrl(),
@@ -537,7 +600,7 @@ export function WebConsole() {
       const res = await apiFetch('/api/storage', {
         headers: getHeaders() as any
       });
-      
+
       if (!res.ok) {
           if (retryCount < 3) {
               setTimeout(() => loadStorageStats(retryCount + 1), 2000 * (retryCount + 1));
@@ -585,11 +648,11 @@ export function WebConsole() {
   const loadFiles = useCallback(async (path: string, retryCount = 0) => {
     setIsRefreshing(true);
     if (retryCount === 0) setFilesError("");
-    
+
     try {
       const timestamp = Date.now();
       const endpoint = activeTab === "Trash" ? `/api/trash?t=${timestamp}` : `/api/files?path=${encodeURIComponent(path)}&t=${timestamp}`;
-      const res = await apiFetch(endpoint, { 
+      const res = await apiFetch(endpoint, {
         headers: { ...getHeaders(), 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' } as any
       });
 
@@ -600,7 +663,7 @@ export function WebConsole() {
             return;
         }
         const body = await res.json().catch(() => ({}));
-        const reason = body.error === 'agent_offline' 
+        const reason = body.error === 'agent_offline'
             ? 'Android Node is offline. Open the Easy Storage app on your phone.'
             : 'Relay server is unavailable. Please try again in a moment.';
         toast.error(reason, { duration: 6000 });
@@ -614,7 +677,7 @@ export function WebConsole() {
         setFilesError(message);
         return;
       }
-      
+
       if (!res.ok) {
         let errMessage = `Failed to load files (${res.status})`;
         try {
@@ -625,7 +688,7 @@ export function WebConsole() {
         } catch (_) {}
         throw new Error(errMessage);
       }
-      
+
       const data = await res.json();
       setFiles(Array.isArray(data) ? data : []);
       // Only clear selection if we actually succeeded in loading a new view
@@ -634,7 +697,7 @@ export function WebConsole() {
     } catch (e: any) {
       const message = e.message || "Failed to load directory";
       console.error("File listing failed:", message);
-      
+
       if (retryCount < 2) {
           setTimeout(() => loadFiles(path, retryCount + 1), 2000);
       } else {
@@ -737,7 +800,7 @@ export function WebConsole() {
       } else if (item.isDirectory) {
         const dirReader = item.createReader();
         const entries: any[] = [];
-        
+
         const readEntries = () => {
           dirReader.readEntries(async (results: any[]) => {
             if (!results.length) {
@@ -770,7 +833,6 @@ export function WebConsole() {
     updateGlobalProgress: () => void
   ) => {
     const params = new URLSearchParams({
-      path: currentPath,
       filename,
       chunkIndex: String(chunkIndex),
       totalChunks: String(totalChunks),
@@ -779,6 +841,10 @@ export function WebConsole() {
 
     if (relativePath) {
       params.set('relativePath', relativePath);
+    }
+
+    if (currentPath) {
+      params.set('path', currentPath);
     }
 
     if (p2pReady && isDataChannelReady && p2pTransport?.ready) {
@@ -947,7 +1013,7 @@ export function WebConsole() {
 
   const processFiles = async (files: File[]) => {
     if (!files || files.length === 0) return;
-    
+
     setUploadStatus('uploading');
     setIsUploading(true);
     setUploadProgress(0);
@@ -981,7 +1047,7 @@ export function WebConsole() {
         setIsUploading(false);
         setUploadStatus('error');
         toast.error(`Folder manifest creation failed: ${e.message}`);
-        
+
         // Recover UI state and dismiss failed card after 3s as requested
         setTimeout(() => {
           setUploadStatus('idle');
@@ -1006,7 +1072,7 @@ export function WebConsole() {
         if (relativePath) {
             filename = relativePath.split('/').pop() || file.name;
         }
-        
+
         const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
         let fileSuccess = true;
         let fileError = "";
@@ -1024,7 +1090,7 @@ export function WebConsole() {
                     await uploadChunkViaBestPath(
                       chunk,
                       filename,
-                      file.webkitRelativePath,
+                      relativePath,
                       chunkIndex,
                       totalChunks,
                       fileId,
@@ -1038,21 +1104,23 @@ export function WebConsole() {
                 } catch (err: any) {
                     chunkError = err.message;
                     console.warn(`Retry ${retry + 1} for ${file.name} (Chunk ${chunkIndex}): ${chunkError}`);
-                    await new Promise(r => setTimeout(r, 1000 * (retry + 1))); 
+                    await new Promise(r => setTimeout(r, 1000 * (retry + 1)));
                 }
             }
 
             if (!chunkSuccess) {
                 fileSuccess = false;
                 fileError = chunkError;
-                break; 
+                break;
             }
         }
 
         if (fileSuccess) {
             // Call upload_complete for idempotency / verification
             try {
-                const completeUrl = buildApiUrl(`/api/upload_complete?path=${encodeURIComponent(currentPath)}&filename=${encodeURIComponent(filename)}`);
+                const completeParams = new URLSearchParams({ filename });
+                if (currentPath) completeParams.set('path', currentPath);
+                const completeUrl = buildApiUrl(`/api/upload_complete?${completeParams.toString()}`);
                 await apiFetch(completeUrl, { method: 'POST', headers: getHeaders() as any });
             } catch (e) { console.warn("upload_complete failed, ignoring as chunks succeeded", e); }
 
@@ -1091,7 +1159,7 @@ export function WebConsole() {
         setUploadProgress(100);
         // Removed intrusive top toast: toast.success("All files uploaded successfully!");
     }
-    
+
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (folderInputRef.current) folderInputRef.current.value = "";
     loadFiles(currentPath);
@@ -1105,64 +1173,61 @@ export function WebConsole() {
 
   const handleDownload = async (file: FileNode) => {
     const endpoint = file.isDirectory
-      ? `/api/download_folder?path=${encodeURIComponent(file.path)}&folder=${encodeURIComponent(file.name)}`
-      : `/api/download?path=${encodeURIComponent(file.path)}&file=${encodeURIComponent(file.name)}`;
+      ? `/api/download-folder?path=${encodeURIComponent(file.path || file.name)}`
+      : `/api/file-content?path=${encodeURIComponent(file.path || file.name)}`;
 
-    const url = buildApiUrl(endpoint);
-    
-    try {
-      // Pre-flight check to prevent downloading 28-byte JSON error strings
-      const res = await apiFetch(endpoint, { method: 'HEAD' });
-      
-      if (!res.ok) {
-        // If HEAD fails, try full fetch to get the error message
-        const fullRes = await apiFetch(endpoint);
-        const errorData = await fullRes.json().catch(() => ({ error: "Download failed" }));
-        const statusText = 'statusText' in fullRes ? (fullRes as Response).statusText : 'Unknown Error';
-        toast.error(`Download blocked: ${errorData.error || statusText}`);
-        return;
-      }
-
-      // If check passes, trigger the native browser download
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = file.name + (file.isDirectory ? ".zip" : "");
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      toast.info("Download started");
-    } catch (err) {
-      toast.error("Network error during download pre-flight");
-    }
+    const url = getAuthenticatedUrl(endpoint);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file.isDirectory ? `${file.name}.zip` : file.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    toast.info(file.isDirectory ? `Downloading "${file.name}" as ZIP...` : "Download started");
   };
 
   const handleDelete = async (file: FileNode) => {
-    const formData = new URLSearchParams();
-    formData.append("path", currentPath);
-    formData.append("name", file.name);
     try {
-      const res = await apiFetch('/api/delete', {
-        method: 'POST',
-        headers: { ...getHeaders(), 'Content-Type': 'application/x-www-form-urlencoded' } as any,
-        body: formData.toString()
+      const path = file.path || (currentPath ? `${currentPath}/${file.name}` : file.name);
+      const res = await apiFetch(`/api/delete?path=${encodeURIComponent(path)}`, {
+        method: 'DELETE',
+        headers: getHeaders() as any,
       });
       if (res.ok) {
-        toast.success("Moved to Trash");
+        toast.success(file.isDirectory ? "Folder deleted" : "File deleted");
         if (selectedFile?.id === file.id) setSelectedFile(null);
+        if (activePreviewFile?.id === file.id) setActivePreviewFile(null);
         loadFiles(currentPath);
+        loadStorageStats();
       } else {
-        toast.error("Failed to delete");
+        const errData = await res.json().catch(() => ({}));
+        toast.error(errData.error || "Failed to delete");
       }
     } catch {
       toast.error("Network error");
     }
   };
 
+  const handleFolderDownload = (file: FileNode) => {
+    if (!file.isDirectory) return;
+    const endpoint = `/api/download-folder?path=${encodeURIComponent(file.path || file.name)}`;
+    const url = getAuthenticatedUrl(endpoint);
+
+    // Trigger native browser download manager
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${file.name}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    toast.info(`Downloading "${file.name}" as ZIP...`);
+  };
+
   const handleBulkAction = async (action: 'delete' | 'move', destPath = '') => {
     const items = filteredAndSortedFiles
       .filter(f => selectedFiles.has(f.id))
       .map(f => ({ path: currentPath, name: f.name }));
-      
+
     try {
       const res = await apiFetch('/api/bulk_action', {
         method: 'POST',
@@ -1194,9 +1259,9 @@ export function WebConsole() {
     const items = filteredAndSortedFiles
       .filter(f => selectedFiles.has(f.id))
       .map(f => ({ path: currentPath, name: f.name }));
-      
+
     const url = buildApiUrl(`/api/download_bulk?items=${encodeURIComponent(JSON.stringify(items))}`);
-    
+
     const a = document.createElement('a');
     a.href = url;
     a.download = `archive-${Date.now()}.zip`;
@@ -1254,7 +1319,7 @@ export function WebConsole() {
         headers: { 'Content-Type': 'application/json' } as any,
         body: JSON.stringify({ password: authPassword })
       });
-      
+
       const data = await res.json();
       if (res.ok && data.token) {
         localStorage.setItem('cloud_storage_token', data.token);
@@ -1408,12 +1473,12 @@ export function WebConsole() {
           <AnimatePresence>
             {/* Auth Gate — Integrated into layout */}
             {!isAuthenticated && authMode !== 'none' && (
-              <motion.div 
-                initial={{ opacity: 0 }} 
-                animate={{ opacity: 1 }} 
-                exit={{ opacity: 0 }} 
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
                 className="offline-overlay"
-                style={{ 
+                style={{
                   position: "absolute",
                   inset: 0,
                   background: "rgba(11, 18, 32, 0.98)",
@@ -1435,18 +1500,18 @@ export function WebConsole() {
                     {authMode === 'signup' ? 'Claim Your Node' : 'Node Locked'}
                   </h2>
                   <p className="text-center text-[#9CA3AF] mb-8 text-xs leading-relaxed">
-                    {authMode === 'signup' 
-                      ? 'Register credentials directly onto your physical Android device to secure this bridge.' 
+                    {authMode === 'signup'
+                      ? 'Register credentials directly onto your physical Android device to secure this bridge.'
                       : 'Authenticate to access your synchronized files.'}
                   </p>
 
                   <form onSubmit={handleAuth} className="space-y-4">
                     <div className="form-control">
-                      <input 
-                        type="text" 
-                        required 
-                        value={authUsername} 
-                        onChange={e => setAuthUsername(e.target.value)} 
+                      <input
+                        type="text"
+                        required
+                        value={authUsername}
+                        onChange={e => setAuthUsername(e.target.value)}
                         autoComplete="username"
                       />
                       <label>
@@ -1457,11 +1522,11 @@ export function WebConsole() {
                     </div>
 
                     <div className="form-control">
-                      <input 
-                        type="password" 
-                        required 
-                        value={authPassword} 
-                        onChange={e => setAuthPassword(e.target.value)} 
+                      <input
+                        type="password"
+                        required
+                        value={authPassword}
+                        onChange={e => setAuthPassword(e.target.value)}
                         autoComplete="current-password"
                       />
                       <label>
@@ -1494,12 +1559,12 @@ export function WebConsole() {
 
             {/* P2P Connection & Auth Loader Gate — now synchronized */}
             {(isCheckingAuth || p2pState === 'connecting' || p2pState === 'signaling' || p2pState === 'ice-gathering' || p2pState === 'dc-opening' || (p2pState === 'connected' && !isDataChannelReady)) && (
-              <motion.div 
-                initial={{ opacity: 0 }} 
-                animate={{ opacity: 1 }} 
-                exit={{ opacity: 0 }} 
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
                 className="offline-overlay"
-                style={{ 
+                style={{
                   position: "absolute",
                   inset: 0,
                   background: "rgba(11, 18, 32, 0.98)",
@@ -1526,8 +1591,8 @@ export function WebConsole() {
                    'Establishing Secure Connection...'}
                 </h1>
                 <p className="text-sm text-[#9CA3AF] max-w-sm mx-auto leading-relaxed">
-                  {isCheckingAuth 
-                    ? 'Verifying node credentials and establishing a secure signaling channel.' 
+                  {isCheckingAuth
+                    ? 'Verifying node credentials and establishing a secure signaling channel.'
                     : 'Creating a direct peer-to-peer connection for fast, private file transfers.'}
                 </p>
                 <div className="mt-8 flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full">
@@ -1541,12 +1606,12 @@ export function WebConsole() {
 
             {!isCheckingAuth && isNodeOffline && (
 
-              <motion.div 
-                initial={{ opacity: 0 }} 
-                animate={{ opacity: 1 }} 
-                exit={{ opacity: 0 }} 
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
                 className="offline-overlay"
-                style={{ 
+                style={{
                   position: "absolute",
                   inset: 0,
                   background: "rgba(11, 18, 32, 0.95)",
@@ -1560,14 +1625,14 @@ export function WebConsole() {
               >
                 <div style={{ position: "relative", marginBottom: 32 }}>
                   <div className="absolute inset-0 bg-emerald-500/20 blur-3xl rounded-full scale-150 animate-pulse" />
-                  <div style={{ 
-                    width: 100, 
-                    height: 100, 
-                    background: "rgba(16, 185, 129, 0.05)", 
+                  <div style={{
+                    width: 100,
+                    height: 100,
+                    background: "rgba(16, 185, 129, 0.05)",
                     border: "1px solid rgba(16, 185, 129, 0.2)",
-                    borderRadius: "24px", 
-                    display: "flex", 
-                    alignItems: "center", 
+                    borderRadius: "24px",
+                    display: "flex",
+                    alignItems: "center",
                     justifyContent: "center",
                     position: "relative",
                     transform: "rotate(-5deg)"
@@ -1581,39 +1646,39 @@ export function WebConsole() {
                 </div>
 
                 <div style={{ textAlign: "center", maxWidth: 400 }}>
-                  <h2 style={{ 
-                    fontSize: 28, 
-                    fontWeight: 800, 
-                    color: "white", 
+                  <h2 style={{
+                    fontSize: 28,
+                    fontWeight: 800,
+                    color: "white",
                     marginBottom: 12,
                     letterSpacing: "-0.02em",
                     fontFamily: "Inter, sans-serif"
                   }}>
                     AWAITING SECURE UPLINK
                   </h2>
-                  <p style={{ 
-                    fontSize: 14, 
-                    color: "#94A3B8", 
+                  <p style={{
+                    fontSize: 14,
+                    color: "#94A3B8",
                     lineHeight: 1.6,
                     marginBottom: 32,
                     fontFamily: "Inter, sans-serif"
                   }}>
-                    The encrypted bridge to node <span className="text-emerald-400 font-mono font-bold">{shareCode}</span> is currently in standby. 
+                    The encrypted bridge to node <span className="text-emerald-400 font-mono font-bold">{shareCode}</span> is currently in standby.
                     Launch the <span className="text-white font-semibold">Easy Storage</span> app on your mobile device to establish a direct connection.
                   </p>
                 </div>
 
                 <div style={{ display: "flex", gap: 12 }}>
-                  <button 
-                    className="launch-node-btn" 
-                    onClick={() => refreshNodeStatus()} 
+                  <button
+                    className="launch-node-btn"
+                    onClick={() => refreshNodeStatus()}
                     style={{ background: "#10B981", boxShadow: "0 0 20px rgba(16, 185, 129, 0.2)" }}
                   >
                     <RefreshCw className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} />
                     <span>Establish Handshake</span>
                   </button>
-                  <button 
-                    className="topbar-icon-btn" 
+                  <button
+                    className="topbar-icon-btn"
                     onClick={() => window.open(getRelayUrl(), '_blank')}
                     style={{ border: "1px solid #1E293B", background: "#1E293B/50" }}
                   >
@@ -1621,7 +1686,7 @@ export function WebConsole() {
                   </button>
                 </div>
 
-                <div style={{ 
+                <div style={{
                   marginTop: 40,
                   display: "flex",
                   alignItems: "center",
@@ -1632,12 +1697,12 @@ export function WebConsole() {
                   borderRadius: "12px"
                 }}>
                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  <span style={{ 
-                    fontSize: 10, 
-                    color: "#10B981", 
-                    textTransform: "uppercase", 
+                  <span style={{
+                    fontSize: 10,
+                    color: "#10B981",
+                    textTransform: "uppercase",
                     letterSpacing: "0.1em",
-                    fontWeight: 700 
+                    fontWeight: 700
                   }}>
                     Relay Protocol: {getRelayUrl()}
                   </span>
@@ -1749,11 +1814,11 @@ export function WebConsole() {
                   {filteredAndSortedFiles.map((file, index) => {
                     const category = getFileBadgeCategory(file);
                     const isPreviewable = ['image', 'video', 'pdf'].includes(category);
-                    
+
                     return (
-                      <tr 
-                        key={file.id} 
-                        className={`file-row ${selectedFile?.id === file.id ? "selected" : ""} ${isPreviewable ? "cursor-zoom-in" : ""}`} 
+                      <tr
+                        key={file.id}
+                        className={`file-row ${selectedFile?.id === file.id ? "selected" : ""} ${isPreviewable ? "cursor-zoom-in" : ""}`}
                         onClick={() => {
                           if (file.isDirectory) navigateTo(file.path);
                           else if (isPreviewable) openPreview(file);
@@ -1765,8 +1830,81 @@ export function WebConsole() {
                             <div className={`file-icon-wrap ${file.isDirectory ? "folder-icon" : ""}`}>
                               {file.isDirectory ? <AnimatedFolder size="small" /> : getFileIcon(file.name, file.isDirectory, "w-4 h-4")}
                             </div>
-                            <span style={{ fontSize: "13px", color: "#E2E5F0" }}>{file.name}</span>
+                            <span style={{ fontSize: "13px", color: "#E2E5F0", flex: 1 }}>{file.name}</span>
                             <span className={`file-type-badge ${getFileBadgeCategory(file)}`}>{getFileKindLabel(file)}</span>
+                            <div className="row-actions">
+                              <button
+                                className="p-1 rounded hover:bg-[#1F2937] transition-colors"
+                                title={file.isDirectory ? "Download folder as ZIP" : "Download file"}
+                                onClick={(e: React.MouseEvent) => {
+                                  e.stopPropagation();
+                                  handleDownload(file);
+                                }}
+                              >
+                                <Download className="w-3.5 h-3.5 text-[#60A5FA]" />
+                              </button>
+                              <button
+                                className="p-1 rounded hover:bg-[#1F2937] transition-colors"
+                                title={file.isDirectory ? "Delete folder" : "Delete file"}
+                                onClick={(e: React.MouseEvent) => {
+                                  e.stopPropagation();
+                                  setDeleteCandidate(file);
+                                }}
+                              >
+                                <Trash2 className="w-3.5 h-3.5 text-[#EF4444]" />
+                              </button>
+                            </div>
+
+                            {/* Per-row action menu */}
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+                                <button className="p-1 rounded hover:bg-[#1F2937] transition-colors" style={{ marginLeft: 4 }}>
+                                  <MoreVertical className="w-3.5 h-3.5 text-[#6B7280]" />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="bg-[#111827] border-[#1F2937] text-[#E5E7EB] w-52" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+                                {/* Download */}
+                                <DropdownMenuItem className="gap-2 text-xs" onClick={(e: React.MouseEvent) => { e.stopPropagation(); handleDownload(file); }}>
+                                  <Download className="w-3.5 h-3.5" /> {file.isDirectory ? "Download as ZIP" : "Download"}
+                                </DropdownMenuItem>
+
+                                {/* Folder-specific: Download as ZIP */}
+                                {file.isDirectory && (
+                                  <DropdownMenuItem className="gap-2 text-xs" onClick={(e: React.MouseEvent) => { e.stopPropagation(); handleFolderDownload(file); }}>
+                                    <FolderDown className="w-3.5 h-3.5" /> Download Folder (ZIP)
+                                  </DropdownMenuItem>
+                                )}
+
+                                <DropdownMenuItem className="gap-2 text-xs" onClick={(e: React.MouseEvent) => { e.stopPropagation(); handleRename(file); }}>
+                                  <FileEdit className="w-3.5 h-3.5" /> Rename
+                                </DropdownMenuItem>
+
+                                <DropdownMenuItem className="gap-2 text-xs" onClick={(e: React.MouseEvent) => {
+                                  e.stopPropagation();
+                                  const dest = prompt("Enter destination folder path (e.g. Documents):");
+                                  if (dest !== null) {
+                                    setSelectedFiles(new Set([file.id]));
+                                    handleBulkAction('move', dest);
+                                  }
+                                }}>
+                                  <Move className="w-3.5 h-3.5" /> Move
+                                </DropdownMenuItem>
+
+                                <DropdownMenuSeparator className="bg-[#1F2937]" />
+
+                                {/* Delete */}
+                                <DropdownMenuItem
+                                  className="gap-2 text-xs text-[#EF4444]"
+                                  onClick={(e: React.MouseEvent) => {
+                                    e.stopPropagation();
+                                    setDeleteCandidate(file);
+                                  }}
+                                >
+                                  {file.isDirectory ? <FolderX className="w-3.5 h-3.5" /> : <Trash2 className="w-3.5 h-3.5" />}
+                                  {file.isDirectory ? "Delete Folder" : "Delete"}
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           </div>
                         </td>
                         <td className="col-size">{file.isDirectory ? "—" : formatSize(file.size)}</td>
@@ -1853,10 +1991,12 @@ export function WebConsole() {
                 handleBulkAction('move', dest);
               }
             }}
-            onDelete={handleDelete}
+            onDelete={(file) => setDeleteCandidate(file)}
             formatSize={formatSize}
             formatDate={formatDate}
             getFileIcon={getFileIcon}
+            connectionMode={p2pState === 'fallback' ? 'relay' : isLocalSession ? 'local' : 'p2p'}
+            getAuthenticatedUrl={getAuthenticatedUrl}
           />
         </aside>
       </div>
@@ -1900,6 +2040,21 @@ export function WebConsole() {
               )}
             </div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {deleteCandidate && (
+          <DeleteConfirmModal
+            file={deleteCandidate}
+            onCancel={() => setDeleteCandidate(null)}
+            onConfirm={async () => {
+              const file = deleteCandidate;
+              setDeleteCandidate(null);
+              if (!file) return;
+              await handleDelete(file);
+            }}
+          />
         )}
       </AnimatePresence>
 
@@ -1973,10 +2128,12 @@ export function WebConsole() {
                     handleBulkAction('move', dest);
                   }
                 }}
-                onDelete={handleDelete}
+                onDelete={(file) => setDeleteCandidate(file)}
                 formatSize={formatSize}
                 formatDate={formatDate}
                 getFileIcon={getFileIcon}
+                connectionMode={p2pState === 'fallback' ? 'relay' : isLocalSession ? 'local' : 'p2p'}
+                getAuthenticatedUrl={getAuthenticatedUrl}
               />
             </div>
           </div>

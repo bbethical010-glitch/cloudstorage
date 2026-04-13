@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router";
 import { motion, AnimatePresence } from "motion/react";
-import React, { useState, useEffect, useContext, useRef } from "react";
+import React, { useState, useEffect, useContext, useRef, useCallback } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -60,6 +60,7 @@ export function AndroidBrowser() {
   const navigate = useNavigate();
   const ctx = useContext(AppStateContext);
   const appState = ctx?.state;
+  const refreshFiles = ctx?.refreshFiles;
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -77,21 +78,21 @@ export function AndroidBrowser() {
 
   const isOnline = appState?.node?.isRunning ?? false;
 
+  const fetchFiles = useCallback(async (path: string) => {
+    console.log("[JS_DEBUG] fetchFiles called for path: " + path + ". Has refreshFiles: ", !!refreshFiles);
+    setLoading(true);
+    if (refreshFiles) {
+       await refreshFiles(path);
+       console.log("[JS_DEBUG] refreshFiles completed");
+    }
+    setLoading(false);
+  }, [refreshFiles]);
+
   useEffect(() => {
     if (isOnline) {
       fetchFiles(currentPath);
     }
-  }, [isOnline, currentPath]);
-
-  const fetchFiles = async (path: string) => {
-    console.log("[JS_DEBUG] fetchFiles called for path: " + path + ". Has ctx.refreshFiles: ", !!ctx?.refreshFiles);
-    setLoading(true);
-    if (ctx?.refreshFiles) {
-       await ctx.refreshFiles(path);
-       console.log("[JS_DEBUG] ctx.refreshFiles completed. New AppState files length: ", ctx.state?.files?.items?.length);
-    }
-    setLoading(false);
-  };
+  }, [fetchFiles, isOnline, currentPath]);
   
   const files = (appState?.files?.items || []).map((f: any) => ({
       ...f,
@@ -145,7 +146,14 @@ export function AndroidBrowser() {
 
         await new Promise<void>((resolve, reject) => {
           const xhr = new XMLHttpRequest();
-          const uploadUrl = `http://127.0.0.1:8080/api/upload_chunk?path=${encodeURIComponent(currentPath)}&filename=${encodeURIComponent(file.name)}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}&totalSize=${file.size}`;
+          const uploadParams = new URLSearchParams({
+            filename: file.name,
+            chunkIndex: String(chunkIndex),
+            totalChunks: String(totalChunks),
+            totalSize: String(file.size),
+          });
+          if (currentPath) uploadParams.set("path", currentPath);
+          const uploadUrl = `http://127.0.0.1:8080/api/upload_chunk?${uploadParams.toString()}`;
           xhr.open("POST", uploadUrl);
           xhr.setRequestHeader('Authorization', `Bearer ${token}`);
           xhr.setRequestHeader('Content-Type', 'application/octet-stream');
@@ -176,7 +184,9 @@ export function AndroidBrowser() {
         });
       }
 
-      const completeRes = await fetch(`http://127.0.0.1:8080/api/upload_complete?path=${encodeURIComponent(currentPath)}&filename=${encodeURIComponent(file.name)}`, {
+      const completeParams = new URLSearchParams({ filename: file.name });
+      if (currentPath) completeParams.set("path", currentPath);
+      const completeRes = await fetch(`http://127.0.0.1:8080/api/upload_complete?${completeParams.toString()}`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`

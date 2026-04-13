@@ -47,8 +47,9 @@ export function FileDetails({ file, onClose, onDownload, onShare, onDelete }: Fi
       setPreviewUrl(url);
       return () => URL.revokeObjectURL(url);
     } else {
-      // Assuming a remote endpoint for non-local files for demo
-      setPreviewUrl(`http://localhost:8080/api/files/${encodeURIComponent(file.name)}`);
+      const token = localStorage.getItem('cloud_storage_android_token') || '';
+      const path = encodeURIComponent(file.path || file.name);
+      setPreviewUrl(`http://127.0.0.1:8080/api/file-content?path=${path}&token=${encodeURIComponent(token)}`);
     }
   }, [file]);
 
