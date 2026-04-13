@@ -13,16 +13,19 @@ export interface FileNode {
   isDirectory: boolean;
   size: number;
   lastModified: number;
+  mimeType?: string;
 }
 
 /**
  * Common file extensions that browsers can preview natively.
  */
 export const SUPPORTED_PREVIEW_TYPES = [
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg',
-  'mp4', 'webm', 'mov', 'avi',
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico',
+  'mp4', 'webm', 'mov', 'avi', 'mkv',
+  'mp3', 'wav', 'ogg',
   'pdf',
-  'txt', 'md', 'json', 'log'
+  'txt', 'md', 'json', 'log', 'csv',
+  'js', 'ts', 'tsx', 'jsx', 'py', 'java', 'kt', 'go', 'rs', 'c', 'cpp', 'h', 'css', 'scss', 'html', 'htm', 'xml'
 ];
 
 /**
@@ -74,15 +77,11 @@ export const fetchFileBlob = async (
   const ext = file.name.split('.').pop()?.toLowerCase() || '';
   const mimeType = MIME_MAP[ext] || 'application/octet-stream';
 
-  // 1. SAFE PATH ENCODING
-  // We MUST encode both the path (directory) and the file (name) separately
-  // to prevent nested slashes from breaking the Ktor routing logic.
   const queryParams = new URLSearchParams({
-    path: file.path, // The directory path (e.g., "Documents/Projects")
-    file: file.name  // The file name (e.g., "design.png")
+    path: file.path || file.name,
   });
   
-  const endpoint = `/api/download?${queryParams.toString()}`;
+  const endpoint = `/api/file-content?${queryParams.toString()}`;
 
   try {
     // 2. UNIFIED FETCH

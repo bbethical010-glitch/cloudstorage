@@ -9,9 +9,11 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.documentfile.provider.DocumentFile
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.PartData
 import io.ktor.http.content.forEachPart
@@ -32,11 +34,13 @@ import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.http.HttpMethod
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
+import io.ktor.server.routing.delete
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.server.request.path
 import io.ktor.server.request.receiveParameters
 import io.ktor.server.request.receiveText
+import io.ktor.server.request.uri
 import io.ktor.server.response.respondBytes
 import io.ktor.utils.io.core.readBytes
 import java.util.zip.ZipEntry
@@ -81,6 +85,7 @@ class ServerService : Service() {
     private var relayTunnelClient: RelayTunnelClient? = null
     private var uploadNotificationManager: UploadNotificationManager? = null
     private val scope = CoroutineScope(Dispatchers.IO)
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -96,7 +101,7 @@ class ServerService : Service() {
         const val EXTRA_CONSOLE_PASSWORD = "EXTRA_CONSOLE_PASSWORD"
         private const val CHANNEL_ID = "ServerChannelId"
 
-        
+
         val tunnelStatusFlow = kotlinx.coroutines.flow.MutableStateFlow(TunnelStatus.Offline)
     }
     private val activeSanitizationMap = java.util.concurrent.ConcurrentHashMap<String, String>()
@@ -114,11 +119,17 @@ class ServerService : Service() {
 
             ACTION_STOP_SERVER -> stopServer()
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     private fun startForegroundNode(rootUri: Uri, shareCode: String, relayBaseUrl: String, consolePassword: String?) {
         createNotificationChannel()
+
+        // Acquire WakeLock to keep CPU alive while node is serving
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "EasyStorageCloud::NodeWakeLock").apply {
+            acquire()
+        }
 
         val publicUrl = buildRelayBrowserUrl(relayBaseUrl, shareCode)
         val localUrl = buildLocalAccessUrl(DEFAULT_PORT)
@@ -175,20 +186,22 @@ class ServerService : Service() {
                     exposeHeader(io.ktor.http.HttpHeaders.ContentLength)
                     exposeHeader(io.ktor.http.HttpHeaders.ContentRange)
                     exposeHeader(io.ktor.http.HttpHeaders.AcceptRanges)
-                    
+
                     anyHost() // Allow Web Console origin
                 }
 
                 install(StatusPages) {
                     exception<Throwable> { call, cause ->
-                        android.util.Log.e("ServerService", "Unhandled exception in Ktor", cause)
-                        // Use a literal respond here if extension method is problematic in this scope
-                        val map = mutableMapOf<String, Any?>(
-                            "success" to false,
-                            "error" to (cause.message ?: "Internal Server Error"),
-                            "code" to "INTERNAL_SERVER_ERROR"
+                        android.util.Log.e("Ktor", "Unhandled exception: ${cause::class.simpleName}", cause)
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            mapOf(
+                                "success" to false,
+                                "error" to (cause::class.simpleName ?: "UnknownError"),
+                                "message" to (cause.message ?: "An unexpected error occurred"),
+                                "path" to call.request.uri
+                            )
                         )
-                        call.respond(map)
                     }
                 }
 
@@ -200,20 +213,25 @@ class ServerService : Service() {
                 }
 
                 routing {
-                    
+
                     fun io.ktor.server.application.ApplicationCall.hasValidAuth(): Boolean {
                         val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
                         val accountExists = prefs.contains("password_hash")
                         val activeToken = prefs.getString("active_token", null)
-                        
+
                         val headerToken = request.headers["Authorization"]?.removePrefix("Bearer ")?.trim()
+                        val queryToken = request.queryParameters["pwd"]
+                            ?: request.queryParameters["token"]
+                            ?: request.queryParameters["node_session_token"]
+                        val providedToken = headerToken?.takeIf { it.isNotBlank() }
+                            ?: queryToken?.takeIf { it.isNotBlank() }
 
                         if (accountExists) {
                             if (activeToken.isNullOrBlank()) return false
-                            return headerToken == activeToken
+                            return providedToken == activeToken
                         } else {
                             if (consolePassword.isNullOrBlank()) return true
-                            return headerToken == consolePassword
+                            return providedToken == consolePassword
                         }
                     }
 
@@ -224,52 +242,52 @@ class ServerService : Service() {
                                 val hasAccount = prefs.contains("password_hash")
                                 call.respondText("{\"hasAccount\": $hasAccount}", ContentType.Application.Json)
                             }
-                            
+
                             post("/signup") {
                                 val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
                                 if (prefs.contains("password_hash")) {
                                     return@post call.respond(HttpStatusCode.Forbidden, "{\"error\": \"Account exists\"}")
                                 }
-                                
+
                                 val jsonStr = call.receiveText()
                                 if (jsonStr.isBlank()) return@post call.respond(HttpStatusCode.BadRequest)
-                                
+
                                 val obj = org.json.JSONObject(jsonStr)
                                 val password = obj.optString("password", "")
-                                
+
                                 if (password.isBlank()) {
                                     return@post call.respond(HttpStatusCode.BadRequest, "{\"error\": \"Missing password\"}")
                                 }
-                                
+
                                 val md = java.security.MessageDigest.getInstance("SHA-256")
                                 val hash = java.util.Base64.getEncoder().encodeToString(md.digest(password.toByteArray()))
-                                
+
                                 val token = java.util.UUID.randomUUID().toString()
                                 prefs.edit()
                                     .putString("password_hash", hash)
                                     .putString("active_token", token)
                                     .apply()
-                                    
+
                                 call.respondText("{\"token\":\"$token\"}", ContentType.Application.Json)
                             }
 
                             post("/login") {
                                 val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
                                 val existingHash = prefs.getString("password_hash", null)
-                                
+
                                 if (existingHash == null) {
                                     return@post call.respond(HttpStatusCode.NotFound, "{\"error\": \"No account\"}")
                                 }
-                                
+
                                 val jsonStr = call.receiveText()
                                 if (jsonStr.isBlank()) return@post call.respond(HttpStatusCode.BadRequest)
-                                
+
                                 val obj = org.json.JSONObject(jsonStr)
                                 val password = obj.optString("password", "")
-                                
+
                                 val md = java.security.MessageDigest.getInstance("SHA-256")
                                 val hash = java.util.Base64.getEncoder().encodeToString(md.digest(password.toByteArray()))
-                                
+
                                 if (hash == existingHash) {
                                     val token = java.util.UUID.randomUUID().toString()
                                     prefs.edit().putString("active_token", token).apply()
@@ -278,7 +296,7 @@ class ServerService : Service() {
                                     call.respond(HttpStatusCode.Unauthorized, "{\"error\": \"Invalid credentials\"}")
                                 }
                             }
-                            
+
                             post("/logout") {
                                 val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
                                 prefs.edit().remove("active_token").apply()
@@ -301,10 +319,10 @@ class ServerService : Service() {
                                 val rootDoc = DocumentFile.fromTreeUri(this@ServerService, rootUri)
                                 var availableBytes = 0L
                                 var capacityBytes = 0L
-                                
+
                                 val docId = android.provider.DocumentsContract.getTreeDocumentId(rootUri)
                                 val uuidStr = docId?.substringBefore(":") ?: "primary"
-                                
+
                                 try {
                                     val statsManager = getSystemService(Context.STORAGE_STATS_SERVICE) as android.app.usage.StorageStatsManager
                                     val uuid = if (uuidStr.equals("primary", ignoreCase = true)) {
@@ -312,7 +330,7 @@ class ServerService : Service() {
                                     } else {
                                         java.util.UUID.fromString(uuidStr)
                                     }
-                                    
+
                                     capacityBytes = statsManager.getTotalBytes(uuid)
                                     availableBytes = statsManager.getFreeBytes(uuid)
                                     android.util.Log.d("STORAGE_DEBUG", "StorageStatsManager success for UUID: $uuidStr ($capacityBytes total)")
@@ -320,7 +338,7 @@ class ServerService : Service() {
                                     android.util.Log.e("STORAGE_DEBUG", "StorageStatsManager failed: ${e.message}, falling back to StorageVolume API")
                                     try {
                                         val storageManager = getSystemService(Context.STORAGE_SERVICE) as android.os.storage.StorageManager
-                                        
+
                                         var targetDir: java.io.File? = null
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                                             for (volume in storageManager.storageVolumes) {
@@ -464,6 +482,7 @@ class ServerService : Service() {
                                                 "name" to name,
                                                 "path" to itemPath,
                                                 "isDirectory" to isDirectory,
+                                                "mimeType" to mime,
                                                 "size" to size,
                                                 "lastModified" to mod
                                             )
@@ -475,6 +494,91 @@ class ServerService : Service() {
                             } catch (e: Exception) {
                                 android.util.Log.e("ServerService", "Error reading files", e)
                                 call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "read_failed", "details" to e.message))
+                            }
+                        }
+
+                        get("/file-content") {
+                            if (!call.hasValidAuth()) return@get call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "unauthorized"))
+                            try {
+                                val filePath = call.request.queryParameters["path"]
+                                    ?: call.request.queryParameters["relativePath"]
+                                    ?: run {
+                                        call.respond(
+                                            HttpStatusCode.BadRequest,
+                                            mapOf("error" to "missing_path_parameter")
+                                        )
+                                        return@get
+                                    }
+
+                                if (filePath.contains("..")) {
+                                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "invalid_path"))
+                                    return@get
+                                }
+
+                                android.util.Log.d("FileContent", "Serving file: $filePath")
+
+                                val rootDoc = DocumentFile.fromTreeUri(this@ServerService, rootUri)
+                                    ?: run {
+                                        call.respond(
+                                            HttpStatusCode.ServiceUnavailable,
+                                            mapOf("error" to "storage_unavailable")
+                                        )
+                                        return@get
+                                    }
+
+                                val targetFile = resolveFilePath(rootDoc, filePath)
+                                    ?: run {
+                                        android.util.Log.e("FileContent", "File not found: $filePath")
+                                        call.respond(
+                                            HttpStatusCode.NotFound,
+                                            mapOf("error" to "file_not_found", "path" to filePath)
+                                        )
+                                        return@get
+                                    }
+
+                                if (!targetFile.isFile) {
+                                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "path_is_directory"))
+                                    return@get
+                                }
+
+                                val extension = targetFile.name?.substringAfterLast('.', "") ?: ""
+                                val mimeType = targetFile.type
+                                    ?: android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+                                    ?: "application/octet-stream"
+
+                                val fileSize = targetFile.length()
+                                val rangeHeader = call.request.headers[HttpHeaders.Range]
+
+                                if (rangeHeader != null) {
+                                    serveRangeRequest(call, targetFile, mimeType, fileSize, rangeHeader)
+                                } else {
+                                    call.response.header(HttpHeaders.ContentType, mimeType)
+                                    call.response.header(HttpHeaders.ContentLength, fileSize.toString())
+                                    call.response.header(HttpHeaders.AcceptRanges, "bytes")
+                                    call.response.header(
+                                        HttpHeaders.ContentDisposition,
+                                        "inline; filename=\"${targetFile.name ?: "file"}\""
+                                    )
+
+                                    call.respondOutputStream(
+                                        contentType = ContentType.parse(mimeType),
+                                        status = HttpStatusCode.OK
+                                    ) {
+                                        contentResolver.openInputStream(targetFile.uri)?.use { input ->
+                                            val buffer = ByteArray(65536)
+                                            var bytesRead: Int
+                                            while (input.read(buffer).also { bytesRead = it } != -1) {
+                                                write(buffer, 0, bytesRead)
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.e("FileContent", "Error serving file", e)
+                                call.respond(
+                                    HttpStatusCode.InternalServerError,
+                                    mapOf("error" to "${e::class.simpleName}: ${e.message}")
+                                )
                             }
                         }
 
@@ -522,6 +626,7 @@ class ServerService : Service() {
                                                 "name" to name,
                                                 "path" to name, // Assuming path is just name in trash or handled elsewhere
                                                 "isDirectory" to isDirectory,
+                                                "mimeType" to mime,
                                                 "size" to size,
                                                 "lastModified" to mod
                                             )
@@ -540,10 +645,10 @@ class ServerService : Service() {
                             val params = call.receiveParameters()
                             val path = params["path"]
                             val name = params["name"] ?: return@post call.respond(HttpStatusCode.BadRequest, "Missing name")
-                            
+
                             val root = DocumentFile.fromTreeUri(this@ServerService, rootUri) ?: return@post call.respond(HttpStatusCode.NotFound)
                             val targetDir = resolveSafePath(root, path) ?: return@post call.respond(HttpStatusCode.NotFound)
-                            
+
                             val newDir = targetDir.createDirectory(name)
                             if (newDir != null) call.respond(HttpStatusCode.OK, "Created")
                             else call.respond(HttpStatusCode.InternalServerError, "Failed")
@@ -555,39 +660,155 @@ class ServerService : Service() {
                             val path = params["path"]
                             val oldName = params["oldName"] ?: return@post call.respond(HttpStatusCode.BadRequest)
                             val newName = params["newName"] ?: return@post call.respond(HttpStatusCode.BadRequest)
-                            
+
                             val root = DocumentFile.fromTreeUri(this@ServerService, rootUri) ?: return@post call.respond(HttpStatusCode.NotFound)
                             val targetDir = resolveSafePath(root, path) ?: return@post call.respond(HttpStatusCode.NotFound)
                             val targetFile = targetDir.findFile(oldName) ?: return@post call.respond(HttpStatusCode.NotFound)
-                            
+
                             if (targetFile.renameTo(newName)) call.respond(HttpStatusCode.OK)
                             else call.respond(HttpStatusCode.InternalServerError)
                         }
 
-                        post("/delete") {
-                            if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
-                            val params = call.receiveParameters()
-                            val path = params["path"]
-                            val name = params["name"] ?: return@post call.respond(HttpStatusCode.BadRequest)
-                            
-                            val root = DocumentFile.fromTreeUri(this@ServerService, rootUri) ?: return@post call.respond(HttpStatusCode.NotFound)
-                            val targetDir = resolveSafePath(root, path) ?: return@post call.respond(HttpStatusCode.NotFound)
-                            val targetFile = targetDir.findFile(name) ?: return@post call.respond(HttpStatusCode.NotFound)
-                            
-                            var trashDir = root.findFile(".Trash")
-                            if (trashDir == null) trashDir = root.createDirectory(".Trash")
-                            if (trashDir == null) return@post call.respond(HttpStatusCode.InternalServerError)
-                            
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                                try {
-                                    android.provider.DocumentsContract.moveDocument(contentResolver, targetFile.uri, targetDir.uri, trashDir.uri)
-                                } catch (e: Exception) {
-                                    targetFile.renameTo(".trash_$name")
-                                }
-                            } else {
-                                targetFile.renameTo(".trash_$name")
+                        suspend fun deletePath(deleteCall: io.ktor.server.application.ApplicationCall, fullPath: String) {
+                            if (fullPath.isBlank()) {
+                                deleteCall.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing_path"))
+                                return
                             }
-                            call.respond(HttpStatusCode.OK)
+                            if (fullPath.contains("..")) {
+                                deleteCall.respond(HttpStatusCode.BadRequest, mapOf("error" to "invalid_path"))
+                                return
+                            }
+
+                            val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
+                                ?: run {
+                                    deleteCall.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "storage_unavailable"))
+                                    return
+                                }
+
+                            val target = resolveFilePath(root, fullPath)
+                                ?: run {
+                                    deleteCall.respond(HttpStatusCode.NotFound, mapOf("error" to "not_found", "path" to fullPath))
+                                    return
+                                }
+
+                            val isDirectory = target.isDirectory
+                            val name = target.name ?: fullPath
+                            val success = target.delete()
+
+                            if (success) {
+                                deleteCall.respond(
+                                    HttpStatusCode.OK,
+                                    mapOf(
+                                        "success" to true,
+                                        "deleted" to name,
+                                        "wasDirectory" to isDirectory
+                                    )
+                                )
+                            } else {
+                                deleteCall.respond(
+                                    HttpStatusCode.InternalServerError,
+                                    mapOf(
+                                        "error" to "delete_failed",
+                                        "message" to "SAF delete returned false for: $fullPath"
+                                    )
+                                )
+                            }
+                        }
+
+                        post("/delete") {
+                            if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "unauthorized"))
+                            try {
+                                val queryPath = call.request.queryParameters["path"]
+                                val params = if (queryPath.isNullOrBlank()) call.receiveParameters() else null
+                                val parentPath = params?.get("path")
+                                val name = params?.get("name")
+                                val fullPath = when {
+                                    !queryPath.isNullOrBlank() && !call.request.queryParameters["name"].isNullOrBlank() ->
+                                        listOf(queryPath, call.request.queryParameters["name"]).joinToString("/").replace(Regex("/+"), "/")
+                                    !queryPath.isNullOrBlank() -> queryPath
+                                    !parentPath.isNullOrBlank() && !name.isNullOrBlank() -> "$parentPath/$name"
+                                    !name.isNullOrBlank() -> name
+                                    else -> ""
+                                }
+                                deletePath(call, fullPath)
+                            } catch (e: Exception) {
+                                android.util.Log.e("Delete", "Delete error", e)
+                                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "${e::class.simpleName}: ${e.message}"))
+                            }
+                        }
+
+                        delete("/delete") {
+                            if (!call.hasValidAuth()) return@delete call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "unauthorized"))
+                            try {
+                                val path = call.request.queryParameters["path"]
+                                    ?: run {
+                                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing_path"))
+                                        return@delete
+                                    }
+                                deletePath(call, path)
+                            } catch (e: Exception) {
+                                android.util.Log.e("Delete", "Delete error", e)
+                                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "${e::class.simpleName}: ${e.message}"))
+                            }
+                        }
+
+                        // ── Recursive Folder Delete ─────────────────────────────────
+                        post("/folder_delete") {
+                            if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            try {
+                                val params = call.receiveParameters()
+                                val path = params["path"] ?: ""
+                                val name = params["name"] ?: return@post call.respond(
+                                    HttpStatusCode.BadRequest,
+                                    mapOf("error" to "Missing folder name")
+                                )
+
+                                // Path traversal sanitization
+                                if (name.contains("..") || name.contains("/") || name.contains("\\")) {
+                                    return@post call.respond(
+                                        HttpStatusCode.BadRequest,
+                                        mapOf("error" to "Invalid folder name")
+                                    )
+                                }
+
+                                val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
+                                    ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "Root not found"))
+                                val targetDir = resolveSafePath(root, path)
+                                    ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "Parent directory not found"))
+                                val targetFolder = targetDir.findFile(name)
+                                    ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "Folder not found"))
+
+                                if (!targetFolder.isDirectory) {
+                                    return@post call.respond(
+                                        HttpStatusCode.BadRequest,
+                                        mapOf("error" to "Target is not a directory. Use /api/delete for files.")
+                                    )
+                                }
+
+                                // Recursive delete using DocumentFile API
+                                fun deleteRecursively(doc: DocumentFile): Int {
+                                    var count = 0
+                                    if (doc.isDirectory) {
+                                        doc.listFiles().forEach { child ->
+                                            count += deleteRecursively(child)
+                                        }
+                                    }
+                                    if (doc.delete()) count++
+                                    return count
+                                }
+
+                                val deletedCount = deleteRecursively(targetFolder)
+                                call.respond(
+                                    HttpStatusCode.OK,
+                                    mapOf("deleted" to deletedCount, "folder" to name)
+                                )
+                            } catch (e: Exception) {
+                                android.util.Log.e("ServerService", "Folder delete failed", e)
+                                call.respond(
+                                    HttpStatusCode.InternalServerError,
+                                    mapOf("error" to (e.message ?: "Folder delete failed"))
+                                )
+                            }
                         }
 
                         post("/bulk_action") {
@@ -600,7 +821,7 @@ class ServerService : Service() {
                                 val destPath = json.optString("destinationPath", "")
 
                                 val root = DocumentFile.fromTreeUri(this@ServerService, rootUri) ?: return@post call.respond(HttpStatusCode.NotFound)
-                                
+
                                 var trashDir: DocumentFile? = null
                                 if (action == "delete") {
                                     trashDir = root.findFile(".Trash") ?: root.createDirectory(".Trash")
@@ -697,17 +918,77 @@ class ServerService : Service() {
                             }
                         }
 
+                        get("/download-folder") {
+                            if (!call.hasValidAuth()) return@get call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "unauthorized"))
+                            try {
+                                val path = call.request.queryParameters["path"]
+                                    ?: run {
+                                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing_path"))
+                                        return@get
+                                    }
+
+                                if (path.contains("..")) {
+                                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "invalid_path"))
+                                    return@get
+                                }
+
+                                val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
+                                    ?: run {
+                                        call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "storage_unavailable"))
+                                        return@get
+                                    }
+
+                                val folderDoc = resolveFilePath(root, path)
+                                    ?: run {
+                                        call.respond(HttpStatusCode.NotFound, mapOf("error" to "folder_not_found", "path" to path))
+                                        return@get
+                                    }
+
+                                if (!folderDoc.isDirectory) {
+                                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "path_is_not_directory"))
+                                    return@get
+                                }
+
+                                val folderName = (folderDoc.name ?: "download").replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                                call.response.header(HttpHeaders.ContentDisposition, "attachment; filename=\"${folderName}.zip\"")
+                                call.response.header(HttpHeaders.ContentType, "application/zip")
+
+                                call.respondOutputStream(
+                                    contentType = ContentType.parse("application/zip"),
+                                    status = HttpStatusCode.OK
+                                ) {
+                                    ZipOutputStream(this).use { zip ->
+                                        addFolderToZip(zip, folderDoc, "", contentResolver)
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.e("DownloadFolder", "Error creating ZIP", e)
+                                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "${e::class.simpleName}: ${e.message}"))
+                            }
+                        }
+
                         get("/download_folder") {
                             val path = call.request.queryParameters["path"]
                             val folderName = call.request.queryParameters["folder"] ?: return@get call.respond(HttpStatusCode.BadRequest)
-                            
+
+                            // Path traversal sanitization
+                            if (folderName.contains("..") || folderName.contains("/") || folderName.contains("\\")) {
+                                return@get call.respond(HttpStatusCode.BadRequest, "Invalid folder name")
+                            }
+
                             val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
                             val targetDir = resolveSafePath(root, path)
                             val targetFolder = targetDir?.findFile(folderName)
-                            
+
                             if (targetFolder != null && targetFolder.isDirectory) {
+                                // Set Content-Disposition for proper filename in browser downloads
+                                val safeFileName = folderName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                                call.response.header("Content-Disposition", "attachment; filename=\"${safeFileName}.zip\"")
+
                                 call.respondOutputStream(contentType = ContentType.parse("application/zip"), status = HttpStatusCode.OK) {
                                     val zipOut = ZipOutputStream(this)
+                                    val buffer = ByteArray(8192) // Chunk buffer for streaming
+
                                     fun addFolderToZip(folder: DocumentFile, basePath: String) {
                                         folder.listFiles().forEach { file ->
                                             val entryName = if (basePath.isEmpty()) file.name else "$basePath/${file.name}"
@@ -717,7 +998,13 @@ class ServerService : Service() {
                                                 addFolderToZip(file, entryName ?: "")
                                             } else {
                                                 zipOut.putNextEntry(ZipEntry(entryName))
-                                                contentResolver.openInputStream(file.uri)?.use { it.copyTo(zipOut) }
+                                                // Stream chunk-by-chunk to avoid OOM
+                                                contentResolver.openInputStream(file.uri)?.use { inputStream ->
+                                                    var bytesRead: Int
+                                                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                                                        zipOut.write(buffer, 0, bytesRead)
+                                                    }
+                                                }
                                                 zipOut.closeEntry()
                                             }
                                         }
@@ -726,19 +1013,19 @@ class ServerService : Service() {
                                     zipOut.finish()
                                 }
                             } else {
-                                call.respond(HttpStatusCode.NotFound)
+                                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Folder not found"))
                             }
                         }
 
                         get("/download_bulk") {
                             val itemsJsonStr = call.request.queryParameters["items"] ?: return@get call.respond(HttpStatusCode.BadRequest)
                             val items = org.json.JSONArray(itemsJsonStr)
-                            
+
                             val root = DocumentFile.fromTreeUri(this@ServerService, rootUri) ?: return@get call.respond(HttpStatusCode.NotFound)
-                            
+
                             call.respondOutputStream(contentType = ContentType.parse("application/zip"), status = HttpStatusCode.OK) {
                                 val zipOut = ZipOutputStream(this)
-                                
+
                                 fun addFolderToZip(folder: DocumentFile, basePath: String) {
                                     folder.listFiles().forEach { file ->
                                         val entryName = if (basePath.isEmpty()) file.name else "$basePath/${file.name}"
@@ -760,7 +1047,7 @@ class ServerService : Service() {
                                     val name = item.optString("name", "")
                                     val targetDir = resolveSafePath(root, path) ?: continue
                                     val targetFile = targetDir.findFile(name) ?: continue
-                                    
+
                                     if (targetFile.isDirectory) {
                                         zipOut.putNextEntry(ZipEntry("${targetFile.name}/"))
                                         zipOut.closeEntry()
@@ -995,7 +1282,7 @@ class ServerService : Service() {
                                 val basePath = call.request.queryParameters["path"] ?: ""
                                 val folderName = call.request.queryParameters["folder"] ?: ""
                                 val root = DocumentFile.fromTreeUri(this@ServerService, rootUri) ?: return@post call.respond(HttpStatusCode.NotFound)
-                                
+
                                 val fullPath = if (basePath.isBlank()) folderName else if (folderName.isBlank()) basePath else "$basePath/$folderName"
                                 val targetDir = resolveSafePath(root, fullPath) ?: return@post call.respond(HttpStatusCode.NotFound)
 
@@ -1059,9 +1346,14 @@ class ServerService : Service() {
                             var chunkIndex: Int = 0
                             var transferId = ""
                             try {
-                                val path = call.request.queryParameters["path"] ?: ""
-                                val fileName = call.request.queryParameters["filename"] ?: "uploaded_file"
-                                relativePath = call.request.queryParameters["relativePath"]
+                                val path = call.request.queryParameters["path"]?.takeIf { it.isNotBlank() } ?: ""
+                                val fileName = call.request.queryParameters["filename"]
+                                    ?: call.request.queryParameters["fileName"]
+                                    ?: run {
+                                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing_filename"))
+                                        return@post
+                                    }
+                                relativePath = call.request.queryParameters["relativePath"]?.takeIf { it.isNotBlank() }
                                 chunkIndex = call.request.queryParameters["chunkIndex"]?.toIntOrNull() ?: 0
                                 val totalChunks = call.request.queryParameters["totalChunks"]?.toIntOrNull() ?: 1
                                 val totalSize = call.request.queryParameters["totalSize"]?.toLongOrNull() ?: 0L
@@ -1080,9 +1372,9 @@ class ServerService : Service() {
                                     return@post call.respondJson(false, "Malformed path detected", "BAD_PATH")
                                 }
 
-                                val root = DocumentFile.fromTreeUri(applicationContext, rootUri) 
+                                val root = DocumentFile.fromTreeUri(applicationContext, rootUri)
                                     ?: return@post call.respondJson(false, "Storage not mounted", "STORAGE_OFFLINE")
-                                
+
                                 var targetDir: DocumentFile = root
                                 val finalFileName: String
 
@@ -1113,7 +1405,7 @@ class ServerService : Service() {
                                         targetDir = resolveOrCreateDirectory(targetDir, segment)
                                     }
                                 }
-                                
+
                                 if (chunkIndex == 0) {
                                     uploadNotificationManager?.onUploadStarted(transferId, fileName, totalSize)
                                 }
@@ -1151,7 +1443,7 @@ class ServerService : Service() {
 
                                 // 3. Read the chunk bytes into memory (chunkSize is ~5MB)
                                 val byteArray = call.receive<ByteArray>()
-                                
+
                                 // Idempotent thread-safe write using locking and FileChannel seeking
                                 val lockKey = fileUri.toString()
                                 synchronized(fileLocks.getOrPut(lockKey) { Any() }) {
@@ -1199,7 +1491,7 @@ class ServerService : Service() {
 
                     get("/{...}") {
                         val requestPath = call.request.path().removePrefix("/")
-                        
+
                         // 1. Enforce trailing slash for the base relay route to fix relative asset resolution
                         val nodeBaseRegex = Regex("^node/[a-zA-Z0-9]+$")
                         if (nodeBaseRegex.matches(requestPath)) {
@@ -1218,7 +1510,7 @@ class ServerService : Service() {
                             }
                             else -> "web/$requestPath"
                         }
-                        
+
                         fun getContentType(path: String): ContentType {
                             return when {
                                 path.endsWith(".html") -> ContentType.Text.Html
@@ -1259,6 +1551,13 @@ class ServerService : Service() {
         tunnelStatusFlow.value = TunnelStatus.Offline
         server?.stop(1000, 2000)
         server = null
+        // Release WakeLock if held
+        try {
+            wakeLock?.let { if (it.isHeld) it.release() }
+        } catch (e: Exception) {
+            android.util.Log.e("ServerService", "WakeLock release failed", e)
+        }
+        wakeLock = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -1305,8 +1604,8 @@ class ServerService : Service() {
     }
 
     private fun openOutputStreamWithRetry(
-        contentResolver: android.content.ContentResolver, 
-        uri: android.net.Uri, 
+        contentResolver: android.content.ContentResolver,
+        uri: android.net.Uri,
         mode: String,
         retries: Int = 3
     ): java.io.OutputStream {
@@ -1321,8 +1620,8 @@ class ServerService : Service() {
 
     private fun findFileReliable(parent: DocumentFile, name: String): DocumentFile? {
         parent.findFile(name)?.let { return it }
-        return parent.listFiles().firstOrNull { 
-            it.name?.equals(name, ignoreCase = false) == true 
+        return parent.listFiles().firstOrNull {
+            it.name?.equals(name, ignoreCase = false) == true
         }
     }
 
@@ -1492,7 +1791,7 @@ class ServerService : Service() {
         var currentDocId = android.provider.DocumentsContract.getTreeDocumentId(rootUri) ?: return null
         if (path.isNullOrBlank() || path == "/") return currentDocId
         val segments = path.split("/").filter { it.isNotBlank() }
-        
+
         for (segment in segments) {
             if (segment == ".." || segment == ".") return null
             val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(rootUri, currentDocId)
@@ -1521,7 +1820,7 @@ class ServerService : Service() {
     private fun resolveSafePath(root: DocumentFile?, path: String?): DocumentFile? {
         if (root == null) return null
         if (path.isNullOrBlank() || path == "/") return root
-        
+
         val docId = resolveSafeDocIdFast(root.uri, path) ?: return null
         val targetUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(root.uri, docId)
         return DocumentFile.fromTreeUri(this@ServerService, targetUri)
@@ -1534,7 +1833,7 @@ class ServerService : Service() {
             return DocumentFile.fromTreeUri(this@ServerService, targetUri)
         }
         val segments = path.split("/").filter { it.isNotBlank() }
-        
+
         for (segment in segments) {
             if (segment == ".." || segment == ".") return null
             val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(rootUri, currentDocId)
@@ -1568,6 +1867,101 @@ class ServerService : Service() {
         return DocumentFile.fromTreeUri(this@ServerService, targetUri)
     }
 
+    private fun resolveFilePath(root: DocumentFile, path: String): DocumentFile? {
+        if (path.isBlank() || path == "/" || path == ".") return root
+
+        val segments = path
+            .replace('\\', '/')
+            .trim('/')
+            .split("/")
+            .filter { it.isNotBlank() }
+
+        var current: DocumentFile = root
+        for (segment in segments) {
+            if (segment == "." || segment == "..") return null
+            current = current.listFiles().firstOrNull { it.name == segment } ?: return null
+        }
+
+        return current
+    }
+
+    private suspend fun serveRangeRequest(
+        call: io.ktor.server.application.ApplicationCall,
+        file: DocumentFile,
+        mimeType: String,
+        fileSize: Long,
+        rangeHeader: String
+    ) {
+        val range = rangeHeader.removePrefix("bytes=").split("-", limit = 2)
+        val start = range.getOrNull(0)?.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
+        val requestedEnd = range.getOrNull(1)?.toLongOrNull()
+        val end = (requestedEnd ?: (fileSize - 1)).coerceAtMost(fileSize - 1)
+
+        if (!rangeHeader.startsWith("bytes=") || fileSize <= 0L || start > end) {
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "invalid_range"))
+            return
+        }
+
+        val contentLength = end - start + 1
+
+        call.response.header(HttpHeaders.ContentType, mimeType)
+        call.response.header(HttpHeaders.ContentLength, contentLength.toString())
+        call.response.header(HttpHeaders.ContentRange, "bytes $start-$end/$fileSize")
+        call.response.header(HttpHeaders.AcceptRanges, "bytes")
+
+        call.respondOutputStream(
+            contentType = ContentType.parse(mimeType),
+            status = HttpStatusCode.PartialContent
+        ) {
+            contentResolver.openInputStream(file.uri)?.use { input ->
+                var skipped = 0L
+                while (skipped < start) {
+                    val delta = input.skip(start - skipped)
+                    if (delta <= 0L) break
+                    skipped += delta
+                }
+
+                var remaining = contentLength
+                val buffer = ByteArray(65536)
+                while (remaining > 0) {
+                    val toRead = minOf(buffer.size.toLong(), remaining).toInt()
+                    val bytesRead = input.read(buffer, 0, toRead)
+                    if (bytesRead == -1) break
+                    write(buffer, 0, bytesRead)
+                    remaining -= bytesRead
+                }
+            }
+        }
+    }
+
+    private fun addFolderToZip(
+        zip: ZipOutputStream,
+        folder: DocumentFile,
+        prefix: String,
+        contentResolver: android.content.ContentResolver
+    ) {
+        folder.listFiles().forEach { child ->
+            val childName = child.name ?: "unknown"
+            val entryName = if (prefix.isBlank()) childName else "$prefix/$childName"
+
+            if (child.isDirectory) {
+                zip.putNextEntry(ZipEntry("$entryName/"))
+                zip.closeEntry()
+                addFolderToZip(zip, child, entryName, contentResolver)
+            } else {
+                zip.putNextEntry(ZipEntry(entryName))
+                contentResolver.openInputStream(child.uri)?.use { input ->
+                    val buffer = ByteArray(65536)
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        zip.write(buffer, 0, bytesRead)
+                    }
+                }
+                zip.closeEntry()
+            }
+        }
+    }
+
 
 
     private fun formatBytes(bytes: Long): String {
@@ -1580,9 +1974,9 @@ class ServerService : Service() {
     }
 
     private suspend fun io.ktor.server.application.ApplicationCall.respondJson(
-        success: Boolean, 
-        error: String? = null, 
-        code: String? = null, 
+        success: Boolean,
+        error: String? = null,
+        code: String? = null,
         data: Any? = null
     ) {
         val map = mutableMapOf<String, Any?>("success" to success)
