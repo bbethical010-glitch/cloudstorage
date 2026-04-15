@@ -22,6 +22,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -904,13 +905,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun shareInvite() {
-        val inviteLink = buildInviteLink(shareCode)
-        val publicUrl = buildRelayBrowserUrl(relayBaseUrl, shareCode)
-        val shareText = buildSharePayload(shareCode, inviteLink, publicUrl)
+        val shareText = NodeUrlBuilder.buildSharePayload(shareCode)
         val sendIntent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_SUBJECT, "Easy Storage Cloud Invite")
-            putExtra(Intent.EXTRA_TEXT, shareText)
+            putExtra(Intent.EXTRA_TEXT, shareText as String)
         }
         startActivity(Intent.createChooser(sendIntent, "Share App Invite"))
     }

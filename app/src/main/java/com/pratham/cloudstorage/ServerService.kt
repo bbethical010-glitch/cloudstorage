@@ -132,7 +132,7 @@ class ServerService : Service() {
             acquire(24 * 60 * 60 * 1000L)
         }
 
-        val publicUrl = buildRelayBrowserUrl(relayBaseUrl, shareCode)
+        val publicUrl = NodeUrlBuilder.buildRelayBrowserUrl(shareCode)
         val localUrl = buildLocalAccessUrl(DEFAULT_PORT)
         val notificationText = publicUrl ?: localUrl ?: "Node online"
 
