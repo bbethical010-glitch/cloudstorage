@@ -1557,7 +1557,7 @@ class ServerService : Service() {
                 }
             }
 
-            try {
+
                 server?.start(wait = false)
                 android.util.Log.d("Ktor", "Server started successfully on port $DEFAULT_PORT")
                 // Server is now listening — emit ACTIVE
