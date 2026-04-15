@@ -167,6 +167,9 @@ class ServerService : Service() {
         scope.launch {
             server = embeddedServer(Netty, port = DEFAULT_PORT) {
                 install(CORS) {
+                    allowHost("app.local.cloud", schemes = listOf("http", "https"))
+                    allowHost("localhost:8080")
+                    allowHost("127.0.0.1:8080")
                     allowMethod(HttpMethod.Options)
                     allowMethod(HttpMethod.Get)
                     allowMethod(HttpMethod.Post)
@@ -188,7 +191,8 @@ class ServerService : Service() {
                     exposeHeader(io.ktor.http.HttpHeaders.ContentRange)
                     exposeHeader(io.ktor.http.HttpHeaders.AcceptRanges)
 
-                    anyHost() // Allow Web Console origin
+                    allowCredentials = true
+                    anyHost() // Fallback for local network bridging
                 }
 
                 // Enforce CORS universally

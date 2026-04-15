@@ -344,7 +344,12 @@ export function WebConsole() {
     return (pathMatch?.[1] || hashMatch?.[1] || '').toUpperCase();
   };
 
-  const getBaseUrl = () => '';
+  const getBaseUrl = () => {
+    if (window.location.hostname === 'app.local.cloud') {
+      return 'http://127.0.0.1:8080';
+    }
+    return '';
+  };
   const getRelayUrl = () => window.location.origin;
 
   const shareCode = getShareCode();
@@ -1352,6 +1357,12 @@ export function WebConsole() {
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
+    
+    if (!authUsername.trim() || !authPassword.trim()) {
+      setAuthError("Missing username or password");
+      return;
+    }
+
     try {
       const endpoint = authMode === 'signup' ? '/api/auth/signup' : '/api/auth/login';
       const res = await apiFetch(endpoint, {
@@ -1603,9 +1614,11 @@ export function WebConsole() {
 
         <div className="console-layout">
           {/* ═══════════ LEFT SIDEBAR — fixed width ═══════════ */}
-          <aside className="sidebar">
-            <SidebarContent />
-          </aside>
+          {isAuthenticated && (
+            <aside className="sidebar">
+              <SidebarContent />
+            </aside>
+          )}
 
           {/* ═══════════ CENTER FILE PANEL — flexible area ═══════════ */}
           <main
@@ -2019,29 +2032,31 @@ export function WebConsole() {
         </main>
 
         {/* ═══════════ RIGHT PREVIEW PANEL — fixed 300px ═══════════ */}
-        <aside className="preview-panel">
-          <PreviewModal
-            selectedFile={selectedFile}
-            currentPath={currentPath}
-            apiFetch={apiFetch}
-            onClose={() => setSelectedFile(null)}
-            onRename={handleRename}
-            onShare={() => setShowShareModal(true)}
-            onMove={(file) => {
-              const dest = prompt("Enter destination folder path (e.g. Documents):");
-              if (dest !== null) {
-                setSelectedFiles(new Set([file.id]));
-                handleBulkAction('move', dest);
-              }
-            }}
-            onDelete={(file) => setDeleteCandidate(file)}
-            formatSize={formatSize}
-            formatDate={formatDate}
-            getFileIcon={getFileIcon}
-            connectionMode={p2pState === 'fallback' ? 'relay' : isLocalSession ? 'local' : 'p2p'}
-            getAuthenticatedUrl={getAuthenticatedUrl}
-          />
-        </aside>
+        {isAuthenticated && (
+          <aside className="preview-panel">
+            <PreviewModal
+              selectedFile={selectedFile}
+              currentPath={currentPath}
+              apiFetch={apiFetch}
+              onClose={() => setSelectedFile(null)}
+              onRename={handleRename}
+              onShare={() => setShowShareModal(true)}
+              onMove={(file) => {
+                const dest = prompt("Enter destination folder path (e.g. Documents):");
+                if (dest !== null) {
+                  setSelectedFiles(new Set([file.id]));
+                  handleBulkAction('move', dest);
+                }
+              }}
+              onDelete={(file) => setDeleteCandidate(file)}
+              formatSize={formatSize}
+              formatDate={formatDate}
+              getFileIcon={getFileIcon}
+              connectionMode={p2pState === 'fallback' ? 'relay' : isLocalSession ? 'local' : 'p2p'}
+              getAuthenticatedUrl={getAuthenticatedUrl}
+            />
+          </aside>
+        )}
       </div>
     </div>
   )}

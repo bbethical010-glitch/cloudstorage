@@ -323,21 +323,20 @@ class MainActivity : ComponentActivity() {
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT
             )
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.allowFileAccess = true
-            settings.allowContentAccess = true
-            settings.databaseEnabled = true
-            settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-            
-            settings.cacheMode = WebSettings.LOAD_DEFAULT
-            settings.userAgentString = settings.userAgentString + " EasyStorageAndroid/1.0"
-            settings.allowFileAccess = true
-            settings.allowContentAccess = true
-            settings.allowFileAccessFromFileURLs = true
-            settings.allowUniversalAccessFromFileURLs = true
-            settings.databaseEnabled = true
-            settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+            settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                allowFileAccess = true
+                allowContentAccess = true
+                databaseEnabled = true
+                // CRITICAL: Allow HTTPS to fetch HTTP
+                mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                
+                cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+                userAgentString = userAgentString + " EasyStorageAndroid/1.0"
+                allowFileAccessFromFileURLs = true
+                allowUniversalAccessFromFileURLs = true
+            }
             
             clearCache(true)
             
