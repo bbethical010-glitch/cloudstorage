@@ -124,13 +124,7 @@ export function AndroidSettings() {
         }},
         { icon: Shield, label: "Security Settings", value: "Standard", onClick: () => toast.info("Advanced Security modules are under construction") },
         { icon: Shield, label: "Node Visibility", value: "Encrypted", onClick: () => toast.info("Custom Node Visibility is under construction") },
-        { icon: Share2, label: "Invite Friends", onClick: () => {
-             if(appState?.node?.tunnelStatus !== 'Connected') {
-                toast.error("Tunnel Offline. Access invitations disabled.");
-                return;
-             }
-             androidBridge.shareInvite();
-        }},
+
       ]
     }
   ];

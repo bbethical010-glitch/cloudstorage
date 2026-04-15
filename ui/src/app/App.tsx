@@ -23,9 +23,9 @@ function Main() {
 
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup' | 'none'>('none');
-  const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
+  const [authChecked, setAuthChecked] = useState(false);
 
   const setAppState = useCallback((newState: Partial<AppState> | ((prev: AppState | null) => AppState | null)) => {
     setAppStateRaw(prev => {
@@ -92,10 +92,50 @@ function Main() {
   }, [setAppState]);
 
   useEffect(() => {
+    // Web Console (non-Android): check auth immediately
     if (!window.Android) {
-      if (!window.location.hash.startsWith("#/console") && !window.location.hash.startsWith("#/onboarding")) {
-        window.location.hash = "#/console";
-      }
+      // Determine the API base URL from the current page URL
+      const checkRemoteAuth = async () => {
+        try {
+          // Check if we have a stored session token
+          const storedToken = sessionStorage.getItem('cloud_storage_session_token');
+          
+          // Check auth status from the node
+          const authRes = await fetch(`/api/auth/status?t=${Date.now()}`);
+          if (authRes.ok) {
+            const { hasAccount } = await authRes.json();
+            
+            if (hasAccount && storedToken) {
+              // Verify the stored token is still valid
+              const verify = await fetch(`/api/storage`, { 
+                headers: { Authorization: `Bearer ${storedToken}` } 
+              });
+              if (verify.ok) {
+                setIsAuthenticated(true);
+                setAuthMode('none');
+                setAuthChecked(true);
+                setStep('app');
+                return;
+              }
+            }
+            
+            // Need authentication
+            setAuthMode(hasAccount ? 'login' : 'signup');
+            setAuthChecked(true);
+            setStep('auth');
+          } else {
+            // Auth endpoint not available, show app anyway
+            setAuthChecked(true);
+            setStep('app');
+          }
+        } catch (e) {
+          console.error('[AUTH] Remote auth check failed', e);
+          setAuthChecked(true);
+          setStep('auth');
+          setAuthMode('login');
+        }
+      };
+      checkRemoteAuth();
       return;
     }
 
@@ -171,7 +211,7 @@ function Main() {
     }
   }, [appStateRaw, step]);
 
-  // Auth Guard
+  // Auth Guard — for Android WebView only
   useEffect(() => {
     if (!window.Android || !appStateRaw?.node?.isRunning) return;
     const checkAuth = async () => {
@@ -183,17 +223,15 @@ function Main() {
         if (authStat.ok) {
            const { hasAccount } = await authStat.json();
            
-           if (token) {
-                const verify = await fetch(`http://127.0.0.1:8080/api/storage`, { headers: { Authorization: `Bearer ${token}` }});
-                if (verify.ok) {
-                    setIsAuthenticated(true);
-                    setAuthMode('none');
-                    if (step === 'auth') {
-                       const hasTut = localStorage.getItem("hasSeenTutorial");
-                       setStep(hasTut ? "app" : "welcome");
-                    }
-                    return;
+           if (token || window.Android) {
+                // On Android, we trust the local bridge for first-time setup and subsequent access
+                setIsAuthenticated(true);
+                setAuthMode('none');
+                if (step === 'auth') {
+                   const hasTut = localStorage.getItem("hasSeenTutorial");
+                   setStep(hasTut ? "app" : "welcome");
                 }
+                return;
            }
            
            setIsAuthenticated(false);
@@ -236,20 +274,30 @@ function Main() {
     e.preventDefault();
     setAuthError('');
     try {
+      const isRemote = !window.Android;
+      const baseUrl = isRemote ? '' : 'http://127.0.0.1:8080';
       const endpoint = authMode === 'signup' ? '/api/auth/signup' : '/api/auth/login';
-      const res = await fetch(`http://127.0.0.1:8080${endpoint}`, {
+      const res = await fetch(`${baseUrl}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: authEmail, password: authPassword })
+        body: JSON.stringify({ password: authPassword })
       });
       const data = await res.json();
       if (res.ok && data.token) {
-        localStorage.setItem('cloud_storage_android_token', data.token);
+        if (isRemote) {
+          sessionStorage.setItem('cloud_storage_session_token', data.token);
+        } else {
+          localStorage.setItem('cloud_storage_android_token', data.token);
+        }
         setIsAuthenticated(true);
         setAuthMode('none');
         toast.success("Identity Secured");
-        const hasTut = localStorage.getItem("hasSeenTutorial");
-        setStep(hasTut ? "app" : "welcome");
+        if (isRemote) {
+          setStep('app');
+        } else {
+          const hasTut = localStorage.getItem("hasSeenTutorial");
+          setStep(hasTut ? "app" : "welcome");
+        }
       } else {
         setAuthError(data.error || "Authentication failed");
       }
@@ -298,16 +346,19 @@ function Main() {
                   </div>
                 </div>
                 <h2 className="text-2xl font-bold text-center text-white mb-2">
-                  {authMode === 'signup' ? 'Secure Local Node' : 'Node Locked'}
+                  {authMode === 'signup' ? 'Secure Your Node' : 'Node Locked'}
                 </h2>
+                <p className="text-xs text-[#9CA3AF] text-center mb-6">
+                  {authMode === 'signup' 
+                    ? 'Create a password to protect your storage node.' 
+                    : 'Enter your node password to continue.'}
+                </p>
                 <form onSubmit={performAuth} className="space-y-4">
-                  <Input type="email" required placeholder="admin@local.host" value={authEmail} onChange={e => setAuthEmail(e.target.value)}
-                    className="bg-[#0B1220] border-[#374151] text-white h-12 rounded-xl" />
                   <Input type="password" required placeholder="••••••••" value={authPassword} onChange={e => setAuthPassword(e.target.value)}
                     className="bg-[#0B1220] border-[#374151] text-white h-12 rounded-xl" />
                   {authError && <div className="text-red-400 text-xs font-medium text-center">{authError}</div>}
-                  <Button type="submit" className="w-full h-12 bg-[#2563EB] hover:bg-[#1d4ed8] text-white">
-                    {authMode === 'signup' ? 'Lock Core API' : 'Unlock Node Engine'}
+                  <Button type="submit" className="w-full h-12 bg-[#2563EB] hover:bg-[#1d4ed8] text-white font-bold rounded-xl">
+                    {authMode === 'signup' ? 'Set Password' : 'Unlock Node'}
                   </Button>
                 </form>
               </Card>

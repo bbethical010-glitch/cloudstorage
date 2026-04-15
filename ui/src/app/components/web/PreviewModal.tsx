@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   ArrowLeft,
@@ -115,6 +115,9 @@ export function PreviewModal({
   connectionMode = "relay",
   getAuthenticatedUrl,
 }: PreviewModalProps) {
+  const getAuthUrlRef = useRef(getAuthenticatedUrl);
+  useEffect(() => { getAuthUrlRef.current = getAuthenticatedUrl; }, [getAuthenticatedUrl]);
+
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -152,13 +155,13 @@ export function PreviewModal({
     if (shouldDirectStream) {
       const endpoint = buildFileContentEndpoint(selectedFile);
 
-      if (getAuthenticatedUrl) {
-        setDirectStreamUrl(getAuthenticatedUrl(endpoint));
+      if (getAuthUrlRef.current) {
+        setDirectStreamUrl(getAuthUrlRef.current(endpoint));
       } else {
         // Fallback: try to build the URL with available token
         const token = localStorage.getItem('cloud_storage_token') ||
-                      localStorage.getItem('cloud_storage_android_token') ||
-                      sessionStorage.getItem('node_session_token') || '';
+          localStorage.getItem('cloud_storage_android_token') ||
+          sessionStorage.getItem('node_session_token') || '';
         const separator = endpoint.includes('?') ? '&' : '?';
         setDirectStreamUrl(`${endpoint}${separator}token=${encodeURIComponent(token)}`);
       }
@@ -211,7 +214,7 @@ export function PreviewModal({
         URL.revokeObjectURL(currentUrl);
       }
     };
-  }, [selectedFile, isSupported, shouldDirectStream, apiFetch, getAuthenticatedUrl, buildFileContentEndpoint]);
+  }, [selectedFile, isSupported, shouldDirectStream, apiFetch, buildFileContentEndpoint]);
 
   // The effective URL for rendering (either a blob URL or a direct stream URL)
   const previewUrl = directStreamUrl || objectUrl;
@@ -232,12 +235,12 @@ export function PreviewModal({
       let downloadUrl = selectedFile.isDirectory
         ? `/api/download-folder?path=${encodeURIComponent(selectedFile.path || selectedFile.name)}`
         : buildFileContentEndpoint(selectedFile);
-      if (getAuthenticatedUrl) {
-        downloadUrl = getAuthenticatedUrl(downloadUrl);
+      if (getAuthUrlRef.current) {
+        downloadUrl = getAuthUrlRef.current(downloadUrl);
       } else {
         const token = localStorage.getItem('cloud_storage_token') ||
-                      localStorage.getItem('cloud_storage_android_token') ||
-                      sessionStorage.getItem('node_session_token') || '';
+          localStorage.getItem('cloud_storage_android_token') ||
+          sessionStorage.getItem('node_session_token') || '';
         downloadUrl += `${downloadUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
       }
       const a = document.createElement('a');
@@ -247,7 +250,7 @@ export function PreviewModal({
       a.click();
       document.body.removeChild(a);
     }
-  }, [selectedFile, objectUrl, getAuthenticatedUrl, buildFileContentEndpoint]);
+  }, [selectedFile, objectUrl, buildFileContentEndpoint]);
 
   // ─── Render the preview content based on MIME category ───────────────
 
@@ -269,7 +272,7 @@ export function PreviewModal({
           <AlertCircle className="w-12 h-12 text-[#EF4444] opacity-50" />
           <p className="text-xs text-[#EF4444] font-medium leading-relaxed">{error}</p>
           <Button variant="outline" size="sm" className="mt-2 border-[#EF4444]/20 text-[#EF4444] hover:bg-[#EF4444]/10 h-8 text-[10px] font-bold uppercase tracking-widest" onClick={() => window.location.reload()}>
-              Retry Connection
+            Retry Connection
           </Button>
         </div>
       );
@@ -328,6 +331,7 @@ export function PreviewModal({
             src={previewUrl}
             className="w-full max-w-[300px]"
             preload="metadata"
+            onError={() => setError("Failed to play audio. Format may not be supported by your browser.")}
           />
         </div>
       );
@@ -398,14 +402,14 @@ export function PreviewModal({
           className="h-full flex flex-col p-6 w-full max-h-screen"
         >
           <div className="flex items-center justify-between mb-8 shrink-0">
-             <Button variant="ghost" size="icon" className="h-8 w-8 text-[#E5E7EB] md:hidden" onClick={onClose}>
-               <ArrowLeft className="w-5 h-5 text-white" />
-             </Button>
-             <h3 className="font-bold text-sm tracking-widest uppercase text-[#4B5563] hidden md:block">Details</h3>
-             <div className="flex-1 md:hidden" />
-             <Button variant="ghost" size="icon" className="h-8 w-8 text-[#4B5563]" onClick={onClose}>
-               <ChevronUp className="w-4 h-4 hidden md:block" />
-             </Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-[#E5E7EB] md:hidden" onClick={onClose}>
+              <ArrowLeft className="w-5 h-5 text-white" />
+            </Button>
+            <h3 className="font-bold text-sm tracking-widest uppercase text-[#4B5563] hidden md:block">Details</h3>
+            <div className="flex-1 md:hidden" />
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-[#4B5563]" onClick={onClose}>
+              <ChevronUp className="w-4 h-4 hidden md:block" />
+            </Button>
           </div>
 
           <div className="aspect-square shrink-0 w-full min-h-[180px] bg-gradient-to-br from-[#111827] to-[#0B1220] rounded-[2rem] border border-[#1F2937] flex items-center justify-center mb-8 shadow-2xl relative overflow-hidden group">
@@ -417,30 +421,30 @@ export function PreviewModal({
             <div>
               <h3 className="text-xl font-bold break-words pr-4 text-white leading-tight">{selectedFile.name}</h3>
               <div className="flex items-center gap-2 mt-2">
-                 <Badge className="bg-[#2563EB]/10 text-[#2563EB] border-transparent text-[10px] uppercase font-bold tracking-widest">
-                     {selectedFile.isDirectory ? "Folder" : ext.toUpperCase() || 'Unknown'}
-                 </Badge>
-                 {category !== 'unsupported' && category !== 'text' && (
-                   <Badge className="bg-[#10B981]/10 text-[#10B981] border-transparent text-[10px] uppercase font-bold tracking-widest">
-                     {category}
-                   </Badge>
-                 )}
-                 <span className="text-[10px] text-[#4B5563] font-mono uppercase tracking-widest">{formatSize(selectedFile.size)}</span>
+                <Badge className="bg-[#2563EB]/10 text-[#2563EB] border-transparent text-[10px] uppercase font-bold tracking-widest">
+                  {selectedFile.isDirectory ? "Folder" : ext.toUpperCase() || 'Unknown'}
+                </Badge>
+                {category !== 'unsupported' && category !== 'text' && (
+                  <Badge className="bg-[#10B981]/10 text-[#10B981] border-transparent text-[10px] uppercase font-bold tracking-widest">
+                    {category}
+                  </Badge>
+                )}
+                <span className="text-[10px] text-[#4B5563] font-mono uppercase tracking-widest">{formatSize(selectedFile.size)}</span>
               </div>
             </div>
 
             <div className="space-y-5 pt-6 border-t border-[#1F2937]/50">
               <div className="grid grid-cols-2 gap-4">
-                 <div className="space-y-1">
-                    <label className="text-[9px] font-bold text-[#4B5563] uppercase tracking-widest block">Modified</label>
-                    <p className="text-xs font-mono text-[#E5E7EB]">{formatDate(selectedFile.lastModified)}</p>
-                 </div>
-                 {category !== 'unsupported' && (
-                   <div className="space-y-1">
-                     <label className="text-[9px] font-bold text-[#4B5563] uppercase tracking-widest block">MIME Type</label>
-                     <p className="text-xs font-mono text-[#E5E7EB]">{MIME_MAP[ext] || 'unknown'}</p>
-                   </div>
-                 )}
+                <div className="space-y-1">
+                  <label className="text-[9px] font-bold text-[#4B5563] uppercase tracking-widest block">Modified</label>
+                  <p className="text-xs font-mono text-[#E5E7EB]">{formatDate(selectedFile.lastModified)}</p>
+                </div>
+                {category !== 'unsupported' && (
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-bold text-[#4B5563] uppercase tracking-widest block">MIME Type</label>
+                    <p className="text-xs font-mono text-[#E5E7EB]">{MIME_MAP[ext] || 'unknown'}</p>
+                  </div>
+                )}
               </div>
               <div className="space-y-2">
                 <label className="text-[9px] font-bold text-[#4B5563] uppercase tracking-widest block">Unified Path</label>
@@ -459,18 +463,18 @@ export function PreviewModal({
                 <Download className="w-4 h-4" /> Download
               </Button>
               <div className="grid grid-cols-2 gap-3">
-                 <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs" onClick={() => onRename(selectedFile)}>
-                   <FileEdit className="w-3.5 h-3.5" /> Rename
-                 </Button>
-                 <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs" onClick={() => onShare(selectedFile)}>
-                   <Share2 className="w-3.5 h-3.5" /> Share
-                 </Button>
-                 <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs" onClick={() => onMove(selectedFile)}>
-                   <Move className="w-3.5 h-3.5" /> Move
-                 </Button>
-                 <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs text-[#EF4444]" onClick={() => onDelete(selectedFile)}>
-                   <Trash2 className="w-3.5 h-3.5" /> Delete
-                 </Button>
+                <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs" onClick={() => onRename(selectedFile)}>
+                  <FileEdit className="w-3.5 h-3.5" /> Rename
+                </Button>
+                <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs" onClick={() => onShare(selectedFile)}>
+                  <Share2 className="w-3.5 h-3.5" /> Share
+                </Button>
+                <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs" onClick={() => onMove(selectedFile)}>
+                  <Move className="w-3.5 h-3.5" /> Move
+                </Button>
+                <Button variant="outline" className="border-[#1F2937] bg-[#111827] h-10 rounded-xl gap-2 hover:bg-[#1F2937] font-bold text-xs text-[#EF4444]" onClick={() => onDelete(selectedFile)}>
+                  <Trash2 className="w-3.5 h-3.5" /> Delete
+                </Button>
               </div>
             </div>
           </div>

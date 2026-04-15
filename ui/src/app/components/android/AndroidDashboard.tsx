@@ -83,7 +83,7 @@ export function AndroidDashboard() {
                 {folderName || "No Storage"} • {displayStorageTotalGB} GB
               </h2>
               <span className="text-[10px] font-bold text-[#9CA3AF] uppercase tracking-[0.2em]">
-                Local Only Mode
+                {isOnline ? "Engine Active" : "Ready to Launch"}
               </span>
             </div>
 
@@ -103,12 +103,15 @@ export function AndroidDashboard() {
                 <span className="truncate">Share & QR</span>
               </Button>
               <Button 
-                onClick={() => androidBridge.copyToClipboard(shareCode, "ID Copied")} 
+                onClick={() => {
+                  const url = appState?.node?.publicUrl || `https://${appState?.node?.relayBaseUrl}/node/${shareCode}/console`;
+                  androidBridge.copyToClipboard(url, "Link Copied");
+                }} 
                 variant="outline"
                 className="w-full bg-[#1F2937]/50 hover:bg-[#1F2937] border-transparent rounded-2xl h-12 text-[13px] font-medium flex justify-center gap-2 text-white transition-colors"
               >
                 <Link2 className="w-4 h-4 text-[#2563EB]" />
-                Copy ID
+                Copy Link
               </Button>
             </div>
           </Card>
@@ -153,7 +156,7 @@ export function AndroidDashboard() {
                     </Button>
                   </div>
                   <p className="text-[10px] font-mono text-[#6B7280] mt-2 break-all bg-[#0B1220] py-2 px-3 rounded-lg border border-[#1F2937]">
-                    https://{appState.node.relayBaseUrl}/node/{shareCode}
+                    {appState?.node?.publicUrl || `https://${appState?.node?.relayBaseUrl}/node/${shareCode}/console`}
                   </p>
                 </motion.div>
               )}

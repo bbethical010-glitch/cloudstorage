@@ -56,11 +56,30 @@ export const MIME_MAP: Record<string, string> = {
   
   // Documents
   'pdf': 'application/pdf',
-  'txt': 'text/plain',
+  'txt': 'text/plain;charset=utf-8',
   'md': 'text/markdown',
   'json': 'application/json',
-  'log': 'text/plain',
-  'csv': 'text/csv'
+  'log': 'text/plain;charset=utf-8',
+  'csv': 'text/csv',
+  
+  // Code & Setup
+  'js': 'text/javascript',
+  'ts': 'text/typescript',
+  'tsx': 'text/typescript',
+  'jsx': 'text/javascript',
+  'py': 'text/plain;charset=utf-8',
+  'java': 'text/plain;charset=utf-8',
+  'kt': 'text/plain;charset=utf-8',
+  'go': 'text/plain;charset=utf-8',
+  'rs': 'text/plain;charset=utf-8',
+  'c': 'text/plain;charset=utf-8',
+  'cpp': 'text/plain;charset=utf-8',
+  'h': 'text/plain;charset=utf-8',
+  'css': 'text/css',
+  'scss': 'text/x-scss',
+  'html': 'text/html',
+  'htm': 'text/html',
+  'xml': 'application/xml'
 };
 
 /**

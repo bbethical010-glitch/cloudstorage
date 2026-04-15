@@ -128,10 +128,11 @@ class ServerService : Service() {
         // Acquire WakeLock to keep CPU alive while node is serving
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "EasyStorageCloud::NodeWakeLock").apply {
-            acquire()
+            // 24 hours max - auto-releases if service crashes without cleanup
+            acquire(24 * 60 * 60 * 1000L)
         }
 
-        val publicUrl = buildRelayBrowserUrl(relayBaseUrl, shareCode)
+        val publicUrl = NodeUrlBuilder.buildRelayBrowserUrl(shareCode)
         val localUrl = buildLocalAccessUrl(DEFAULT_PORT)
         val notificationText = publicUrl ?: localUrl ?: "Node online"
 
@@ -188,6 +189,11 @@ class ServerService : Service() {
                     exposeHeader(io.ktor.http.HttpHeaders.AcceptRanges)
 
                     anyHost() // Allow Web Console origin
+                }
+
+                // Enforce CORS universally
+                intercept(io.ktor.server.application.ApplicationCallPipeline.Plugins) {
+                    call.response.header("Access-Control-Allow-Origin", "*")
                 }
 
                 install(StatusPages) {
@@ -253,10 +259,11 @@ class ServerService : Service() {
                                 if (jsonStr.isBlank()) return@post call.respond(HttpStatusCode.BadRequest)
 
                                 val obj = org.json.JSONObject(jsonStr)
+                                val username = obj.optString("username", "").trim().lowercase()
                                 val password = obj.optString("password", "")
 
-                                if (password.isBlank()) {
-                                    return@post call.respond(HttpStatusCode.BadRequest, "{\"error\": \"Missing password\"}")
+                                if (username.isBlank() || password.isBlank()) {
+                                    return@post call.respond(HttpStatusCode.BadRequest, "{\"error\": \"Missing username or password\"}")
                                 }
 
                                 val md = java.security.MessageDigest.getInstance("SHA-256")
@@ -264,6 +271,7 @@ class ServerService : Service() {
 
                                 val token = java.util.UUID.randomUUID().toString()
                                 prefs.edit()
+                                    .putString("username", username)
                                     .putString("password_hash", hash)
                                     .putString("active_token", token)
                                     .apply()
@@ -274,8 +282,9 @@ class ServerService : Service() {
                             post("/login") {
                                 val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
                                 val existingHash = prefs.getString("password_hash", null)
+                                val existingUsername = prefs.getString("username", null)
 
-                                if (existingHash == null) {
+                                if (existingHash == null || existingUsername == null) {
                                     return@post call.respond(HttpStatusCode.NotFound, "{\"error\": \"No account\"}")
                                 }
 
@@ -283,12 +292,13 @@ class ServerService : Service() {
                                 if (jsonStr.isBlank()) return@post call.respond(HttpStatusCode.BadRequest)
 
                                 val obj = org.json.JSONObject(jsonStr)
+                                val username = obj.optString("username", "").trim().lowercase()
                                 val password = obj.optString("password", "")
 
                                 val md = java.security.MessageDigest.getInstance("SHA-256")
                                 val hash = java.util.Base64.getEncoder().encodeToString(md.digest(password.toByteArray()))
 
-                                if (hash == existingHash) {
+                                if (hash == existingHash && username == existingUsername.lowercase()) {
                                     val token = java.util.UUID.randomUUID().toString()
                                     prefs.edit().putString("active_token", token).apply()
                                     call.respondText("{\"token\":\"$token\"}", ContentType.Application.Json)
@@ -1347,10 +1357,10 @@ class ServerService : Service() {
                             var transferId = ""
                             try {
                                 val path = call.request.queryParameters["path"]?.takeIf { it.isNotBlank() } ?: ""
-                                val fileName = call.request.queryParameters["filename"]
-                                    ?: call.request.queryParameters["fileName"]
+                                val fileName = call.request.queryParameters["filename"]?.takeIf { it.isNotBlank() }
+                                    ?: call.request.queryParameters["fileName"]?.takeIf { it.isNotBlank() }
                                     ?: run {
-                                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing_filename"))
+                                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing or malformed filename"))
                                         return@post
                                     }
                                 relativePath = call.request.queryParameters["relativePath"]?.takeIf { it.isNotBlank() }
