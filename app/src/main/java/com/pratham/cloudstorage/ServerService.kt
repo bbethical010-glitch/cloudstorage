@@ -161,11 +161,16 @@ class ServerService : Service() {
     }
 
     private fun startKtorServer(rootUri: Uri, shareCode: String, relayBaseUrl: String, consolePassword: String?) {
-        if (server != null) return
+        if (server != null) {
+            android.util.Log.d("Ktor", "Server already initialized, skipping start.")
+            return
+        }
 
+        android.util.Log.d("Ktor", "Initializing Ktor engine on port $DEFAULT_PORT")
         UploadNotificationManager.updateNodeStatus(NodeStatus.STARTING)
         scope.launch {
-            server = embeddedServer(Netty, port = DEFAULT_PORT) {
+            try {
+                server = embeddedServer(Netty, port = DEFAULT_PORT) {
                 install(CORS) {
                     allowHost("app.local.cloud", schemes = listOf("http", "https"))
                     allowHost("localhost:8080")
@@ -1552,19 +1557,28 @@ class ServerService : Service() {
                 }
             }
 
-            server?.start(wait = false)
-            // Server is now listening — emit ACTIVE
-            UploadNotificationManager.updateNodeStatus(NodeStatus.ACTIVE)
+            try {
+                server?.start(wait = false)
+                android.util.Log.d("Ktor", "Server started successfully on port $DEFAULT_PORT")
+                // Server is now listening — emit ACTIVE
+                UploadNotificationManager.updateNodeStatus(NodeStatus.ACTIVE)
+            } catch (e: Exception) {
+                android.util.Log.e("Ktor", "Failed to start Ktor server: ${e.message}", e)
+                UploadNotificationManager.updateNodeStatus(NodeStatus.STOPPED)
+                server = null
+            }
         }
     }
 
     private fun stopServer() {
+        android.util.Log.d("Ktor", "Stopping server and relay tunnel...")
         UploadNotificationManager.updateNodeStatus(NodeStatus.STOPPED)
         relayTunnelClient?.stop()
         relayTunnelClient = null
         tunnelStatusFlow.value = TunnelStatus.Offline
         server?.stop(1000, 2000)
         server = null
+        android.util.Log.d("Ktor", "Server fully stopped.")
         // Release WakeLock if held
         try {
             wakeLock?.let { if (it.isHeld) it.release() }

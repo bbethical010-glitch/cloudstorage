@@ -92,27 +92,47 @@ const AnimatedFolder = ({ size = "small" }: { size?: "small" | "large" }) => (
  * Enhanced fetch that enforces JSON response and handles common errors.
  * Prevents "JSON Parse error: Unrecognized token '<'" by ensuring Content-Type.
  */
-async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> {
+/**
+ * Enhanced fetch that enforces JSON response, handles common errors, and implements exponential backoff retries.
+ * Prevents "Failed to fetch" errors during the gap between WebView load and Ktor port binding.
+ */
+async function fetchJson<T>(url: string, options: RequestInit = {}, retries = 5, backoff = 500): Promise<T> {
   const headers = {
     ...options.headers,
     'Accept': 'application/json',
     'X-Requested-With': 'XMLHttpRequest'
   };
 
-  const response = await fetch(url, { ...options, headers });
+  let lastError: any;
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await fetch(url, { ...options, headers });
 
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        console.error("EXPECTED JSON, GOT HTML/OTHER. Route likely intercepted by SPA catch-all.", { url });
+        throw new Error("Malformed response: Expected JSON but received HTML. Ensure API routes are registered before catch-all.");
+      }
+
+      return await response.json();
+    } catch (err: any) {
+      lastError = err;
+      // Don't retry if it's a 4xx error (auth/client error)
+      if (err.message && (err.message.includes('400') || err.message.includes('401') || err.message.includes('403') || err.message.includes('404'))) {
+         throw err;
+      }
+      
+      console.warn(`Fetch to ${url} failed (attempt ${i + 1}/${retries}). Retrying in ${backoff}ms...`, err);
+      await new Promise(resolve => setTimeout(resolve, backoff));
+      backoff *= 2; // Exponential backoff
+    }
   }
 
-  const contentType = response.headers.get('content-type');
-  if (!contentType || !contentType.includes('application/json')) {
-    // This is the CRITICAL fix for the route intercept issue
-    console.error("EXPECTED JSON, GOT HTML/OTHER. Route likely intercepted by SPA catch-all.", { url });
-    throw new Error("Malformed response: Expected JSON but received HTML. Ensure API routes are registered before catch-all.");
-  }
-
-  return response.json();
+  throw lastError || new Error(`Failed to fetch ${url} after ${retries} attempts`);
 }
 
 /**
@@ -445,14 +465,19 @@ export function WebConsole() {
       setIsCheckingAuth(true);
       try {
         const authStatusUrl = buildApiUrl('/api/auth/status');
-        const data = await fetchJson<{ hasAccount: boolean }>(authStatusUrl);
+        const data = await fetchJson<{ hasAccount: boolean }>(authStatusUrl, {}, 8, 300); // More aggressive retries for initial node contact
 
         const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token');
         const params = new URLSearchParams(window.location.hash.includes('?') ? window.location.hash.split('?')[1] : '');
         const pwd = params.get('pwd') || token;
 
         if (pwd) {
-          const verify = await fetch(buildApiUrl('/api/storage'), { headers: getHeaders() });
+          // Verify token against /api/storage (requires auth)
+          const verify = await fetch(buildApiUrl('/api/storage'), { 
+            headers: getHeaders(),
+            // @ts-ignore
+            importance: 'high'
+          });
           if (verify.ok) {
             setIsAuthenticated(true);
             setAuthMode('none');

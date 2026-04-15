@@ -130,6 +130,7 @@ class MainActivity : ComponentActivity() {
     private var healthPing = "0 ms"
     private var healthIo = "Idle"
     private var lastRxBytes = 0L
+    private var lastToggleTime = 0L
 
     private val selectFolderLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -866,6 +867,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun toggleNode() {
+        val now = System.currentTimeMillis()
+        if (now - lastToggleTime < 1500) return // 1.5s debounce
+        lastToggleTime = now
+
         if (selectedUri == null) {
             Toast.makeText(this, "Please select a storage folder first", Toast.LENGTH_SHORT).show()
             return
