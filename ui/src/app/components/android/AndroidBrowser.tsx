@@ -52,7 +52,7 @@ export function formatDate(timestamp: number) {
   if (diffHours < 24) return `${diffHours} hours ago`;
   if (diffDays === 1) return "Yesterday";
   if (diffDays < 7) return `${diffDays} days ago`;
-  
+
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
 }
 
@@ -88,15 +88,15 @@ export function AndroidBrowser() {
   const [showSearch, setShowSearch] = useState(false);
   const [loading, setLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<any | null>(null);
-  
+
   const [currentPath, setCurrentPath] = useState("");
   const [isFabOpen, setIsFabOpen] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<{fileName: string, progress: number} | null>(null);
-  
+  const [uploadProgress, setUploadProgress] = useState<{ fileName: string, progress: number } | null>(null);
+
   const [showCreateFolder, setShowCreateFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [folderError, setFolderError] = useState("");
-  
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isOnline = appState?.node?.isRunning ?? false;
@@ -104,11 +104,14 @@ export function AndroidBrowser() {
   const fetchFiles = useCallback(async (path: string) => {
     console.log("[JS_DEBUG] fetchFiles called for path: " + path + ". Has refreshFiles: ", !!refreshFiles);
     setLoading(true);
-    if (refreshFiles) {
-       await refreshFiles(path);
-       console.log("[JS_DEBUG] refreshFiles completed");
+    try {
+      if (refreshFiles) {
+        await refreshFiles(path);
+        console.log("[JS_DEBUG] refreshFiles completed");
+      }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [refreshFiles]);
 
   useEffect(() => {
@@ -116,29 +119,29 @@ export function AndroidBrowser() {
       fetchFiles(currentPath);
     }
   }, [fetchFiles, isOnline, currentPath]);
-  
+
   const files = (appState?.files?.items || []).map((f: any) => ({
-      ...f,
-      type: f.isDirectory ? "Folder" : "File",
-      size: f.isDirectory ? "Folder" : formatSize(f.size),
-      modified: formatDate(f.lastModified)
+    ...f,
+    type: f.isDirectory ? "Folder" : "File",
+    size: f.isDirectory ? "Folder" : formatSize(f.size),
+    modified: formatDate(f.lastModified)
   }));
 
   const getFileIcon = (file: any) => {
     if (file.isDirectory) return <Folder className="w-6 h-6 text-[#2563EB]" />;
     const ext = file.name.split('.').pop()?.toLowerCase();
-    
-    if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)) 
+
+    if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext))
       return <ImageIcon className="w-6 h-6 text-[#A855F7]" />;
-    if (['mp4', 'mov', 'avi', 'mkv'].includes(ext)) 
+    if (['mp4', 'mov', 'avi', 'mkv'].includes(ext))
       return <Film className="w-6 h-6 text-orange-400" />;
     if (['mp3', 'wav'].includes(ext))
       return <Music className="w-6 h-6 text-pink-400" />;
-    
+
     return <FileText className="w-6 h-6 text-[#9CA3AF]" />;
   };
 
-  const filteredFiles = files.filter(f => 
+  const filteredFiles = files.filter(f =>
     f.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -253,34 +256,34 @@ export function AndroidBrowser() {
       setFolderError("Folder name contains invalid characters");
       return;
     }
-    
+
     setShowCreateFolder(false);
-    
+
     try {
       const token = localStorage.getItem('cloud_storage_android_token') || '';
       const actualPath = currentPath === "/" ? "" : currentPath;
-      
+
       const formData = new URLSearchParams();
       formData.append("name", name);
       formData.append("path", actualPath);
-      
+
       const res = await fetch(`http://127.0.0.1:8080/api/folder`, {
         method: "POST",
-        headers: { 
+        headers: {
           "Content-Type": "application/x-www-form-urlencoded",
           "Authorization": `Bearer ${token}`
         },
         body: formData.toString()
       });
-      
+
       if (!res.ok) throw new Error("Failed to create folder");
       toast.success("Folder created");
-      
+
       const appSet = JSON.parse(localStorage.getItem('appSettings') || '{}');
       if (appSet.notifications !== 'None') {
-         androidBridge.showNotification("Folder Created", name);
+        androidBridge.showNotification("Folder Created", name);
       }
-      
+
       fetchFiles(currentPath);
     } catch (err: any) {
       toast.error(err.message || "Failed to create folder");
@@ -299,9 +302,9 @@ export function AndroidBrowser() {
       {/* Header */}
       <div className="px-6 pt-10 pb-4">
         <div className="flex items-center justify-between mb-6">
-          <Button 
-            variant="ghost" 
-            size="icon" 
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={() => navigate(-1)}
             className="rounded-full hover:bg-[#1F2937]"
           >
@@ -316,25 +319,25 @@ export function AndroidBrowser() {
               </div>
             )}
             {isOnline && (
-               <div className="flex items-center gap-1 justify-center mt-0.5">
+              <div className="flex items-center gap-1 justify-center mt-0.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-[#22C55E]" />
                 <span className="text-[10px] text-[#22C55E] font-bold uppercase tracking-widest">Connected</span>
               </div>
             )}
           </div>
           <div className="flex gap-1">
-            <Button 
-              variant="ghost" 
-              size="icon" 
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => fetchFiles(currentPath)}
               disabled={!isOnline || loading}
               className="rounded-full hover:bg-[#1F2937]"
             >
               <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
             </Button>
-            <Button 
-              variant="ghost" 
-              size="icon" 
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => setShowSearch(!showSearch)}
               className={`rounded-full hover:bg-[#1F2937] ${showSearch ? 'text-[#2563EB]' : ''}`}
             >
@@ -363,12 +366,12 @@ export function AndroidBrowser() {
 
         {/* Path Bar Component */}
         <div className="flex items-center gap-2 px-4 py-3 bg-[#111827] border border-[#374151] rounded-2xl mb-2 overflow-x-auto scrollbar-hide">
-          <HardDrive 
-            className="w-4 h-4 text-[#2563EB] shrink-0 cursor-pointer" 
+          <HardDrive
+            className="w-4 h-4 text-[#2563EB] shrink-0 cursor-pointer"
             onClick={() => setCurrentPath("")}
           />
           <div className="flex items-center gap-1 text-[11px] font-bold text-[#9CA3AF] whitespace-nowrap">
-            <span 
+            <span
               className={`cursor-pointer hover:text-white transition-colors ${!currentPath ? 'text-white' : ''}`}
               onClick={() => setCurrentPath("")}
             >
@@ -377,7 +380,7 @@ export function AndroidBrowser() {
             {pathParts.map((part, idx) => (
               <React.Fragment key={idx}>
                 <ChevronRight className="w-3 h-3 text-[#4B5563] shrink-0" />
-                <span 
+                <span
                   className={`cursor-pointer hover:text-white transition-colors ${idx === pathParts.length - 1 ? 'text-[#2563EB]' : ''}`}
                   onClick={() => {
                     const newPath = pathParts.slice(0, idx + 1).join('/');
@@ -397,7 +400,7 @@ export function AndroidBrowser() {
         {!isOnline && (
           <div className="py-20 flex flex-col items-center justify-center text-center px-10">
             <div className="w-20 h-20 bg-[#111827] border border-[#374151] rounded-full flex items-center justify-center mb-6 shadow-inner">
-               <AlertCircle className="w-10 h-10 text-[#374151]" />
+              <AlertCircle className="w-10 h-10 text-[#374151]" />
             </div>
             <h3 className="text-xl font-bold">Node Disconnected</h3>
             <p className="text-xs text-[#9CA3AF] mt-3 leading-relaxed">
@@ -410,17 +413,17 @@ export function AndroidBrowser() {
         )}
 
         {isOnline && loading && files.length === 0 && (
-           <div className="space-y-3 mt-4">
-             {[1, 2, 3, 4, 5].map(i => (
-               <div key={i} className="bg-[#111827] border border-[#374151] p-4 flex items-center gap-4 rounded-2xl animate-pulse">
-                 <div className="w-14 h-14 rounded-2xl bg-[#1F2937]" />
-                 <div className="flex-1 space-y-2">
-                   <div className="h-4 bg-[#1F2937] rounded w-2/3" />
-                   <div className="h-3 bg-[#1F2937] rounded w-1/3" />
-                 </div>
-               </div>
-             ))}
-           </div>
+          <div className="space-y-3 mt-4">
+            {[1, 2, 3, 4, 5].map(i => (
+              <div key={i} className="bg-[#111827] border border-[#374151] p-4 flex items-center gap-4 rounded-2xl animate-pulse">
+                <div className="w-14 h-14 rounded-2xl bg-[#1F2937]" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-4 bg-[#1F2937] rounded w-2/3" />
+                  <div className="h-3 bg-[#1F2937] rounded w-1/3" />
+                </div>
+              </div>
+            ))}
+          </div>
         )}
 
         {isOnline && filteredFiles.length === 0 && !loading && (
@@ -429,7 +432,7 @@ export function AndroidBrowser() {
               <FolderOpen className="w-10 h-10 text-[#374151]" />
             </div>
             <h3 className="text-lg font-bold">This folder is empty</h3>
-            <p className="text-sm text-[#9CA3AF] mt-2 leading-relaxed">Tap the + button to upload items or<br/>create a new folder to organize.</p>
+            <p className="text-sm text-[#9CA3AF] mt-2 leading-relaxed">Tap the + button to upload items or<br />create a new folder to organize.</p>
           </div>
         )}
 
@@ -467,30 +470,30 @@ export function AndroidBrowser() {
       {/* FAB */}
       {isOnline && (
         <div className="fixed bottom-28 right-6 z-40 flex flex-col items-end">
-           <AnimatePresence>
-             {isFabOpen && (
-               <motion.div 
-                 initial={{ opacity: 0, y: 20, scale: 0.8 }}
-                 animate={{ opacity: 1, y: 0, scale: 1 }}
-                 exit={{ opacity: 0, y: 20, scale: 0.8 }}
-                 className="flex flex-col gap-3 mb-4 items-end"
-               >
-                 <Button onClick={handleUploadFileClick} className="h-12 px-5 rounded-full bg-[#111827] border border-[#374151] shadow-xl text-sm font-medium hover:bg-[#1F2937] flex gap-3">
-                   Upload File <Upload className="w-4 h-4 text-[#2563EB]" />
-                 </Button>
-                 <Button onClick={handleCreateFolderClick} className="h-12 px-5 rounded-full bg-[#111827] border border-[#374151] shadow-xl text-sm font-medium hover:bg-[#1F2937] flex gap-3">
-                   Create Folder <FolderPlus className="w-4 h-4 text-[#10B981]" />
-                 </Button>
-               </motion.div>
-             )}
-           </AnimatePresence>
+          <AnimatePresence>
+            {isFabOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: 20, scale: 0.8 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 20, scale: 0.8 }}
+                className="flex flex-col gap-3 mb-4 items-end"
+              >
+                <Button onClick={handleUploadFileClick} className="h-12 px-5 rounded-full bg-[#111827] border border-[#374151] shadow-xl text-sm font-medium hover:bg-[#1F2937] flex gap-3">
+                  Upload File <Upload className="w-4 h-4 text-[#2563EB]" />
+                </Button>
+                <Button onClick={handleCreateFolderClick} className="h-12 px-5 rounded-full bg-[#111827] border border-[#374151] shadow-xl text-sm font-medium hover:bg-[#1F2937] flex gap-3">
+                  Create Folder <FolderPlus className="w-4 h-4 text-[#10B981]" />
+                </Button>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-           <Button 
-             onClick={() => setIsFabOpen(!isFabOpen)}
-             className={`w-16 h-16 rounded-[2rem] shadow-2xl shadow-blue-500/30 text-white flex items-center justify-center active:scale-95 transition-all duration-200 ${isFabOpen ? 'bg-[#1F2937] rotate-45' : 'bg-gradient-to-br from-[#2563EB] to-[#A855F7]'}`}
-           >
-             <Plus className="w-8 h-8" />
-           </Button>
+          <Button
+            onClick={() => setIsFabOpen(!isFabOpen)}
+            className={`w-16 h-16 rounded-[2rem] shadow-2xl shadow-blue-500/30 text-white flex items-center justify-center active:scale-95 transition-all duration-200 ${isFabOpen ? 'bg-[#1F2937] rotate-45' : 'bg-gradient-to-br from-[#2563EB] to-[#A855F7]'}`}
+          >
+            <Plus className="w-8 h-8" />
+          </Button>
         </div>
       )}
 
@@ -508,7 +511,7 @@ export function AndroidBrowser() {
               <span className="text-xs text-[#2563EB] font-bold">{uploadProgress.progress}%</span>
             </div>
             <div className="h-2 w-full bg-[#0B1220] rounded-full overflow-hidden">
-              <motion.div 
+              <motion.div
                 className="h-full bg-gradient-to-r from-[#2563EB] to-[#A855F7]"
                 initial={{ width: 0 }}
                 animate={{ width: `${uploadProgress.progress}%` }}
@@ -523,7 +526,7 @@ export function AndroidBrowser() {
       {/* File Details Overlay */}
       <AnimatePresence>
         {selectedFile && (
-          <FileDetails 
+          <FileDetails
             file={selectedFile}
             onClose={() => setSelectedFile(null)}
             onDownload={() => {
@@ -548,7 +551,7 @@ export function AndroidBrowser() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <Card className="w-full max-w-sm bg-[#111827] border-[#374151] p-6 shadow-2xl">
             <h3 className="text-xl font-bold text-white mb-4">Create Folder</h3>
-            <Input 
+            <Input
               value={newFolderName}
               onChange={(e) => {
                 setNewFolderName(e.target.value);

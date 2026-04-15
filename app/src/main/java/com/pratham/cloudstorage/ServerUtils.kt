@@ -92,49 +92,51 @@ fun resolveRelayBaseUrl(
     }
 }
 
-fun buildRelayBrowserUrl(relayBaseUrl: String, shareCode: String): String? {
-    val normalized = normalizeRelayBaseUrl(relayBaseUrl)
-    if (normalized.isBlank()) {
-        return null
-    }
-    return "$normalized/node/$shareCode/console"
-}
-
-fun buildInviteLink(shareCode: String): String {
-    val configuredHost = BuildConfig.APP_LINK_HOST.trim()
-    return if (configuredHost.isNotBlank()) {
-        Uri.Builder()
-            .scheme("https")
-            .authority(configuredHost)
-            .appendPath("join")
-            .appendQueryParameter("code", shareCode)
-            .build()
-            .toString()
-    } else {
-        Uri.Builder()
-            .scheme("easystoragecloud")
-            .authority("join")
-            .appendQueryParameter("code", shareCode)
-            .build()
-            .toString()
-    }
-}
-
-fun buildSharePayload(
-    shareCode: String,
-    inviteLink: String,
-    publicUrl: String?
-): String {
-    return buildString {
-        appendLine("Easy Storage Cloud node invite")
-        appendLine()
-        appendLine("Share code: $shareCode")
-        appendLine("Invite link: $inviteLink")
-        if (!publicUrl.isNullOrBlank()) {
-            appendLine("Public console: $publicUrl")
+object NodeUrlBuilder {
+    fun buildWebConsoleUrl(relayBaseUrl: String, shareCode: String): String? {
+        val normalized = normalizeRelayBaseUrl(relayBaseUrl)
+        if (normalized.isBlank()) {
+            return null
         }
-        appendLine()
-        append("Open the invite link in Easy Storage Cloud or paste the share code manually.")
+        return "$normalized/node/$shareCode/console"
+    }
+
+    fun buildInviteLink(shareCode: String): String {
+        val configuredHost = BuildConfig.APP_LINK_HOST.trim()
+        return if (configuredHost.isNotBlank()) {
+            Uri.Builder()
+                .scheme("https")
+                .authority(configuredHost)
+                .appendPath("join")
+                .appendQueryParameter("code", shareCode)
+                .build()
+                .toString()
+        } else {
+            Uri.Builder()
+                .scheme("easystoragecloud")
+                .authority("join")
+                .appendQueryParameter("code", shareCode)
+                .build()
+                .toString()
+        }
+    }
+
+    fun buildSharePayload(
+        shareCode: String,
+        inviteLink: String,
+        publicUrl: String?
+    ): String {
+        return buildString {
+            appendLine("Easy Storage Cloud node invite")
+            appendLine()
+            appendLine("Share code: $shareCode")
+            appendLine("Invite link: $inviteLink")
+            if (!publicUrl.isNullOrBlank()) {
+                appendLine("Public console: $publicUrl")
+            }
+            appendLine()
+            append("Open the invite link in Easy Storage Cloud or paste the share code manually.")
+        }
     }
 }
 

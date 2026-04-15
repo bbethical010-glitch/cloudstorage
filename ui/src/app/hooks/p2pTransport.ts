@@ -56,6 +56,7 @@ export class P2PTransport {
   attach(dataChannel: RTCDataChannel) {
     this.dc = dataChannel;
     dataChannel.binaryType = 'arraybuffer';
+    dataChannel.bufferedAmountLowThreshold = 1048576; // 1MB threshold for streaming backpressure
 
     dataChannel.addEventListener('open', () => {
       this._ready = true;
@@ -171,7 +172,39 @@ export class P2PTransport {
       let offset = 0;
       const idBytes = new TextEncoder().encode(id.padEnd(36, ' '));
 
-      const readNextChunk = () => {
+      const waitForLowBuffer = (): Promise<void> => {
+        return new Promise((resolveWait, rejectWait) => {
+          if (!this.dc || this.dc.readyState !== 'open') {
+            rejectWait(new Error('Data channel closed'));
+            return;
+          }
+          if (this.dc.bufferedAmount <= this.dc.bufferedAmountLowThreshold) {
+            resolveWait();
+            return;
+          }
+          let timer: any;
+          const onLow = () => {
+            clearTimeout(timer);
+            this.dc!.removeEventListener('bufferedamountlow', onLow);
+            resolveWait();
+          };
+          this.dc.addEventListener('bufferedamountlow', onLow);
+          timer = setTimeout(() => {
+            this.dc!.removeEventListener('bufferedamountlow', onLow);
+            rejectWait(new Error('Data channel buffer throttling stalled (timeout)'));
+          }, 15000);
+        });
+      };
+
+      const readNextChunk = async () => {
+        try {
+          await waitForLowBuffer();
+        } catch (err) {
+          this.pending.delete(id);
+          reject(err);
+          return;
+        }
+
         if (offset >= file.size) {
           // 3. Send upload-end control message
           this.dc!.send(JSON.stringify({ type: 'upload-end', id }));

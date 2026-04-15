@@ -132,7 +132,7 @@ function useNodeStatus(shareCode: string, intervalMs = 5000) {
     let nextOnline = onlineRef.current;
 
     try {
-      const data = await fetchJson<{online: boolean}>(`/api/node/${shareCode}/status`);
+      const data = await fetchJson<{ online: boolean }>(`/api/node/${shareCode}/status`);
       if (data.online) {
         nextOnline = true;
         failureCount.current = 0;
@@ -294,7 +294,7 @@ export function WebConsole() {
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'success' | 'error' | 'partial'>('idle');
   const [uploadProgress, setUploadProgress] = useState(0);
   const [folderProgress, setFolderProgress] = useState({ success: 0, uploading: 0, failed: 0, total: 0 });
-  const [failedUploads, setFailedUploads] = useState<{file: File, error: string}[]>([]);
+  const [failedUploads, setFailedUploads] = useState<{ file: File, error: string }[]>([]);
   const [sanitizedUploads, setSanitizedUploads] = useState<Record<string, string>>({});
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [storageStats, setStorageStats] = useState({ total: 0, used: 0, free: 0 });
@@ -316,6 +316,9 @@ export function WebConsole() {
   const [terminalLogs, setTerminalLogs] = useState<{ id: string; msg: string; type: 'sys' | 'net' | 'io'; timestamp: string }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+
+  type LoadPhase = 'intro' | 'password' | 'console';
+
 
   useEffect(() => {
     console.log("WEB_CONSOLE_RENDERED");
@@ -408,12 +411,12 @@ export function WebConsole() {
     if (file.isDirectory) return "folder";
     const ext = file.name.includes('.') ? file.name.split('.').pop()?.toLowerCase() : null;
     if (ext) {
-      if (['png','jpg','jpeg','gif','svg','webp','bmp','ico'].includes(ext)) return "image";
-      if (['mp4','mov','avi','webm','mkv'].includes(ext)) return "video";
+      if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'].includes(ext)) return "image";
+      if (['mp4', 'mov', 'avi', 'webm', 'mkv'].includes(ext)) return "video";
       if (ext === 'pdf') return "pdf";
-      if (['js','ts','tsx','jsx','py','java','kt','go','rs','c','cpp','h','css','scss'].includes(ext)) return "code";
-      if (['html','htm','xml','svg'].includes(ext)) return "html";
-      if (['txt','md','log','csv','json','yaml','yml','toml'].includes(ext)) return "text";
+      if (['js', 'ts', 'tsx', 'jsx', 'py', 'java', 'kt', 'go', 'rs', 'c', 'cpp', 'h', 'css', 'scss'].includes(ext)) return "code";
+      if (['html', 'htm', 'xml', 'svg'].includes(ext)) return "html";
+      if (['txt', 'md', 'log', 'csv', 'json', 'yaml', 'yml', 'toml'].includes(ext)) return "text";
     }
     return "unknown";
   }, []);
@@ -437,7 +440,7 @@ export function WebConsole() {
       setIsCheckingAuth(true);
       try {
         const authStatusUrl = buildApiUrl('/api/auth/status');
-        const data = await fetchJson<{hasAccount: boolean}>(authStatusUrl);
+        const data = await fetchJson<{ hasAccount: boolean }>(authStatusUrl);
 
         const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token');
         const params = new URLSearchParams(window.location.hash.includes('?') ? window.location.hash.split('?')[1] : '');
@@ -486,17 +489,17 @@ export function WebConsole() {
 
       {/* Upload buttons */}
       <div className="sidebar-upload-section">
-        <button className="sidebar-btn sidebar-btn-primary" disabled={isNodeOffline} onClick={() => { fileInputRef.current?.click(); setIsMobileMenuOpen(false); }}>
-          <Upload className="w-4 h-4" /> Upload File
-        </button>
-        <button className="sidebar-btn sidebar-btn-primary" disabled={isNodeOffline} onClick={() => { folderInputRef.current?.click(); setIsMobileMenuOpen(false); }}>
-          <Folder className="w-4 h-4" /> Upload Folder
-        </button>
+        <label className={`sidebar-btn sidebar-btn-primary ${isNodeOffline ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} flex items-center justify-center`}>
+          <Upload className="w-4 h-4 mr-2" /> Upload File
+          <input type="file" style={{ display: 'none' }} disabled={isNodeOffline} multiple onChange={(e) => { handleUpload(e as any); setIsMobileMenuOpen(false); }} />
+        </label>
+        <label className={`sidebar-btn sidebar-btn-primary ${isNodeOffline ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} flex items-center justify-center`}>
+          <Folder className="w-4 h-4 mr-2" /> Upload Folder
+          <input type="file" style={{ display: 'none' }} disabled={isNodeOffline} multiple {...{ webkitdirectory: "true", directory: "true" } as any} onChange={(e) => { handleUpload(e as any); setIsMobileMenuOpen(false); }} />
+        </label>
         <button className="sidebar-btn sidebar-btn-ghost" disabled={isNodeOffline} onClick={() => { handleCreateFolder(); setIsMobileMenuOpen(false); }}>
           <Plus className="w-4 h-4" /> New Folder
         </button>
-        <input type="file" ref={fileInputRef} className="hidden" multiple onChange={handleUpload} />
-        <input type="file" ref={folderInputRef} className="hidden" multiple {...{webkitdirectory: "true", directory: "true"} as any} onChange={handleUpload} />
       </div>
 
       <div className="sidebar-divider" />
@@ -616,10 +619,24 @@ export function WebConsole() {
     }
 
     // Fallback: route through the relay server
-    return fetch(buildApiUrl(endpoint), {
-      ...options,
-      headers: mergedHeaders,
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+
+    try {
+        const response = await fetch(buildApiUrl(endpoint), {
+            ...options,
+            headers: mergedHeaders,
+            signal: options.signal || controller.signal,
+        });
+        clearTimeout(timeoutId);
+        return response;
+    } catch (error: any) {
+        clearTimeout(timeoutId);
+        if (error.name === 'AbortError') {
+            throw new Error('Request timed out after 30 seconds');
+        }
+        throw error;
+    }
   }, [buildApiUrl, getHeaders, isDataChannelReady, p2pReady, p2pTransport, shareCode]);
 
 
@@ -631,11 +648,11 @@ export function WebConsole() {
       });
 
       if (!res.ok) {
-          if (retryCount < 3) {
-              setTimeout(() => loadStorageStats(retryCount + 1), 2000 * (retryCount + 1));
-              return;
-          }
-          throw new Error(`Storage stats failed with status ${res.status}`);
+        if (retryCount < 3) {
+          setTimeout(() => loadStorageStats(retryCount + 1), 2000 * (retryCount + 1));
+          return;
+        }
+        throw new Error(`Storage stats failed with status ${res.status}`);
       }
 
       const data = await res.json();
@@ -688,13 +705,13 @@ export function WebConsole() {
       if (res.status === 502 || res.status === 503) {
         // Backend/Relay unavailable - potentially transient
         if (retryCount < 3) {
-            setTimeout(() => loadFiles(path, retryCount + 1), 1500 * (retryCount + 1));
-            return;
+          setTimeout(() => loadFiles(path, retryCount + 1), 1500 * (retryCount + 1));
+          return;
         }
         const body = await res.json().catch(() => ({}));
         const reason = body.error === 'agent_offline'
-            ? 'Android Node is offline. Open the Easy Storage app on your phone.'
-            : 'Relay server is unavailable. Please try again in a moment.';
+          ? 'Android Node is offline. Open the Easy Storage app on your phone.'
+          : 'Relay server is unavailable. Please try again in a moment.';
         toast.error(reason, { duration: 6000 });
         setFilesError(reason);
         return;
@@ -712,9 +729,9 @@ export function WebConsole() {
         try {
           const errData = await res.json();
           if (errData?.error) {
-             errMessage = `[API Error] ${errData.error}: ${errData.details || ''}`;
+            errMessage = `[API Error] ${errData.error}: ${errData.details || ''}`;
           }
-        } catch (_) {}
+        } catch (_) { }
         throw new Error(errMessage);
       }
 
@@ -728,11 +745,11 @@ export function WebConsole() {
       console.error("File listing failed:", message);
 
       if (retryCount < 2) {
-          setTimeout(() => loadFiles(path, retryCount + 1), 2000);
+        setTimeout(() => loadFiles(path, retryCount + 1), 2000);
       } else {
-          setFilesError(message);
-          toast.error(message);
-          // Note: We intentionally DO NOT call setFiles([]) here to maintain stale data (stale-while-revalidate)
+        setFilesError(message);
+        toast.error(message);
+        // Note: We intentionally DO NOT call setFiles([]) here to maintain stale data (stale-while-revalidate)
       }
     } finally {
       setIsRefreshing(false);
@@ -1081,106 +1098,106 @@ export function WebConsole() {
     }
 
     const CHUNK_SIZE = 5 * 1024 * 1024;
-    const failed: {file: File, error: string}[] = [];
+    const failed: { file: File, error: string }[] = [];
 
     for (let i = 0; i < files.length; i++) {
-        const file = files[i] as File & { webkitRelativePath?: string };
-        const fileId = crypto.randomUUID();
-        fileProgressMap[fileId] = 0;
+      const file = files[i] as File & { webkitRelativePath?: string };
+      const fileId = crypto.randomUUID();
+      fileProgressMap[fileId] = 0;
 
-        let relativePath = file.webkitRelativePath || "";
-        // Sanitize backslashes to forward slashes, and remove leading slashes
-        relativePath = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
-        let filename = file.name;
-        if (relativePath) {
-            filename = relativePath.split('/').pop() || file.name;
+      let relativePath = file.webkitRelativePath || "";
+      // Sanitize backslashes to forward slashes, and remove leading slashes
+      relativePath = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
+      let filename = file.name;
+      if (relativePath) {
+        filename = relativePath.split('/').pop() || file.name;
+      }
+
+      const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+      let fileSuccess = true;
+      let fileError = "";
+
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        let chunkSuccess = false;
+        let chunkError = "";
+        const start = chunkIndex * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunk = file.slice(start, end);
+
+        // Chunk-level retry (Standardized XHR contract)
+        for (let retry = 0; retry < 3; retry++) {
+          try {
+            await uploadChunkViaBestPath(
+              chunk,
+              filename,
+              relativePath,
+              chunkIndex,
+              totalChunks,
+              fileId,
+              CHUNK_SIZE,
+              file.size,
+              fileProgressMap,
+              updateGlobalProgress
+            );
+            chunkSuccess = true;
+            break;
+          } catch (err: any) {
+            chunkError = err.message;
+            console.warn(`Retry ${retry + 1} for ${file.name} (Chunk ${chunkIndex}): ${chunkError}`);
+            await new Promise(r => setTimeout(r, 1000 * (retry + 1)));
+          }
         }
 
-        const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
-        let fileSuccess = true;
-        let fileError = "";
-
-        for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-            let chunkSuccess = false;
-            let chunkError = "";
-            const start = chunkIndex * CHUNK_SIZE;
-            const end = Math.min(start + CHUNK_SIZE, file.size);
-            const chunk = file.slice(start, end);
-
-            // Chunk-level retry (Standardized XHR contract)
-            for (let retry = 0; retry < 3; retry++) {
-                try {
-                    await uploadChunkViaBestPath(
-                      chunk,
-                      filename,
-                      relativePath,
-                      chunkIndex,
-                      totalChunks,
-                      fileId,
-                      CHUNK_SIZE,
-                      file.size,
-                      fileProgressMap,
-                      updateGlobalProgress
-                    );
-                    chunkSuccess = true;
-                    break;
-                } catch (err: any) {
-                    chunkError = err.message;
-                    console.warn(`Retry ${retry + 1} for ${file.name} (Chunk ${chunkIndex}): ${chunkError}`);
-                    await new Promise(r => setTimeout(r, 1000 * (retry + 1)));
-                }
-            }
-
-            if (!chunkSuccess) {
-                fileSuccess = false;
-                fileError = chunkError;
-                break;
-            }
+        if (!chunkSuccess) {
+          fileSuccess = false;
+          fileError = chunkError;
+          break;
         }
+      }
 
-        if (fileSuccess) {
-            // Call upload_complete for idempotency / verification
-            try {
-                const completeParams = new URLSearchParams({ filename });
-                if (currentPath) completeParams.set('path', currentPath);
-                const completeUrl = buildApiUrl(`/api/upload_complete?${completeParams.toString()}`);
-                await apiFetch(completeUrl, { method: 'POST', headers: getHeaders() as any });
-            } catch (e) { console.warn("upload_complete failed, ignoring as chunks succeeded", e); }
+      if (fileSuccess) {
+        // Call upload_complete for idempotency / verification
+        try {
+          const completeParams = new URLSearchParams({ filename });
+          if (currentPath) completeParams.set('path', currentPath);
+          const completeUrl = buildApiUrl(`/api/upload_complete?${completeParams.toString()}`);
+          await apiFetch(completeUrl, { method: 'POST', headers: getHeaders() as any });
+        } catch (e) { console.warn("upload_complete failed, ignoring as chunks succeeded", e); }
 
-            setFolderProgress(prev => ({ ...prev, uploading: prev.uploading - 1, success: prev.success + 1 }));
-        } else {
-            failed.push({file, error: fileError});
-            setFolderProgress(prev => ({ ...prev, uploading: prev.uploading - 1, failed: prev.failed + 1 }));
-        }
+        setFolderProgress(prev => ({ ...prev, uploading: prev.uploading - 1, success: prev.success + 1 }));
+      } else {
+        failed.push({ file, error: fileError });
+        setFolderProgress(prev => ({ ...prev, uploading: prev.uploading - 1, failed: prev.failed + 1 }));
+      }
     }
 
     // After all files are done, if any folder was uploaded, finalize folder names
     if (manifest.length > 0 && files.length > 0) {
-        try {
-            const firstRel = files.find(f => f.webkitRelativePath)?.webkitRelativePath || "";
-            const rootFolder = firstRel.split('/')[0] || "";
-            if (rootFolder) {
-                const response = await apiFetch(`/api/folder_complete?path=${encodeURIComponent(currentPath)}&folder=${encodeURIComponent(rootFolder)}`, {
-                    method: 'POST',
-                    headers: getHeaders() as any
-                });
-                const data = await response.json();
-                if (data.success && data.data?.sanitizedNames) {
-                    setSanitizedUploads(data.data.sanitizedNames);
-                }
-            }
-        } catch (e) { console.error("folder_complete finalization failed", e); }
+      try {
+        const firstRel = files.find(f => f.webkitRelativePath)?.webkitRelativePath || "";
+        const rootFolder = firstRel.split('/')[0] || "";
+        if (rootFolder) {
+          const response = await apiFetch(`/api/folder_complete?path=${encodeURIComponent(currentPath)}&folder=${encodeURIComponent(rootFolder)}`, {
+            method: 'POST',
+            headers: getHeaders() as any
+          });
+          const data = await response.json();
+          if (data.success && data.data?.sanitizedNames) {
+            setSanitizedUploads(data.data.sanitizedNames);
+          }
+        }
+      } catch (e) { console.error("folder_complete finalization failed", e); }
     }
 
     setIsUploading(false);
     if (failed.length > 0) {
-        setUploadStatus(failed.length === files.length ? 'error' : 'partial');
-        setFailedUploads(failed);
-        toast.error(`${failed.length} files failed to upload.`);
+      setUploadStatus(failed.length === files.length ? 'error' : 'partial');
+      setFailedUploads(failed);
+      toast.error(`${failed.length} files failed to upload.`);
     } else {
-        setUploadStatus('success');
-        setUploadProgress(100);
-        // Removed intrusive top toast: toast.success("All files uploaded successfully!");
+      setUploadStatus('success');
+      setUploadProgress(100);
+      // Removed intrusive top toast: toast.success("All files uploaded successfully!");
     }
 
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -1310,7 +1327,7 @@ export function WebConsole() {
       });
       if (res.ok) {
         toast.success("File renamed");
-        if (selectedFile?.id === file.id) setSelectedFile({...file, name: newName});
+        if (selectedFile?.id === file.id) setSelectedFile({ ...file, name: newName });
         loadFiles(currentPath);
       } else {
         toast.error("Failed to rename");
@@ -1340,7 +1357,7 @@ export function WebConsole() {
       const res = await apiFetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' } as any,
-        body: JSON.stringify({ password: authPassword })
+        body: JSON.stringify({ username: authUsername.trim().toLowerCase(), password: authPassword })
       });
 
       const data = await res.json();
@@ -1362,7 +1379,7 @@ export function WebConsole() {
   const handleLogout = async () => {
     try {
       await apiFetch('/api/auth/logout', { method: 'POST', headers: getHeaders() as any });
-    } catch (e) {}
+    } catch (e) { }
     localStorage.removeItem('cloud_storage_token');
     localStorage.removeItem('cloud_storage_android_token');
     setIsAuthenticated(false);
@@ -1373,8 +1390,138 @@ export function WebConsole() {
   };
 
 
+  const loadPhase: LoadPhase = (isCheckingAuth || p2pState === 'connecting' || p2pState === 'signaling' || p2pState === 'ice-gathering' || p2pState === 'dc-opening' || (p2pState === 'connected' && !isDataChannelReady))
+    ? 'intro'
+    : (!isAuthenticated && authMode !== 'none' ? 'password' : 'console');
+
   return (
-    <div className="app-shell">
+    <div className="web-console-root">
+      <AnimatePresence mode="wait">
+        {loadPhase === 'intro' && (
+          <motion.div
+            key="intro"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="offline-overlay"
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: "rgba(11, 18, 32, 0.98)",
+              backdropFilter: "blur(20px)",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 100,
+              textAlign: "center",
+              padding: "2rem"
+            }}
+          >
+            <div className="relative mb-8 h-32 flex items-center justify-center">
+              <SquareLoader size="lg" color="#22C55E" />
+            </div>
+            <h1 className="text-3xl font-bold mb-3 tracking-tight text-white">
+              {isCheckingAuth ? 'Securing Bridge Connection...' :
+                p2pState === 'connecting' ? 'Initializing Node Stack...' :
+                  p2pState === 'signaling' ? 'Negotiating Handshake...' :
+                    p2pState === 'ice-gathering' ? 'Gathering Network Nodes...' :
+                      p2pState === 'dc-opening' ? 'Opening Secure Bridge...' :
+                        p2pState === 'connected' ? 'Finalizing Bridge...' :
+                          'Establishing Secure Connection...'}
+            </h1>
+            <p className="text-sm text-[#9CA3AF] max-w-sm mx-auto leading-relaxed">
+              {isCheckingAuth
+                ? 'Verifying node credentials and establishing a secure signaling channel.'
+                : 'Creating a direct peer-to-peer connection for fast, private file transfers.'}
+            </p>
+            <div className="mt-8 flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full">
+              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">
+                {isCheckingAuth ? 'Authenticating' : p2pState}
+              </span>
+            </div>
+          </motion.div>
+        )}
+
+        {loadPhase === 'password' && (
+          <motion.div
+            key="password"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="offline-overlay"
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: "rgba(11, 18, 32, 0.98)",
+              backdropFilter: "blur(20px)",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 60
+            }}
+          >
+            <div className="w-full max-w-sm px-6">
+              <div className="flex justify-center mb-8">
+                <div className="w-16 h-16 bg-gradient-to-br from-[#2563EB] to-[#A855F7] rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+                  <Cloud className="w-8 h-8 text-white" />
+                </div>
+              </div>
+              <h2 className="text-2xl font-bold text-center text-white mb-2">
+                {authMode === 'signup' ? 'Claim Your Node' : 'Node Locked'}
+              </h2>
+              <p className="text-center text-[#9CA3AF] mb-8 text-xs leading-relaxed">
+                {authMode === 'signup'
+                  ? 'Register credentials directly onto your physical Android device to secure this bridge.'
+                  : 'Authenticate to access your synchronized files.'}
+              </p>
+
+              <form onSubmit={handleAuth} className="space-y-4">
+                <div className="form-control">
+                  <input
+                    type="text"
+                    required
+                    value={authUsername}
+                    onChange={e => setAuthUsername(e.target.value)}
+                    autoComplete="username"
+                  />
+                  <label>
+                    {"Username".split('').map((char, index) => (
+                      <span key={index} style={{ transitionDelay: `${index * 30}ms` }}>{char}</span>
+                    ))}
+                  </label>
+                </div>
+
+                <div className="form-control">
+                  <input
+                    type="password"
+                    required
+                    value={authPassword}
+                    onChange={e => setAuthPassword(e.target.value)}
+                    autoComplete="current-password"
+                  />
+                  <label>
+                    {(authMode === 'signup' ? "Create Passkey" : "Node Passkey").split('').map((char, index) => (
+                      <span key={index} style={{ transitionDelay: `${index * 30}ms` }}>{char}</span>
+                    ))}
+                  </label>
+                </div>
+
+                {authError && <div className="text-red-400 text-xs font-medium text-center bg-red-500/10 py-2 rounded-lg">{authError}</div>}
+
+                <button type="submit" className="w-full launch-node-btn mt-6">
+                  <Cloud className="w-5 h-5" />
+                  <span>{authMode === 'signup' ? 'Secure Node Bridge' : 'Unlock Node Bridge'}</span>
+                </button>
+              </form>
+            </div>
+          </motion.div>
+        )}
+
+        {loadPhase === 'console' && (
+          <div className="app-shell">
       {/* ═══════════ TOPBAR — spans full width ═══════════ */}
       <header className="topbar">
         <div className="topbar-logo-section">
@@ -1430,204 +1577,84 @@ export function WebConsole() {
         </div>
       </header>
 
-      {/* ═══════════ MOBILE SIDEBAR DRAWER ═══════════ */}
-      <AnimatePresence>
-        {isMobileMenuOpen && (
-          <>
-            <motion.div
-              className="mobile-menu-overlay"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsMobileMenuOpen(false)}
-            />
-            <motion.div
-              className="mobile-menu-drawer"
-              initial={{ x: -280 }}
-              animate={{ x: 0 }}
-              exit={{ x: -280 }}
-              transition={{ type: "spring", damping: 25, stiffness: 300 }}
-            >
-              <SidebarContent />
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+        {/* ═══════════ MOBILE SIDEBAR DRAWER ═══════════ */}
+        <AnimatePresence>
+          {isMobileMenuOpen && (
+            <>
+              <motion.div
+                className="mobile-menu-overlay"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setIsMobileMenuOpen(false)}
+              />
+              <motion.div
+                className="mobile-menu-drawer"
+                initial={{ x: -280 }}
+                animate={{ x: 0 }}
+                exit={{ x: -280 }}
+                transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              >
+                <SidebarContent />
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
 
-      <div className="console-layout">
-        {/* ═══════════ LEFT SIDEBAR — fixed width ═══════════ */}
-        <aside className="sidebar">
-          <SidebarContent />
-        </aside>
+        <div className="console-layout">
+          {/* ═══════════ LEFT SIDEBAR — fixed width ═══════════ */}
+          <aside className="sidebar">
+            <SidebarContent />
+          </aside>
 
-        {/* ═══════════ CENTER FILE PANEL — flexible area ═══════════ */}
-        <main
-          className="file-panel"
-          onDragOver={(e) => {
-            e.preventDefault();
-            setIsDragging(true);
-            e.dataTransfer.dropEffect = "copy";
-          }}
-          onDragLeave={(e) => {
-            e.preventDefault();
-            setIsDragging(false);
-          }}
-          onDrop={async (e) => {
-            e.preventDefault();
-            setIsDragging(false);
-            if (e.dataTransfer.items) {
-              const items = Array.from(e.dataTransfer.items);
-              const allFiles: File[] = [];
-              for (let i = 0; i < items.length; i++) {
-                const item = items[i].webkitGetAsEntry();
-                if (item) {
-                  const files = await traverseFileTree(item);
-                  allFiles.push(...files);
+          {/* ═══════════ CENTER FILE PANEL — flexible area ═══════════ */}
+          <main
+            className="file-panel"
+            onDragOver={(e) => {
+              e.preventDefault();
+              setIsDragging(true);
+              e.dataTransfer.dropEffect = "copy";
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              setIsDragging(false);
+            }}
+            onDrop={async (e) => {
+              e.preventDefault();
+              setIsDragging(false);
+              if (e.dataTransfer.items) {
+                const items = Array.from(e.dataTransfer.items);
+                const allFiles: File[] = [];
+                for (let i = 0; i < items.length; i++) {
+                  const item = items[i].webkitGetAsEntry();
+                  if (item) {
+                    const files = await traverseFileTree(item);
+                    allFiles.push(...files);
+                  }
                 }
+                if (allFiles.length > 0) processFiles(allFiles);
+              } else if (e.dataTransfer.files?.length) {
+                processFiles(Array.from(e.dataTransfer.files));
               }
-              if (allFiles.length > 0) processFiles(allFiles);
-            } else if (e.dataTransfer.files?.length) {
-              processFiles(Array.from(e.dataTransfer.files));
-            }
-          }}
-          style={{ position: "relative" }}
-        >
-          {/* Drag overlay */}
-          <AnimatePresence>
-            {/* Auth Gate — Integrated into layout */}
-            {!isAuthenticated && authMode !== 'none' && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="offline-overlay"
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  background: "rgba(11, 18, 32, 0.98)",
-                  backdropFilter: "blur(20px)",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  zIndex: 60
-                }}
-              >
-                <div className="w-full max-w-sm px-6">
-                  <div className="flex justify-center mb-8">
-                    <div className="w-16 h-16 bg-gradient-to-br from-[#2563EB] to-[#A855F7] rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/20">
-                      <Cloud className="w-8 h-8 text-white" />
-                    </div>
+            }}
+            style={{ position: "relative" }}
+          >
+            {/* Drag overlay */}
+            <AnimatePresence>
+              {isDragging && (
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="drag-overlay">
+                  <div style={{ width: 56, height: 56, background: "rgba(37,99,235,0.15)", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
+                    <Upload className="w-7 h-7 text-[#2563EB]" style={{ animation: "bounce 1s infinite" }} />
                   </div>
-                  <h2 className="text-2xl font-bold text-center text-white mb-2">
-                    {authMode === 'signup' ? 'Claim Your Node' : 'Node Locked'}
-                  </h2>
-                  <p className="text-center text-[#9CA3AF] mb-8 text-xs leading-relaxed">
-                    {authMode === 'signup'
-                      ? 'Register credentials directly onto your physical Android device to secure this bridge.'
-                      : 'Authenticate to access your synchronized files.'}
-                  </p>
+                  <h2 style={{ fontSize: 22, fontWeight: 700, color: "white" }}>Drop files here</h2>
+                  <p style={{ fontSize: 13, color: "#7C8798", marginTop: 6 }}>Upload to {currentPath ? `/${currentPath}` : "Drive root"}</p>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-                  <form onSubmit={handleAuth} className="space-y-4">
-                    <div className="form-control">
-                      <input
-                        type="text"
-                        required
-                        value={authUsername}
-                        onChange={e => setAuthUsername(e.target.value)}
-                        autoComplete="username"
-                      />
-                      <label>
-                        {"Username".split('').map((char, index) => (
-                          <span key={index} style={{ transitionDelay: `${index * 30}ms` }}>{char}</span>
-                        ))}
-                      </label>
-                    </div>
+            <AnimatePresence>
+              {isNodeOffline && (
 
-                    <div className="form-control">
-                      <input
-                        type="password"
-                        required
-                        value={authPassword}
-                        onChange={e => setAuthPassword(e.target.value)}
-                        autoComplete="current-password"
-                      />
-                      <label>
-                        { (authMode === 'signup' ? "Create Passkey" : "Node Passkey").split('').map((char, index) => (
-                          <span key={index} style={{ transitionDelay: `${index * 30}ms` }}>{char}</span>
-                        ))}
-                      </label>
-                    </div>
-
-                    {authError && <div className="text-red-400 text-xs font-medium text-center bg-red-500/10 py-2 rounded-lg">{authError}</div>}
-
-                    <button type="submit" className="w-full launch-node-btn mt-6">
-                      <Cloud className="w-5 h-5" />
-                      <span>{authMode === 'signup' ? 'Secure Node Bridge' : 'Unlock Node Bridge'}</span>
-                    </button>
-                  </form>
-                </div>
-              </motion.div>
-            )}
-
-            {isDragging && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="drag-overlay">
-                <div style={{ width: 56, height: 56, background: "rgba(37,99,235,0.15)", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
-                  <Upload className="w-7 h-7 text-[#2563EB]" style={{ animation: "bounce 1s infinite" }} />
-                </div>
-                <h2 style={{ fontSize: 22, fontWeight: 700, color: "white" }}>Drop files here</h2>
-                <p style={{ fontSize: 13, color: "#7C8798", marginTop: 6 }}>Upload to {currentPath ? `/${currentPath}` : "Drive root"}</p>
-              </motion.div>
-            )}
-
-            {/* P2P Connection & Auth Loader Gate — now synchronized */}
-            {(isCheckingAuth || p2pState === 'connecting' || p2pState === 'signaling' || p2pState === 'ice-gathering' || p2pState === 'dc-opening' || (p2pState === 'connected' && !isDataChannelReady)) && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="offline-overlay"
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  background: "rgba(11, 18, 32, 0.98)",
-                  backdropFilter: "blur(20px)",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  zIndex: 100,
-                  textAlign: "center",
-                  padding: "2rem"
-                }}
-              >
-                <div className="relative mb-8 h-32 flex items-center justify-center">
-                  <SquareLoader size="lg" color="#22C55E" />
-                </div>
-                <h1 className="text-3xl font-bold mb-3 tracking-tight text-white">
-                  {isCheckingAuth ? 'Securing Bridge Connection...' :
-                   p2pState === 'connecting' ? 'Initializing Node Stack...' :
-                   p2pState === 'signaling' ? 'Negotiating Handshake...' :
-                   p2pState === 'ice-gathering' ? 'Gathering Network Nodes...' :
-                   p2pState === 'dc-opening' ? 'Opening Secure Bridge...' :
-                   p2pState === 'connected' ? 'Finalizing Bridge...' :
-                   'Establishing Secure Connection...'}
-                </h1>
-                <p className="text-sm text-[#9CA3AF] max-w-sm mx-auto leading-relaxed">
-                  {isCheckingAuth
-                    ? 'Verifying node credentials and establishing a secure signaling channel.'
-                    : 'Creating a direct peer-to-peer connection for fast, private file transfers.'}
-                </p>
-                <div className="mt-8 flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full">
-                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">
-                    {isCheckingAuth ? 'Authenticating' : p2pState}
-                  </span>
-                </div>
-              </motion.div>
-            )}
-
-            {!isCheckingAuth && isNodeOffline && (
 
               <motion.div
                 initial={{ opacity: 0 }}
@@ -1891,13 +1918,6 @@ export function WebConsole() {
                                   <Download className="w-3.5 h-3.5" /> {file.isDirectory ? "Download as ZIP" : "Download"}
                                 </DropdownMenuItem>
 
-                                {/* Folder-specific: Download as ZIP */}
-                                {file.isDirectory && (
-                                  <DropdownMenuItem className="gap-2 text-xs" onClick={(e: React.MouseEvent) => { e.stopPropagation(); handleFolderDownload(file); }}>
-                                    <FolderDown className="w-3.5 h-3.5" /> Download Folder (ZIP)
-                                  </DropdownMenuItem>
-                                )}
-
                                 <DropdownMenuItem className="gap-2 text-xs" onClick={(e: React.MouseEvent) => { e.stopPropagation(); handleRename(file); }}>
                                   <FileEdit className="w-3.5 h-3.5" /> Rename
                                 </DropdownMenuItem>
@@ -2023,8 +2043,12 @@ export function WebConsole() {
           />
         </aside>
       </div>
+    </div>
+  )}
+</AnimatePresence>
 
       {/* Overlays */}
+
       <AnimatePresence>
         {(isUploading || uploadStatus !== "idle") && (
           <motion.div initial={{ opacity: 0, y: 100 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 100 }} className={`upload-toast ${uploadStatus}`}>

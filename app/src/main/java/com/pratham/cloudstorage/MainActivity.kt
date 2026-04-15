@@ -259,11 +259,7 @@ class MainActivity : ComponentActivity() {
         setupWebView()
         webView.loadUrl("https://app.local.cloud/web/index.html")
 
-        // Check if password has been set — if not, show password setup dialog
-        val authPrefs = getSharedPreferences("NodeAuthSettings", Context.MODE_PRIVATE)
-        if (!authPrefs.contains("password_hash")) {
-            showPasswordSetup = true
-        }
+
 
         setContent {
             CloudStorageTheme {
@@ -416,6 +412,16 @@ class MainActivity : ComponentActivity() {
     private fun MainScreen() {
         val transferState by UploadNotificationManager.cardState.collectAsState()
         val nodeStatus by UploadNotificationManager.nodeStatus.collectAsState()
+
+        // Trigger password setup only when node starts for the first time
+        LaunchedEffect(nodeStatus) {
+            if (nodeStatus == NodeStatus.ACTIVE) {
+                val authPrefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
+                if (!authPrefs.contains("password_hash")) {
+                    showPasswordSetup = true
+                }
+            }
+        }
         
         Column(
             modifier = Modifier
@@ -447,24 +453,26 @@ class MainActivity : ComponentActivity() {
         // Password Setup Dialog — blocks UI until password is set
         if (showPasswordSetup) {
             NodePasswordSetupDialog(
-                onPasswordSet = { password ->
+                onCredentialsSet = { username, password ->
                     val md = java.security.MessageDigest.getInstance("SHA-256")
                     val hash = java.util.Base64.getEncoder().encodeToString(md.digest(password.toByteArray()))
                     val token = java.util.UUID.randomUUID().toString()
                     val authPrefs = getSharedPreferences("NodeAuthSettings", Context.MODE_PRIVATE)
                     authPrefs.edit()
+                        .putString("username", username.trim().lowercase())
                         .putString("password_hash", hash)
                         .putString("active_token", token)
                         .apply()
                     showPasswordSetup = false
-                    Toast.makeText(this@MainActivity, "Node password set successfully", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "Node identity set successfully", Toast.LENGTH_SHORT).show()
                 }
             )
         }
     }
 
     @Composable
-    private fun NodePasswordSetupDialog(onPasswordSet: (String) -> Unit) {
+    private fun NodePasswordSetupDialog(onCredentialsSet: (String, String) -> Unit) {
+        var username by remember { mutableStateOf("") }
         var password by remember { mutableStateOf("") }
         var confirmPassword by remember { mutableStateOf("") }
         var error by remember { mutableStateOf<String?>(null) }
@@ -508,13 +516,32 @@ class MainActivity : ComponentActivity() {
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = "Set a password to protect your storage node. This will be required to access the web console.",
+                        text = "Set a username and password to protect your storage node. These will be required to access the web console.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary,
                         textAlign = TextAlign.Center
                     )
 
                     Spacer(modifier = Modifier.height(24.dp))
+
+                    OutlinedTextField(
+                        value = username,
+                        onValueChange = { username = it; error = null },
+                        label = { Text("Username") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = PrimaryBlue,
+                            unfocusedBorderColor = DarkDivider,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            focusedLabelColor = PrimaryBlue,
+                            unfocusedLabelColor = TextSecondary,
+                            cursorColor = PrimaryBlue
+                        )
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     OutlinedTextField(
                         value = password,
@@ -569,9 +596,10 @@ class MainActivity : ComponentActivity() {
                     Button(
                         onClick = {
                             when {
+                                username.trim().isEmpty() -> error = "Username is required"
                                 password.length < 4 -> error = "Password must be at least 4 characters"
                                 password != confirmPassword -> error = "Passwords do not match"
-                                else -> onPasswordSet(password)
+                                else -> onCredentialsSet(username, password)
                             }
                         },
                         modifier = Modifier
@@ -610,6 +638,7 @@ class MainActivity : ComponentActivity() {
                     put("folderName", resolveFolderName(selectedUri ?: Uri.EMPTY))
                     put("shareCode", shareCode)
                     put("relayBaseUrl", relayBaseUrl)
+                    put("publicUrl", NodeUrlBuilder.buildWebConsoleUrl(relayBaseUrl, shareCode) ?: "")
                     put("isRunning", isNodeRunning)
                     put("tunnelConnected", tunnelStatus == TunnelStatus.Connected.name)
                     put("tunnelStatus", tunnelStatus)
@@ -711,6 +740,7 @@ class MainActivity : ComponentActivity() {
                 put("shareCode", shareCode)
                 put("relayBaseUrl", relayBaseUrl)
                 put("lanUrl", buildLocalAccessUrl() ?: "")
+                put("publicUrl", NodeUrlBuilder.buildWebConsoleUrl(relayBaseUrl, shareCode) ?: "")
                 put("isRunning", isNodeRunning)
                 put("tunnelConnected", tunnelStatus == TunnelStatus.Connected.name)
                 put("tunnelStatus", tunnelStatus)

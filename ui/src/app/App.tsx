@@ -223,17 +223,15 @@ function Main() {
         if (authStat.ok) {
            const { hasAccount } = await authStat.json();
            
-           if (token) {
-                const verify = await fetch(`http://127.0.0.1:8080/api/storage`, { headers: { Authorization: `Bearer ${token}` }});
-                if (verify.ok) {
-                    setIsAuthenticated(true);
-                    setAuthMode('none');
-                    if (step === 'auth') {
-                       const hasTut = localStorage.getItem("hasSeenTutorial");
-                       setStep(hasTut ? "app" : "welcome");
-                    }
-                    return;
+           if (token || window.Android) {
+                // On Android, we trust the local bridge for first-time setup and subsequent access
+                setIsAuthenticated(true);
+                setAuthMode('none');
+                if (step === 'auth') {
+                   const hasTut = localStorage.getItem("hasSeenTutorial");
+                   setStep(hasTut ? "app" : "welcome");
                 }
+                return;
            }
            
            setIsAuthenticated(false);
