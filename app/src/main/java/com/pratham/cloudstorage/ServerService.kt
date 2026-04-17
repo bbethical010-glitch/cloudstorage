@@ -78,7 +78,7 @@ private sealed class ManifestResult {
 }
 
 class ServerService : Service() {
-    private val fileLocks = java.util.concurrent.ConcurrentHashMap<String, Any>()
+    private val fileLocks = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
     private val manifestMutex = Mutex()
 
     private var server: ApplicationEngine? = null
@@ -1475,7 +1475,7 @@ class ServerService : Service() {
 
                                 // Idempotent thread-safe write using locking and FileChannel seeking
                                 val lockKey = fileUri.toString()
-                                synchronized(fileLocks.getOrPut(lockKey) { Any() }) {
+                                fileLocks.getOrPut(lockKey) { Mutex() }.withLock {
                                     contentResolver.openFileDescriptor(fileUri, "rw")?.use { pfd ->
                                         java.io.FileOutputStream(pfd.fileDescriptor).channel.use { channel ->
                                             if (chunkIndex == 0) {
