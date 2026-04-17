@@ -94,6 +94,14 @@ function Main() {
   useEffect(() => {
     // Web Console (non-Android): check auth immediately
     if (!window.Android) {
+      // Bug 2 fix: listen for session-expired events dispatched by apiFetch on 401
+      const handleSessionExpired = () => {
+        setIsAuthenticated(false);
+        setAuthMode('login');
+        setStep('auth');
+      };
+      window.addEventListener('session-expired', handleSessionExpired);
+
       // Determine the API base URL from the current page URL
       const checkRemoteAuth = async () => {
         try {
@@ -136,7 +144,7 @@ function Main() {
         }
       };
       checkRemoteAuth();
-      return;
+      return () => window.removeEventListener('session-expired', handleSessionExpired);
     }
 
     const loadInitialState = async () => {
@@ -285,6 +293,8 @@ function Main() {
       const data = await res.json();
       if (res.ok && data.token) {
         if (isRemote) {
+          // Bug 2 fix: store under both keys — 'node_session_token' is the primary key read by WebConsole getHeaders
+          sessionStorage.setItem('node_session_token', data.token);
           sessionStorage.setItem('cloud_storage_session_token', data.token);
         } else {
           localStorage.setItem('cloud_storage_android_token', data.token);

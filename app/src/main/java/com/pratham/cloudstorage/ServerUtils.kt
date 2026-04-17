@@ -100,14 +100,24 @@ object NodeUrlBuilder {
         if (normalized.isBlank()) {
             return null
         }
-        return "$normalized/node/$shareCode/console"
+        // Canonical format: https://domain/#/console/NODEID (hash-based routing)
+        val domain = normalized
+            .removePrefix("https://")
+            .removePrefix("http://")
+            .trimEnd('/')
+        return "https://$domain/#/console/$shareCode"
     }
 
     /**
-     * Standard URL for remote access via the relay browser
+     * Standard URL for remote access via the relay browser.
+     * Canonical format: https://domain/#/console/NODEID
      */
     fun buildRelayBrowserUrl(shareCode: String): String {
-        return "$RELAY_BASE_DOMAIN/node/$shareCode"
+        val domain = RELAY_BASE_DOMAIN
+            .removePrefix("https://")
+            .removePrefix("http://")
+            .trimEnd('/')
+        return "https://$domain/#/console/$shareCode"
     }
 
     fun buildInviteLink(shareCode: String): String {

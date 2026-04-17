@@ -391,11 +391,16 @@ export function WebConsole() {
     return (localStorage.getItem("cloud_storage_theme") as "dark" | "light") || "dark";
   });
   const getHeaders = useCallback(() => {
-    const token = localStorage.getItem('cloud_storage_token') || localStorage.getItem('cloud_storage_android_token') || '';
+    const token = sessionStorage.getItem('node_session_token')
+      || localStorage.getItem('cloud_storage_token')
+      || localStorage.getItem('cloud_storage_android_token')
+      || '';
     const params = new URLSearchParams(window.location.hash.split('?')[1]);
     const pwd = params.get('pwd') || token;
     return {
       'Authorization': `Bearer ${pwd}`,
+      // Bug 2 fix: always include X-Session-Token so the backend accepts it
+      ...(token ? { 'X-Session-Token': token } : {}),
       ...(shareCode ? { 'X-Node-Id': shareCode } : {}),
     };
   }, [shareCode]);
@@ -659,15 +664,26 @@ export function WebConsole() {
             signal: options.signal || controller.signal,
         });
         clearTimeout(timeoutId);
+
+        // Bug 2 fix: handle 401 — clear invalid session and redirect to password gate
+        if (response.status === 401) {
+          const SESSION_TOKEN_KEY = 'node_session_token';
+          sessionStorage.removeItem(SESSION_TOKEN_KEY);
+          window.dispatchEvent(new CustomEvent('session-expired'));
+          throw new Error('SESSION_EXPIRED');
+        }
+
         return response;
     } catch (error: any) {
         clearTimeout(timeoutId);
+        if (error.message === 'SESSION_EXPIRED') throw error;
         if (error.name === 'AbortError') {
             throw new Error('Request timed out after 30 seconds');
         }
         throw error;
     }
   }, [buildApiUrl, getHeaders, isDataChannelReady, p2pReady, p2pTransport, shareCode]);
+
 
 
   const loadStorageStats = useCallback(async (retryCount = 0) => {
@@ -1102,7 +1118,7 @@ export function WebConsole() {
 
     // Pre-flight Folder Manifest if applicable — uses chunked, stability-checked pipeline
     const manifest = files.filter(f => f.webkitRelativePath && f.webkitRelativePath.includes('/')).map(f => {
-      const CHUNK_SIZE = 5 * 1024 * 1024;
+      const CHUNK_SIZE = 1 * 1024 * 1024;
       return {
         relativePath: f.webkitRelativePath,
         size: f.size,
@@ -1127,7 +1143,7 @@ export function WebConsole() {
       }
     }
 
-    const CHUNK_SIZE = 5 * 1024 * 1024;
+    const CHUNK_SIZE = 1 * 1024 * 1024;
     const failed: { file: File, error: string }[] = [];
 
     for (let i = 0; i < files.length; i++) {

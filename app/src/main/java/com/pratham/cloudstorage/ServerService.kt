@@ -172,9 +172,17 @@ class ServerService : Service() {
             try {
                 server = embeddedServer(Netty, port = DEFAULT_PORT) {
                 install(CORS) {
+                    // Android WebViewAssetLoader origin — required for HTTPS WebView → HTTP localhost
+                    allowHost("appassets.androidplatform.net", schemes = listOf("https"))
                     allowHost("app.local.cloud", schemes = listOf("http", "https"))
+                    allowHost("localhost", schemes = listOf("http", "https"))
                     allowHost("localhost:8080")
+                    allowHost("127.0.0.1", schemes = listOf("http", "https"))
                     allowHost("127.0.0.1:8080")
+                    // Relay server origin for browser access
+                    allowHost("relay.easystorage.cloud", schemes = listOf("https"))
+                    allowHost("easy-storage-relay.onrender.com", schemes = listOf("https"))
+
                     allowMethod(HttpMethod.Options)
                     allowMethod(HttpMethod.Get)
                     allowMethod(HttpMethod.Post)
@@ -188,6 +196,7 @@ class ServerService : Service() {
                     allowHeader(io.ktor.http.HttpHeaders.AcceptRanges)
                     allowHeader(io.ktor.http.HttpHeaders.Accept)
                     allowHeader(io.ktor.http.HttpHeaders.AccessControlAllowOrigin)
+                    allowHeader("X-Session-Token")   // Bug 2/3 fix: allow session token header
                     allowHeader("X-Node-Id")
                     allowHeader("X-Requested-With")
                     allowHeader("pwd")
@@ -196,7 +205,8 @@ class ServerService : Service() {
                     exposeHeader(io.ktor.http.HttpHeaders.ContentRange)
                     exposeHeader(io.ktor.http.HttpHeaders.AcceptRanges)
 
-                    allowCredentials = true
+                    allowCredentials = false
+                    maxAgeInSeconds = 3600
                     anyHost() // Fallback for local network bridging
                 }
 
@@ -235,10 +245,13 @@ class ServerService : Service() {
                         val activeToken = prefs.getString("active_token", null)
 
                         val headerToken = request.headers["Authorization"]?.removePrefix("Bearer ")?.trim()
+                        // Bug 2 fix: also accept X-Session-Token header (sent by web console)
+                        val sessionToken = request.headers["X-Session-Token"]?.trim()
                         val queryToken = request.queryParameters["pwd"]
                             ?: request.queryParameters["token"]
                             ?: request.queryParameters["node_session_token"]
                         val providedToken = headerToken?.takeIf { it.isNotBlank() }
+                            ?: sessionToken?.takeIf { it.isNotBlank() }
                             ?: queryToken?.takeIf { it.isNotBlank() }
 
                         if (accountExists) {
@@ -1376,7 +1389,7 @@ class ServerService : Service() {
                                 chunkIndex = call.request.queryParameters["chunkIndex"]?.toIntOrNull() ?: 0
                                 val totalChunks = call.request.queryParameters["totalChunks"]?.toIntOrNull() ?: 1
                                 val totalSize = call.request.queryParameters["totalSize"]?.toLongOrNull() ?: 0L
-                                val chunkSize = 5 * 1024 * 1024L // Match frontend constant
+                                val chunkSize = 1 * 1024 * 1024L // Match frontend constant (1MB)
                                 transferId = "${fileName}_${totalSize}"
 
 
@@ -1460,9 +1473,6 @@ class ServerService : Service() {
                                     existingDoc?.uri ?: throw Exception("File not found for subsequent chunk")
                                 }
 
-                                // 3. Read the chunk bytes into memory (chunkSize is ~5MB)
-                                val byteArray = call.receive<ByteArray>()
-
                                 // Idempotent thread-safe write using locking and FileChannel seeking
                                 val lockKey = fileUri.toString()
                                 synchronized(fileLocks.getOrPut(lockKey) { Any() }) {
@@ -1472,7 +1482,18 @@ class ServerService : Service() {
                                                 channel.truncate(0)
                                             }
                                             channel.position(chunkIndex.toLong() * chunkSize)
-                                            channel.write(java.nio.ByteBuffer.wrap(byteArray))
+
+                                            // Stream the request body directly to the file channel (memory-safe)
+                                            val requestChannel = call.receiveChannel()
+                                            val buffer = java.nio.ByteBuffer.allocate(8192) // 8KB buffer
+                                            while (!requestChannel.isClosedForRead) {
+                                                val read = requestChannel.readAvailable(buffer)
+                                                if (read > 0) {
+                                                    buffer.flip()
+                                                    channel.write(buffer)
+                                                    buffer.clear()
+                                                }
+                                            }
                                             channel.force(true)
                                         }
                                     } ?: throw Exception("Failed to open file descriptor for writing")

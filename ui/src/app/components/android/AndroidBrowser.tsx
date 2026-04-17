@@ -159,7 +159,7 @@ export function AndroidBrowser() {
     if (!file) return;
 
     const token = localStorage.getItem('cloud_storage_android_token') || '';
-    const CHUNK_SIZE = 5 * 1024 * 1024;
+    const CHUNK_SIZE = 1 * 1024 * 1024;
     const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
 
     setUploadProgress({ fileName: `Uploading ${file.name}...`, progress: 0 });
