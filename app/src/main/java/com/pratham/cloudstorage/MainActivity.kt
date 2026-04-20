@@ -108,6 +108,9 @@ import android.webkit.JavascriptInterface
 import org.json.JSONObject
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import java.io.ByteArrayInputStream
+import java.net.HttpURLConnection
+import java.net.URL
 
 class MainActivity : ComponentActivity() {
 
@@ -402,10 +405,61 @@ class MainActivity : ComponentActivity() {
                     view: WebView?,
                     request: WebResourceRequest?
                 ): WebResourceResponse? {
-                    return request?.let { assetLoader.shouldInterceptRequest(it.url) }
+                    if (request == null) return null
+                    proxyLocalNodeRequest(request)?.let { return it }
+                    return assetLoader.shouldInterceptRequest(request.url)
                 }
             }
             addJavascriptInterface(WebAppInterface(), "Android")
+        }
+    }
+
+    private fun proxyLocalNodeRequest(request: WebResourceRequest): WebResourceResponse? {
+        val uri = request.url
+        if (uri.host != "app.local.cloud" || !uri.path.orEmpty().startsWith("/api/")) return null
+        if (!request.method.equals("GET", ignoreCase = true)) return null
+
+        return try {
+            val query = uri.encodedQuery?.let { "?$it" }.orEmpty()
+            val target = URL("http://127.0.0.1:$DEFAULT_PORT${uri.encodedPath}$query")
+            val connection = (target.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 5000
+                readTimeout = 30000
+                useCaches = false
+                request.requestHeaders.forEach { (key, value) ->
+                    if (!key.equals("Host", ignoreCase = true) && !key.equals("Origin", ignoreCase = true)) {
+                        setRequestProperty(key, value)
+                    }
+                }
+            }
+
+            val statusCode = connection.responseCode
+            val input = if (statusCode >= 400) connection.errorStream else connection.inputStream
+            val headers = connection.headerFields
+                .filterKeys { it != null }
+                .mapValues { (_, values) -> values.joinToString(",") }
+                .toMutableMap()
+            headers["Access-Control-Allow-Origin"] = "https://app.local.cloud"
+
+            WebResourceResponse(
+                connection.contentType?.substringBefore(";") ?: "application/json",
+                connection.contentEncoding ?: "UTF-8",
+                statusCode,
+                connection.responseMessage ?: if (statusCode < 400) "OK" else "Error",
+                headers,
+                input ?: ByteArrayInputStream(ByteArray(0))
+            )
+        } catch (e: Exception) {
+            android.util.Log.e("WebViewDebug", "Local API proxy failed for ${request.url}", e)
+            WebResourceResponse(
+                "application/json",
+                "UTF-8",
+                503,
+                "Service Unavailable",
+                mapOf("Access-Control-Allow-Origin" to "https://app.local.cloud"),
+                ByteArrayInputStream("""{"error":"local_node_unavailable"}""".toByteArray())
+            )
         }
     }
     

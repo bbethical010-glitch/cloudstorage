@@ -30,11 +30,10 @@ import io.ktor.server.response.respondRedirect
 import io.ktor.server.response.respondText
 import io.ktor.server.response.header
 import io.ktor.server.application.install
-import io.ktor.server.plugins.cors.routing.CORS
-import io.ktor.http.HttpMethod
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.delete
+import io.ktor.server.routing.options
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.server.request.path
@@ -166,33 +165,18 @@ class ServerService : Service() {
         UploadNotificationManager.updateNodeStatus(NodeStatus.STARTING)
         scope.launch {
             server = embeddedServer(Netty, port = DEFAULT_PORT) {
-                install(CORS) {
-                    allowMethod(HttpMethod.Options)
-                    allowMethod(HttpMethod.Get)
-                    allowMethod(HttpMethod.Post)
-                    allowMethod(HttpMethod.Put)
-                    allowMethod(HttpMethod.Delete)
-                    allowMethod(HttpMethod.Patch)
-
-                    allowHeader(io.ktor.http.HttpHeaders.Authorization)
-                    allowHeader(io.ktor.http.HttpHeaders.ContentType)
-                    allowHeader(io.ktor.http.HttpHeaders.Range)
-                    allowHeader(io.ktor.http.HttpHeaders.AcceptRanges)
-                    allowHeader(io.ktor.http.HttpHeaders.Accept)
-                    allowHeader("X-Node-Id")
-                    allowHeader("X-Requested-With")
-                    allowHeader("pwd")
-
-                    exposeHeader(io.ktor.http.HttpHeaders.ContentLength)
-                    exposeHeader(io.ktor.http.HttpHeaders.ContentRange)
-                    exposeHeader(io.ktor.http.HttpHeaders.AcceptRanges)
-                    allowHost("app.local.cloud", schemes = listOf("https"))
-                    anyHost() // Fallback for other origins
-                }
-
-                // Enforce CORS universally
+                // Enforce CORS universally, including error responses that can
+                // otherwise bypass the CORS plugin and surface as WebView JS errors.
                 intercept(io.ktor.server.application.ApplicationCallPipeline.Plugins) {
-                    call.response.header("Access-Control-Allow-Origin", "*")
+                    val origin = call.request.headers[HttpHeaders.Origin] ?: "*"
+                    call.response.header("Access-Control-Allow-Origin", origin)
+                    call.response.header("Vary", "Origin")
+                    call.response.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,PATCH,OPTIONS")
+                    call.response.header(
+                        "Access-Control-Allow-Headers",
+                        "Authorization,Content-Type,Range,Accept-Ranges,Accept,X-Node-Id,X-Requested-With,pwd,Cache-Control"
+                    )
+                    call.response.header("Access-Control-Expose-Headers", "Content-Length,Content-Range,Accept-Ranges")
                 }
 
                 install(StatusPages) {
@@ -218,6 +202,9 @@ class ServerService : Service() {
                 }
 
                 routing {
+                    options("/{...}") {
+                        call.respond(HttpStatusCode.OK)
+                    }
 
                     fun io.ktor.server.application.ApplicationCall.hasValidAuth(): Boolean {
                         val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)

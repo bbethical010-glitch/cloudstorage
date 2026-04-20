@@ -17,6 +17,15 @@ import { androidBridge, AppState, GlobalContextType } from "./bridge";
 
 export const AppStateContext = createContext<GlobalContextType | null>(null);
 
+const LOCAL_NODE_ORIGIN = "http://127.0.0.1:8080";
+
+function localNodeApi(endpoint: string) {
+  // Android loads the bundle from https://app.local.cloud. Calling the local
+  // node through the same origin lets MainActivity proxy GET requests and keeps
+  // WebView out of CORS/mixed-content territory.
+  return window.Android ? endpoint : `${LOCAL_NODE_ORIGIN}${endpoint}`;
+}
+
 function Main() {
   const [appStateRaw, setAppStateRaw] = useState<AppState | null>(null);
   const [step, setStep] = useState<"loading" | "welcome" | "tutorial" | "auth" | "app">("loading");
@@ -52,7 +61,7 @@ function Main() {
      if (!window.Android || !appStateRaw?.node?.isRunning) return;
      try {
        const pwd = new URLSearchParams(window.location.hash.split('?')[1]).get('pwd') || appStateRaw?.node.shareCode || '';
-       const res = await fetch(`http://127.0.0.1:8080/api/storage?t=${Date.now()}`, { headers: { Authorization: `Bearer ${pwd}` }, cache: 'no-store' });
+       const res = await fetch(localNodeApi(`/api/storage?t=${Date.now()}`), { headers: { Authorization: `Bearer ${pwd}` }, cache: 'no-store' });
        if (res.ok) {
           const data = await res.json();
           setAppState(prev => prev ? { ...prev, storage: { totalBytes: data.total || data.totalBytes, freeBytes: data.free || data.freeBytes, usedBytes: data.used || data.usedBytes } } : prev);
@@ -64,7 +73,7 @@ function Main() {
      if (!window.Android || !appStateRaw?.node?.isRunning) return;
      try {
        const pwd = new URLSearchParams(window.location.hash.split('?')[1]).get('pwd') || appStateRaw?.node.shareCode || '';
-       const res = await fetch(`http://127.0.0.1:8080/api/status?t=${Date.now()}`, { headers: { Authorization: `Bearer ${pwd}` }, cache: 'no-store' });
+       const res = await fetch(localNodeApi(`/api/status?t=${Date.now()}`), { headers: { Authorization: `Bearer ${pwd}` }, cache: 'no-store' });
        const isOnline = res.ok;
        setAppState(prev => prev ? { ...prev, node: { ...prev.node, isRunning: isOnline } } : prev);
      } catch {
@@ -76,7 +85,7 @@ function Main() {
      if (!window.Android || !appStateRaw?.node?.isRunning) return;
      try {
        const token = localStorage.getItem('cloud_storage_android_token') || '';
-       const res = await fetch(`http://127.0.0.1:8080/api/files?path=${encodeURIComponent(path)}&t=${Date.now()}`, { 
+       const res = await fetch(localNodeApi(`/api/files?path=${encodeURIComponent(path)}&t=${Date.now()}`), { 
          headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-store' } 
        });
        if (res.ok) {
@@ -219,7 +228,7 @@ function Main() {
         const pwd = new URLSearchParams(window.location.hash.split('?')[1]).get('pwd') || appStateRaw?.node.shareCode || '';
         const token = localStorage.getItem('cloud_storage_android_token') || pwd;
         
-        const authStat = await fetch(`http://127.0.0.1:8080/api/auth/status?t=${Date.now()}`);
+        const authStat = await fetch(localNodeApi(`/api/auth/status?t=${Date.now()}`));
         if (authStat.ok) {
            const { hasAccount } = await authStat.json();
            
@@ -318,8 +327,8 @@ function Main() {
   return (
     <AppStateContext.Provider value={contextValue}>
       <div className={isWebConsole
-        ? "w-full h-[100vh] overflow-hidden bg-[#08090E]"
-        : "w-full h-[100vh] overflow-y-auto overflow-x-hidden overscroll-y-contain bg-[#0B1220] shadow-2xl shadow-blue-900/5"
+        ? "w-full h-dvh min-h-dvh overflow-hidden bg-[#08090E]"
+        : "w-full h-dvh min-h-dvh overflow-y-auto overflow-x-hidden overscroll-y-contain bg-[#0B1220] shadow-2xl shadow-blue-900/5"
       }>
         {step === "loading" && (
           <LoadingScreen onComplete={() => {
