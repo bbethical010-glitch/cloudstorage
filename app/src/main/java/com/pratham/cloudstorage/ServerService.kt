@@ -179,7 +179,6 @@ class ServerService : Service() {
                     allowHeader(io.ktor.http.HttpHeaders.Range)
                     allowHeader(io.ktor.http.HttpHeaders.AcceptRanges)
                     allowHeader(io.ktor.http.HttpHeaders.Accept)
-                    allowHeader(io.ktor.http.HttpHeaders.AccessControlAllowOrigin)
                     allowHeader("X-Node-Id")
                     allowHeader("X-Requested-With")
                     allowHeader("pwd")
@@ -187,8 +186,8 @@ class ServerService : Service() {
                     exposeHeader(io.ktor.http.HttpHeaders.ContentLength)
                     exposeHeader(io.ktor.http.HttpHeaders.ContentRange)
                     exposeHeader(io.ktor.http.HttpHeaders.AcceptRanges)
-
-                    anyHost() // Allow Web Console origin
+                    allowHost("app.local.cloud", schemes = listOf("https"))
+                    anyHost() // Fallback for other origins
                 }
 
                 // Enforce CORS universally
