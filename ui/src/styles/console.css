@@ -2,9 +2,19 @@
    APP SHELL — root wrapper for the entire console UI
    ═══════════════════════════════════════════════════════════════════════════ */
 
+.web-console-root {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 100dvh;
+    overflow: hidden;
+    background: #08090E;
+}
+
 .app-shell {
     width: 100%;
     height: 100%;
+    min-height: 100dvh;
     display: flex;
     flex-direction: column;
     overflow: hidden;
