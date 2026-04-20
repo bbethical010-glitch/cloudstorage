@@ -1,0 +1,11 @@
+/Users/prathampandey/Desktop/AndroidCloudStorageApp/src-tauri/target/release/deps/fern-0bca5ddb22a5fbf2.d: /Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/lib.rs /Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/builders.rs /Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/errors.rs /Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/log_impl.rs /Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/meta.rs
+
+/Users/prathampandey/Desktop/AndroidCloudStorageApp/src-tauri/target/release/deps/libfern-0bca5ddb22a5fbf2.rlib: /Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/lib.rs /Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/builders.rs /Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/errors.rs /Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/log_impl.rs /Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/meta.rs
+
+/Users/prathampandey/Desktop/AndroidCloudStorageApp/src-tauri/target/release/deps/libfern-0bca5ddb22a5fbf2.rmeta: /Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/lib.rs /Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/builders.rs /Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/errors.rs /Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/log_impl.rs /Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/meta.rs
+
+/Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/lib.rs:
+/Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/builders.rs:
+/Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/errors.rs:
+/Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/log_impl.rs:
+/Users/prathampandey/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/meta.rs:
