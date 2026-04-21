@@ -1170,8 +1170,6 @@ export function WebConsole() {
         ? `${[...rootNames][0]}.tar`
         : `upload-${new Date().getTime()}.tar`;
       const uploadId = crypto.randomUUID();
-
-      setUploadStatus('finalizing');
       
       let uploadResult: any = null;
       let lastError: Error | null = null;

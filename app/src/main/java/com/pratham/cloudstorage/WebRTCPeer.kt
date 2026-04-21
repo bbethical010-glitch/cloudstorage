@@ -45,6 +45,9 @@ import java.util.UUID
 private const val TAG = "WebRTCPeer"
 private const val CHUNK_SIZE = 64 * 1024 // 64KB chunks prevent DataChannel memory overflow
 
+@OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
+private val protocolDispatcher = kotlinx.coroutines.newSingleThreadContext("WebRTC-Protocol")
+
 class WebRTCPeer(
     private val context: Context,
     private val rootUri: Uri,
@@ -252,65 +255,77 @@ class WebRTCPeer(
             private fun handleBinaryChunk(browserId: String, dc: DataChannel, data: ByteBuffer) {
                 if (data.remaining() < 21) return // 16 (UUID) + 1 (Type) + 4 (Seq)
                 
-                val uuidBytes = ByteArray(16)
-                data.get(uuidBytes)
-                val uuidBuf = ByteBuffer.wrap(uuidBytes)
-                val uploadId = UUID(uuidBuf.long, uuidBuf.long)
-
-                val type = data.get().toInt()
-                val seqNum = data.int.toLong() and 0xFFFFFFFFL // Network Byte Order (Big Endian)
-                
-                val payload = ByteArray(data.remaining())
-                data.get(payload)
-
-                if (type == 1) { // MSG_TYPE_START
-                    val meta = gson.fromJson(String(payload, Charsets.UTF_8), Map::class.java) ?: return
-                    val fileName = meta["fileName"] as? String ?: "stream.bin"
-                    val fileSize = (meta["contentLength"] as? Double)?.toLong() ?: -1L
-                    val path = meta["path"] as? String ?: "/api/upload/archive"
-                    val query = meta["query"] as? String ?: ""
-                    val headers = (meta["headers"] as? Map<*, *>)?.mapNotNull { (k, v) ->
-                        val key = k as? String ?: return@mapNotNull null
-                        val value = v as? String ?: ""
-                        key to value
-                    }?.toMap() ?: emptyMap()
-
-                    TransferManager.startTransfer(uploadId.toString(), fileName, fileSize, isDownload = false)
-                    
-                    val tempFile = java.io.File(context.cacheDir, "upload_${uploadId}.tar")
-                    uploadSessions[uploadId]?.cancel()
-                    uploadSessions[uploadId] = StreamingUploadProxySession(
-                        scope = GlobalScope,
-                        localClient = localClient,
-                        method = "POST",
-                        path = path,
-                        query = query,
-                        headers = headers,
-                        contentLength = fileSize,
-                        tempFile = tempFile,
-                        onProgress = { TransferManager.updateProgress(uploadId.toString(), it) },
-                        onResponse = { _, _, _ -> uploadSessions.remove(uploadId) },
-                        onFailure = { uploadSessions.remove(uploadId) },
-                        onSignal = { ackType: Int, ackPayload: ByteArray ->
-                            // Send binary ACK back
-                            val packet = ByteBuffer.allocate(16 + 1 + 4 + ackPayload.size)
-                            
-                            val outUuid = ByteBuffer.allocate(16)
-                            outUuid.putLong(uploadId.mostSignificantBits)
-                            outUuid.putLong(uploadId.leastSignificantBits)
-                            packet.put(outUuid.array())
-                            
-                            packet.put(ackType.toByte())
-                            packet.putInt(0) // Sequence number for ACKs from backend (fixed 0)
-                            packet.put(ackPayload)
-                            packet.flip()
-                            sendBinary(dc, packet)
-                        }
-                    )
+                // Copy buffer natively off WebRTC thread safely
+                val rawBuffer = ByteArray(data.remaining())
+                try {
+                    data.get(rawBuffer)
+                } catch (e: java.nio.BufferUnderflowException) {
+                    Log.e(TAG, "Malformed binary chunk from WebRTC, dropping", e)
+                    return
                 }
-                
-                // Always handle the packet in the session to advance sequence tracking
-                uploadSessions[uploadId]?.handlePacket(type, seqNum, payload)
+
+                kotlinx.coroutines.GlobalScope.launch(protocolDispatcher) {
+                    val buffer = ByteBuffer.wrap(rawBuffer)
+                    val uuidBytes = ByteArray(16)
+                    buffer.get(uuidBytes)
+                    val uuidBuf = ByteBuffer.wrap(uuidBytes)
+                    val uploadId = UUID(uuidBuf.long, uuidBuf.long)
+
+                    val type = buffer.get().toInt()
+                    val seqNum = buffer.int.toLong() and 0xFFFFFFFFL // Network Byte Order (Big Endian)
+                    
+                    val payload = ByteArray(buffer.remaining())
+                    buffer.get(payload)
+
+                    if (type == 1) { // MSG_TYPE_START
+                        val meta = gson.fromJson(String(payload, Charsets.UTF_8), Map::class.java) ?: return@launch
+                        val fileName = meta["fileName"] as? String ?: "stream.bin"
+                        val fileSize = (meta["contentLength"] as? Double)?.toLong() ?: -1L
+                        val path = meta["path"] as? String ?: "/api/upload/archive"
+                        val query = meta["query"] as? String ?: ""
+                        val headers = (meta["headers"] as? Map<*, *>)?.mapNotNull { (k, v) ->
+                            val key = k as? String ?: return@mapNotNull null
+                            val value = v as? String ?: ""
+                            key to value
+                        }?.toMap() ?: emptyMap()
+
+                        TransferManager.startTransfer(uploadId.toString(), fileName, fileSize, isDownload = false)
+                        
+                        val tempFile = java.io.File(context.cacheDir, "upload_${uploadId}.tar")
+                        uploadSessions[uploadId]?.cancel()
+                        uploadSessions[uploadId] = StreamingUploadProxySession(
+                            scope = kotlinx.coroutines.GlobalScope,
+                            localClient = localClient,
+                            method = "POST",
+                            path = path,
+                            query = query,
+                            headers = headers,
+                            contentLength = fileSize,
+                            tempFile = tempFile,
+                            onProgress = { TransferManager.updateProgress(uploadId.toString(), it) },
+                            onResponse = { _, _, _ -> uploadSessions.remove(uploadId) },
+                            onFailure = { uploadSessions.remove(uploadId) },
+                            onSignal = { ackType: Int, ackPayload: ByteArray ->
+                                // Send binary ACK back
+                                val packet = ByteBuffer.allocate(16 + 1 + 4 + ackPayload.size)
+                                
+                                val outUuid = ByteBuffer.allocate(16)
+                                outUuid.putLong(uploadId.mostSignificantBits)
+                                outUuid.putLong(uploadId.leastSignificantBits)
+                                packet.put(outUuid.array())
+                                
+                                packet.put(ackType.toByte())
+                                packet.putInt(0) // Sequence number for ACKs from backend (fixed 0)
+                                packet.put(ackPayload)
+                                packet.flip()
+                                sendBinary(dc, packet)
+                            }
+                        )
+                    }
+                    
+                    // Always handle the packet in the session to advance sequence tracking
+                    uploadSessions[uploadId]?.handlePacket(type, seqNum, payload)
+                }
             }
 
             override fun onBufferedAmountChange(amount: Long) {
