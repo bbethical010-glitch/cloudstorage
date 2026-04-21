@@ -174,7 +174,7 @@ class ServerService : Service() {
                     call.response.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,PATCH,OPTIONS")
                     call.response.header(
                         "Access-Control-Allow-Headers",
-                        "Authorization,Content-Type,Range,Accept-Ranges,Accept,X-Node-Id,X-Requested-With,pwd,Cache-Control"
+                        "Authorization,Content-Type,Range,Accept-Ranges,Accept,X-Node-Id,X-Requested-With,pwd,Cache-Control,X-Archive-Name,X-Upload-Id,X-Upload-Restart"
                     )
                     call.response.header("Access-Control-Expose-Headers", "Content-Length,Content-Range,Accept-Ranges")
                 }
@@ -1333,6 +1333,56 @@ class ServerService : Service() {
                             } catch (e: Exception) {
                                 android.util.Log.e("ServerService", "Folder complete scan failed", e)
                                 call.respondJson(false, e.message ?: "Unknown error", "SCAN_FAILED")
+                            }
+                        }
+
+                        post("/upload/archive") {
+                            if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+
+                            val archiveName = call.request.headers["X-Archive-Name"]?.takeIf { it.isNotBlank() } ?: "upload.tar"
+                            val uploadId = call.request.headers["X-Upload-Id"]?.takeIf { it.isNotBlank() } ?: archiveName
+                            val contentLength = call.request.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: -1L
+
+                            try {
+                                val targetPath = call.request.queryParameters["path"] ?: ""
+                                val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
+                                    ?: return@post call.respondJson(false, "Storage not mounted", "STORAGE_OFFLINE")
+                                val targetDir = if (targetPath.isBlank()) {
+                                    root
+                                } else {
+                                    resolveSafePath(root, targetPath)
+                                        ?: return@post call.respondJson(false, "Upload target directory not found", "TARGET_NOT_FOUND")
+                                }
+
+                                uploadNotificationManager?.onUploadStarted(uploadId, archiveName, maxOf(contentLength, 0L))
+
+                                var streamedBytes = 0L
+                                val extractor = ArchiveStreamExtractor(
+                                    contentResolver = contentResolver,
+                                    resolveOrCreateDirectory = ::resolveOrCreateDirectory,
+                                    findFileReliable = ::findFileReliable,
+                                    sanitizeFilename = ::sanitizeFilename
+                                )
+
+                                call.receiveChannel().toInputStream().use { input ->
+                                    extractor.extractTar(input, targetDir) { bytesRead ->
+                                        streamedBytes = bytesRead
+                                        if (contentLength > 0L) {
+                                            uploadNotificationManager?.onProgressUpdate(uploadId, minOf(bytesRead, contentLength))
+                                        }
+                                    }
+                                }
+
+                                uploadNotificationManager?.onUploadComplete(uploadId)
+                                call.respondJson(true, data = mapOf(
+                                    "archive" to archiveName,
+                                    "bytesReceived" to streamedBytes,
+                                    "targetPath" to targetPath
+                                ))
+                            } catch (e: Exception) {
+                                uploadNotificationManager?.onUploadFailed(uploadId, e.message ?: "Archive extraction failed")
+                                android.util.Log.e("UploadArchive", "Streaming archive upload failed", e)
+                                call.respondJson(false, e.message ?: "Archive upload failed", "ARCHIVE_UPLOAD_FAILED")
                             }
                         }
 

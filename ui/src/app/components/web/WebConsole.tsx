@@ -68,6 +68,7 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { PreviewModal } from "./PreviewModal";
+import { createTarArchiveStream, filesToArchiveEntries } from "../../lib/upload/tarStream";
 import "../../../styles/console.css";
 import "../../../styles/animated-inputs.css";
 import "./animated-folder.css";
@@ -579,7 +580,7 @@ export function WebConsole() {
     enabled: !!shareCode,
   });
 
-  const { connectionState: p2pState, transport: p2pTransport, isReady: p2pReady, isDataChannelReady, reconnect: p2pReconnect } = webrtc;
+  const { connectionState: p2pState, transport: p2pTransport, relayTransport, isReady: p2pReady, isDataChannelReady, reconnect: p2pReconnect } = webrtc;
 
   // Unified "Online" Detection: Node is online if signaling OR P2P is healthy OR we are on a direct local connection
   useEffect(() => {
@@ -612,6 +613,15 @@ export function WebConsole() {
       });
     }
 
+    if (relayTransport?.ready) {
+      // Use the binary-optimized relay transport
+      return relayTransport.fetch(endpoint, {
+        method: options.method || 'GET',
+        headers: mergedHeaders,
+        body: options.body as string | null,
+      });
+    }
+
     // Fallback: route through the relay server
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
@@ -631,7 +641,7 @@ export function WebConsole() {
         }
         throw error;
     }
-  }, [buildApiUrl, getHeaders, isDataChannelReady, p2pReady, p2pTransport, shareCode]);
+  }, [buildApiUrl, getHeaders, isDataChannelReady, p2pReady, p2pTransport, relayTransport, shareCode]);
 
 
   const loadStorageStats = useCallback(async (retryCount = 0) => {
@@ -957,7 +967,7 @@ export function WebConsole() {
       xhr.onerror = () => reject(new Error("Network connection error"));
       xhr.send(chunk);
     });
-  }, [buildApiUrl, currentPath, getHeaders, isDataChannelReady, p2pReady, p2pTransport]);
+  }, [buildApiUrl, currentPath, getHeaders, isDataChannelReady, p2pReady, p2pTransport, relayTransport]);
 
   /**
    * Verify the DataChannel is truly stable before sending large payloads.
@@ -1045,158 +1055,158 @@ export function WebConsole() {
     }
   }, [isDataChannelReady, p2pReady, sendManifestBatch, waitForStableDataChannel]);
 
+  const uploadArchiveViaBestPath = useCallback(async (
+    archiveName: string,
+    uploadId: string,
+    totalBytes: number,
+    streamFactory: () => ReadableStream<Uint8Array>,
+    retryAttempt: number
+  ) => {
+    const archivePath = '/api/upload/archive';
+    const archiveQuery = currentPath ? `path=${encodeURIComponent(currentPath)}` : '';
+    const endpoint = archiveQuery ? `${archivePath}?${archiveQuery}` : archivePath;
+    const archiveHeaders = {
+      ...getHeaders(),
+      'Content-Type': 'application/x-tar',
+      'X-Archive-Name': archiveName,
+      'X-Upload-Id': uploadId,
+      'X-Upload-Restart': retryAttempt > 0 ? 'true' : 'false',
+    } as Record<string, string>;
+
+    if (p2pReady && isDataChannelReady && p2pTransport?.ready) {
+      const response = await p2pTransport.uploadStream(archivePath, archiveQuery, streamFactory(), {
+        headers: archiveHeaders,
+        displayName: archiveName,
+        size: totalBytes,
+        onProgress: (sentBytes) => {
+          setUploadProgress(totalBytes > 0 ? Math.min(100, Math.round((sentBytes / totalBytes) * 100)) : 0);
+        },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error || `Archive upload failed (${response.status})`);
+      }
+      return payload;
+    }
+
+    if (relayTransport?.ready) {
+      // Optimized binary streaming over WebSocket relay
+      const response = await relayTransport.uploadStream(archivePath, archiveQuery, streamFactory(), {
+        headers: archiveHeaders,
+        size: totalBytes,
+        onProgress: (sentBytes) => {
+          setUploadProgress(totalBytes > 0 ? Math.min(100, Math.round((sentBytes / totalBytes) * 100)) : 0);
+        }
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error || `Archive upload via relay failed (${response.status})`);
+      }
+      return payload;
+    }
+
+    let sentBytes = 0;
+    const sourceReader = streamFactory().getReader();
+    const progressStream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const { done, value } = await sourceReader.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+        if (value && value.byteLength > 0) {
+          sentBytes += value.byteLength;
+          setUploadProgress(totalBytes > 0 ? Math.min(100, Math.round((sentBytes / totalBytes) * 100)) : 0);
+          controller.enqueue(value);
+        }
+      },
+      async cancel(reason) {
+        await sourceReader.cancel(reason);
+      },
+    });
+
+    const response = await fetch(buildApiUrl(endpoint), {
+      method: 'POST',
+      headers: archiveHeaders,
+      body: progressStream,
+      // Chromium requires duplex when the request body is a ReadableStream.
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.success) {
+      throw new Error(payload.error || `Archive upload failed (${response.status})`);
+    }
+    return payload;
+  }, [buildApiUrl, currentPath, getHeaders, isDataChannelReady, p2pReady, p2pTransport, relayTransport]);
+
   const processFiles = async (files: File[]) => {
     if (!files || files.length === 0) return;
 
     setUploadStatus('uploading');
     setIsUploading(true);
     setUploadProgress(0);
-    setFolderProgress({ success: 0, uploading: files.length, failed: 0, total: files.length });
+    setFolderProgress({ success: 0, uploading: 1, failed: 0, total: 1 });
     setFailedUploads([]);
     setSanitizedUploads({});
 
-    // We'll track progress by bytes for all files
-    const fileProgressMap: Record<string, number> = {};
-    const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
+    try {
+      const archiveEntries = filesToArchiveEntries(files);
+      const rootNames = new Set(
+        archiveEntries
+          .map((entry) => entry.path.split('/')[0])
+          .filter((segment) => segment && segment.length > 0)
+      );
+      const archiveLabel = rootNames.size === 1
+        ? `${[...rootNames][0]}.tar`
+        : `upload-${new Date().getTime()}.tar`;
+      const uploadId = crypto.randomUUID();
 
-    const updateGlobalProgress = () => {
-      const uploadedBytes = Object.values(fileProgressMap).reduce((acc, b) => acc + b, 0);
-      setUploadProgress(Math.round((uploadedBytes / totalBytes) * 100));
-    };
+      let uploadResult: any = null;
+      let lastError: Error | null = null;
 
-    // Pre-flight Folder Manifest if applicable — uses chunked, stability-checked pipeline
-    const manifest = files.filter(f => f.webkitRelativePath && f.webkitRelativePath.includes('/')).map(f => {
-      const CHUNK_SIZE = 5 * 1024 * 1024;
-      return {
-        relativePath: f.webkitRelativePath,
-        size: f.size,
-        totalChunks: Math.max(1, Math.ceil(f.size / CHUNK_SIZE))
-      };
-    });
-
-    if (manifest.length > 0) {
-      try {
-        await sendChunkedManifest(manifest, currentPath);
-      } catch (e: any) {
-        setIsUploading(false);
-        setUploadStatus('error');
-        toast.error(`Folder manifest creation failed: ${e.message}`);
-
-        // Recover UI state and dismiss failed card after 3s as requested
-        setTimeout(() => {
-          setUploadStatus('idle');
-          setUploadProgress(0);
-        }, 3000);
-        return;
-      }
-    }
-
-    const CHUNK_SIZE = 5 * 1024 * 1024;
-    const failed: { file: File, error: string }[] = [];
-
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i] as File & { webkitRelativePath?: string };
-      const fileId = crypto.randomUUID();
-      fileProgressMap[fileId] = 0;
-
-      let relativePath = file.webkitRelativePath || "";
-      // Sanitize backslashes to forward slashes, and remove leading slashes
-      relativePath = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
-      let filename = file.name;
-      if (relativePath) {
-        filename = relativePath.split('/').pop() || file.name;
-      }
-
-      const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
-      let fileSuccess = true;
-      let fileError = "";
-
-      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-        let chunkSuccess = false;
-        let chunkError = "";
-        const start = chunkIndex * CHUNK_SIZE;
-        const end = Math.min(start + CHUNK_SIZE, file.size);
-        const chunk = file.slice(start, end);
-
-        // Chunk-level retry (Standardized XHR contract)
-        for (let retry = 0; retry < 3; retry++) {
-          try {
-            await uploadChunkViaBestPath(
-              chunk,
-              filename,
-              relativePath,
-              chunkIndex,
-              totalChunks,
-              fileId,
-              CHUNK_SIZE,
-              file.size,
-              fileProgressMap,
-              updateGlobalProgress
-            );
-            chunkSuccess = true;
-            break;
-          } catch (err: any) {
-            chunkError = err.message;
-            console.warn(`Retry ${retry + 1} for ${file.name} (Chunk ${chunkIndex}): ${chunkError}`);
-            await new Promise(r => setTimeout(r, 1000 * (retry + 1)));
-          }
-        }
-
-        if (!chunkSuccess) {
-          fileSuccess = false;
-          fileError = chunkError;
-          break;
-        }
-      }
-
-      if (fileSuccess) {
-        // Call upload_complete for idempotency / verification
+      // A clean restart is cheaper and more reliable than resuming thousands of
+      // tiny files. Retrying from offset 0 keeps the extractor idempotent.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          const completeParams = new URLSearchParams({ filename });
-          if (currentPath) completeParams.set('path', currentPath);
-          const completeUrl = buildApiUrl(`/api/upload_complete?${completeParams.toString()}`);
-          await apiFetch(completeUrl, { method: 'POST', headers: getHeaders() as any });
-        } catch (e) { console.warn("upload_complete failed, ignoring as chunks succeeded", e); }
-
-        setFolderProgress(prev => ({ ...prev, uploading: prev.uploading - 1, success: prev.success + 1 }));
-      } else {
-        failed.push({ file, error: fileError });
-        setFolderProgress(prev => ({ ...prev, uploading: prev.uploading - 1, failed: prev.failed + 1 }));
-      }
-    }
-
-    // After all files are done, if any folder was uploaded, finalize folder names
-    if (manifest.length > 0 && files.length > 0) {
-      try {
-        const firstRel = files.find(f => f.webkitRelativePath)?.webkitRelativePath || "";
-        const rootFolder = firstRel.split('/')[0] || "";
-        if (rootFolder) {
-          const response = await apiFetch(`/api/folder_complete?path=${encodeURIComponent(currentPath)}&folder=${encodeURIComponent(rootFolder)}`, {
-            method: 'POST',
-            headers: getHeaders() as any
-          });
-          const data = await response.json();
-          if (data.success && data.data?.sanitizedNames) {
-            setSanitizedUploads(data.data.sanitizedNames);
+          const tarArchive = createTarArchiveStream(archiveEntries);
+          uploadResult = await uploadArchiveViaBestPath(
+            archiveLabel,
+            uploadId,
+            tarArchive.byteLength,
+            () => tarArchive.stream,
+            attempt
+          );
+          lastError = null;
+          break;
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error(String(error));
+          if (attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 1200));
           }
         }
-      } catch (e) { console.error("folder_complete finalization failed", e); }
-    }
+      }
 
-    setIsUploading(false);
-    if (failed.length > 0) {
-      setUploadStatus(failed.length === files.length ? 'error' : 'partial');
-      setFailedUploads(failed);
-      toast.error(`${failed.length} files failed to upload.`);
-    } else {
+      if (lastError) {
+        throw lastError;
+      }
+
+      setFolderProgress({ success: 1, uploading: 0, failed: 0, total: 1 });
       setUploadStatus('success');
       setUploadProgress(100);
-      // Removed intrusive top toast: toast.success("All files uploaded successfully!");
+      setSanitizedUploads(uploadResult?.data?.sanitizedNames || {});
+      await loadFiles(currentPath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Archive upload failed';
+      setFolderProgress({ success: 0, uploading: 0, failed: 1, total: 1 });
+      setUploadStatus('error');
+      setFailedUploads(files.map((file) => ({ file, error: message })));
+      toast.error(message);
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      if (folderInputRef.current) folderInputRef.current.value = "";
     }
-
-    if (fileInputRef.current) fileInputRef.current.value = "";
-    if (folderInputRef.current) folderInputRef.current.value = "";
-    loadFiles(currentPath);
   };
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {

@@ -18,6 +18,7 @@
 
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { P2PTransport } from './p2pTransport';
+import { RelayTransport } from '../lib/p2p/RelayTransport';
 
 export type P2PConnectionState = 'disconnected' | 'connecting' | 'signaling' | 'ice-gathering' | 'dc-opening' | 'connected' | 'fallback' | 'failed';
 
@@ -37,6 +38,7 @@ interface UseWebRTCOptions {
 interface UseWebRTCReturn {
   connectionState: P2PConnectionState;
   transport: P2PTransport | null;
+  relayTransport: RelayTransport | null;
   isReady: boolean;
   isDataChannelReady: boolean;
   reconnect: () => void;
@@ -47,6 +49,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
   const [isReady, setIsReady] = useState(false);
   const [isDataChannelReady, setIsDataChannelReady] = useState(false);
   const transportRef = useRef<P2PTransport>(new P2PTransport());
+  const relayTransportRef = useRef<RelayTransport>(new RelayTransport());
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
@@ -107,6 +110,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
 
     transportRef.current.destroy();
     transportRef.current = new P2PTransport();
+    relayTransportRef.current = new RelayTransport();
     iceCandidateQueueRef.current = [];
     setIsReady(false);
     setIsDataChannelReady(false);
@@ -140,15 +144,25 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
 
       ws.onopen = () => {
         setConnectionState('signaling');
+        relayTransportRef.current.attach(ws);
         initiatePeerConnection(ws);
       };
 
       ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          handleSignalingMessage(msg);
-        } catch (e) {
-          console.error('[SIGNAL_DEBUG] Parse error:', e);
+        if (typeof event.data === 'string') {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'response' || msg.type === 'stream-response') {
+              relayTransportRef.current.handleMessage(event.data);
+            } else {
+              handleSignalingMessage(msg);
+            }
+          } catch (e) {
+            console.error('[SIGNAL_DEBUG] Parse error:', e);
+          }
+        } else if (event.data instanceof ArrayBuffer) {
+           // Direct binary frame from relay (rare, usually wrapped in JSON for now)
+           relayTransportRef.current.handleMessage(event.data);
         }
       };
 
@@ -328,6 +342,7 @@ export function useWebRTC({ relayUrl, shareCode, enabled = true }: UseWebRTCOpti
     () => ({
       connectionState,
       transport: transportRef.current,
+      relayTransport: relayTransportRef.current,
       isReady,
       isDataChannelReady,
       reconnect,

@@ -219,10 +219,7 @@ class WebRTCPeer(
      */
     private fun setupDataChannel(browserId: String, dc: DataChannel) {
         dc.registerObserver(object : DataChannel.Observer {
-            // Buffer for assembling upload chunks
-            private val uploadBuffers = ConcurrentHashMap<String, java.io.ByteArrayOutputStream>()
-            private val uploadRequests = ConcurrentHashMap<String, Map<*, *>>()
-            private val uploadBytesReceived = ConcurrentHashMap<String, Long>()
+            private val uploadSessions = ConcurrentHashMap<String, StreamingUploadProxySession>()
 
             override fun onMessage(buffer: DataChannel.Buffer) {
                 try {
@@ -252,24 +249,67 @@ class WebRTCPeer(
                         }
                     }
                     "upload-start" -> {
-                        // Begin accumulating upload chunks
-                        uploadBuffers[reqId] = java.io.ByteArrayOutputStream()
-                        uploadRequests[reqId] = msg
-                        uploadBytesReceived[reqId] = 0L
-                        val fileName = msg["fileName"] as? String ?: "Uploading file..."
-                        val fileSize = (msg["fileSize"] as? Double)?.toLong() ?: 0L
+                        val fileName = msg["fileName"] as? String ?: "Uploading archive..."
+                        val fileSize = when (val rawLength = msg["contentLength"] ?: msg["size"] ?: msg["fileSize"]) {
+                            is Double -> rawLength.toLong()
+                            is Number -> rawLength.toLong()
+                            else -> -1L
+                        }
                         TransferManager.startTransfer(reqId, fileName, fileSize, isDownload = false)
+                        val path = msg["path"] as? String ?: "/api/upload"
+                        val query = msg["query"] as? String ?: ""
+                        val headers = (msg["headers"] as? Map<*, *>)?.mapNotNull { (key, value) ->
+                            val headerName = key as? String ?: return@mapNotNull null
+                            val headerValue = value as? String ?: return@mapNotNull null
+                            headerName to headerValue
+                        }?.toMap() ?: emptyMap()
+
+                        uploadSessions[reqId]?.cancel()
+                        uploadSessions[reqId] = StreamingUploadProxySession(
+                            scope = kotlinx.coroutines.GlobalScope,
+                            localClient = localClient,
+                            method = "POST",
+                            path = path,
+                            query = query,
+                            headers = headers,
+                            contentLength = fileSize,
+                            onProgress = { bytesReceived ->
+                                TransferManager.updateProgress(reqId, bytesReceived)
+                            },
+                            onResponse = { status, responseHeaders, body ->
+                                uploadSessions.remove(reqId)
+                                val bodyB64 = if (body.isNotEmpty()) {
+                                    java.util.Base64.getEncoder().encodeToString(body)
+                                } else {
+                                    null
+                                }
+                                val resMsg = gson.toJson(mapOf(
+                                    "type" to "res",
+                                    "id" to reqId,
+                                    "status" to status,
+                                    "headers" to responseHeaders,
+                                    "body" to bodyB64
+                                ))
+                                sendText(dc, resMsg)
+                            },
+                            onFailure = { error ->
+                                uploadSessions.remove(reqId)
+                                val errMsg = gson.toJson(mapOf(
+                                    "type" to "res",
+                                    "id" to reqId,
+                                    "status" to 502,
+                                    "headers" to mapOf("Content-Type" to "text/plain"),
+                                    "body" to java.util.Base64.getEncoder().encodeToString(
+                                        "Upload failed: ${error.message}".toByteArray()
+                                    )
+                                ))
+                                sendText(dc, errMsg)
+                            }
+                        )
                         Log.d(TAG, "[DC_DEBUG] Upload started: $reqId ($fileName)")
                     }
                     "upload-end" -> {
-                        // Upload complete — forward accumulated body to local server
-                        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                            val body = uploadBuffers.remove(reqId)?.toByteArray() ?: ByteArray(0)
-                            val mergedRequest = LinkedHashMap<Any?, Any?>()
-                            uploadRequests.remove(reqId)?.forEach { (key, value) -> mergedRequest[key] = value }
-                            msg.forEach { (key, value) -> mergedRequest[key] = value }
-                            forwardUploadToLocalServer(dc, mergedRequest, body)
-                        }
+                        uploadSessions.remove(reqId)?.finish()
                     }
                 }
             }
@@ -281,14 +321,8 @@ class WebRTCPeer(
                 val reqId = String(idBytes, Charsets.UTF_8).trim()
 
                 val remaining = ByteArray(data.remaining())
-                val chunkSize = remaining.size
                 data.get(remaining)
-
-                uploadBuffers[reqId]?.write(remaining)
-                
-                val current = (uploadBytesReceived[reqId] ?: 0L) + chunkSize
-                uploadBytesReceived[reqId] = current
-                TransferManager.updateProgress(reqId, current)
+                uploadSessions[reqId]?.writeChunk(remaining)
             }
 
             override fun onBufferedAmountChange(amount: Long) {}

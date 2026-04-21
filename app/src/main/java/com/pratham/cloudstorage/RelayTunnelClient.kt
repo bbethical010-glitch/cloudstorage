@@ -27,7 +27,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.Base64
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -73,6 +76,8 @@ class RelayTunnelClient(
     private val localNodeClient = HttpClient(OkHttp) {
         expectSuccess = false
     }
+    private val outgoingMutex = Mutex()
+    private val streamSessions = ConcurrentHashMap<String, StreamingUploadProxySession>()
 
     private var webRTCPeer: WebRTCPeer? = null
 
@@ -86,6 +91,12 @@ class RelayTunnelClient(
             while (isActive) {
                 try {
                     relayClient.webSocket(urlString = relayWebSocketUrl) {
+                        val sendTextSafely: suspend (String) -> Unit = { payload ->
+                            outgoingMutex.withLock {
+                                outgoing.send(Frame.Text(payload))
+                            }
+                        }
+
                         Log.i(TAG, "Relay signaling connected for $shareCode")
                         onStatusChange(TunnelStatus.Connected)
                         backoffMs = 1_000L
@@ -110,22 +121,87 @@ class RelayTunnelClient(
 
                         try {
                             for (frame in incoming) {
-                                if (frame is Frame.Text) {
-                                    val text = frame.readText()
-                                    val envelope = text.toEnvelopeOrNull()
-                                    when (envelope?.type) {
-                                        "signal" -> peer.handleSignalingMessage(text)
-                                        "request" -> {
-                                            val response = forwardToLocalNode(envelope)
-                                            outgoing.send(Frame.Text(relayGson.toJson(response)))
+                                when (frame) {
+                                    is Frame.Text -> {
+                                        val text = frame.readText()
+                                        val envelope = text.toEnvelopeOrNull()
+                                        when (envelope?.type) {
+                                            "signal" -> peer.handleSignalingMessage(text)
+                                            "request" -> {
+                                                val response = forwardToLocalNode(envelope)
+                                                sendTextSafely(relayGson.toJson(response))
+                                            }
+                                            "stream-request-start" -> {
+                                                val requestId = envelope.requestId ?: continue
+                                                val targetPath = envelope.path ?: "/api/upload/archive"
+                                                val query = envelope.query.orEmpty()
+                                                val method = envelope.method ?: HttpMethod.Post.value
+                                                val headers = envelope.headers.orEmpty()
+                                                val contentLength = envelope.contentLength ?: -1L
+                                                val uploadRestart = envelope.headers?.get("X-Upload-Restart") == "true"
+
+                                                streamSessions[requestId]?.cancel()
+                                                streamSessions[requestId] = StreamingUploadProxySession(
+                                                    scope = scope,
+                                                    localClient = localNodeClient,
+                                                    method = method,
+                                                    path = targetPath,
+                                                    query = query,
+                                                    headers = headers,
+                                                    contentLength = contentLength,
+                                                    onResponse = { status, responseHeaders, body ->
+                                                        streamSessions.remove(requestId)
+                                                        sendTextSafely(relayGson.toJson(
+                                                            RelayEnvelope(
+                                                                type = "stream-response",
+                                                                requestId = requestId,
+                                                                status = status,
+                                                                headers = responseHeaders,
+                                                                bodyBase64 = body.encodeBase64()
+                                                            )
+                                                        ))
+                                                    },
+                                                    onFailure = { error ->
+                                                        streamSessions.remove(requestId)
+                                                        sendTextSafely(relayGson.toJson(
+                                                            RelayEnvelope(
+                                                                type = "stream-response",
+                                                                requestId = requestId,
+                                                                status = 502,
+                                                                headers = mapOf(HttpHeaders.ContentType to "application/json; charset=utf-8"),
+                                                                bodyBase64 = """{"error":"local_node_unreachable"}""".encodeToByteArray().encodeBase64(),
+                                                                error = error.message
+                                                            )
+                                                        ))
+                                                    }
+                                                )
+                                            }
+                                            "stream-request-end" -> {
+                                                val requestId = envelope.requestId ?: continue
+                                                streamSessions.remove(requestId)?.finish()
+                                            }
+                                            "connected" -> Log.i(TAG, "Relay confirmed registration for $shareCode")
+                                            else -> Log.d(TAG, "Unknown relay frame type: ${envelope?.type}")
                                         }
-                                        "connected" -> Log.i(TAG, "Relay confirmed registration for $shareCode")
-                                        else -> Log.d(TAG, "Unknown relay frame type: ${envelope?.type}")
                                     }
+                                    is Frame.Binary -> {
+                                        val payload = frame.data
+                                        if (payload.size < 36) continue
+                                        // ID is first 36 bytes, padded with spaces if needed
+                                        val requestId = payload.copyOfRange(0, 36).decodeToString().trim()
+                                        val chunk = payload.copyOfRange(36, payload.size)
+                                        
+                                        if (chunk.isNotEmpty()) {
+                                            streamSessions[requestId]?.writeChunk(chunk)
+                                        }
+                                    }
+                                    else -> Unit
                                 }
                             }
                         } finally {
                             keepaliveJob.cancel()
+                            streamSessions.values.forEach { it.cancel() }
+                            streamSessions.clear()
                             peer.destroy()
                             webRTCPeer = null
                         }
@@ -215,6 +291,7 @@ private data class RelayEnvelope(
     val query: String? = null,
     val headers: Map<String, String>? = null,
     val bodyBase64: String? = null,
+    val contentLength: Long? = null,
     val status: Int? = null,
     val error: String? = null
 )

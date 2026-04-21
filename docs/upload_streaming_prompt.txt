@@ -1,0 +1,87 @@
+You are a senior systems engineer working on a decentralized file
+transfer system (WebRTC + WebSocket relay fallback). You write
+production-grade, scalable, memory-safe code. You ALWAYS produce working
+code with clear structure and comments.
+
+Fix folder upload failures caused by: - deeply nested directory
+structures - very large file counts (10k+ files) - excessive chunked
+uploads - WebSocket/base64 overhead
+
+Redesign the upload system to be stream-based, scalable, and resilient.
+
+Current system: - React Web Console (frontend) - Android Ktor server
+(backend) - WebRTC data channel (primary transport) - WebSocket relay
+fallback using JSON + base64 encoding
+
+Problem: Uploading complex folders fails even when total size <1GB due
+to: - too many files - recursion + browser limits - too many network
+requests - relay inefficiency
+
+Implement a NEW upload pipeline based on streaming archive transfer.
+
+You must:
+
+1.  Replace file-by-file upload with ARCHIVE STREAMING
+2.  Ensure compatibility with:
+    -   WebRTC (binary data channel)
+    -   WebSocket fallback
+3.  Maintain directory structure
+4.  Avoid loading full dataset into memory
+5.  Support 10,000+ files reliably
+
+STEP 1 — Frontend (React + TypeScript) - Traverse folder using File
+System Access API or input[webkitdirectory] - Build a streaming TAR
+archive (NOT zip if streaming is complex) - Use ReadableStream to emit
+chunks progressively - DO NOT buffer entire archive
+
+STEP 2 — Transport Layer - WebRTC: - send binary chunks via
+DataChannel - WebSocket fallback: - send binary frames (NOT base64) -
+chunk size ~64KB–256KB - Implement backpressure: - pause sending if
+buffer is full - resume when drained
+
+STEP 3 — Backend (Ktor Android) - Create endpoint: POST
+/api/upload/archive - Accept streaming request body - Pipe stream
+directly to temp file - Extract TAR incrementally while streaming - Use
+SAF (DocumentFile) for writes
+
+STEP 4 — Extraction - Preserve folder structure - Avoid full extraction
+buffering - Stream file writes
+
+STEP 5 — Progress Tracking - Track bytes received (not file count) -
+Emit progress events
+
+STEP 6 — Failure Handling - If stream fails: - clean partial files OR
+mark resumable - Optional: support resume via byte offset
+
+STEP 7 — Relay Optimization (IMPORTANT) - Replace base64 in
+RelayEnvelope with binary frames - Remove JSON wrapping for file data
+path
+
+ - Must handle: - 10k–50k files - deeply nested directories (>10
+levels) - Must NOT: - load entire archive in memory - send one request
+per file - Must degrade gracefully to relay fallback
+
+Return:
+
+1.  Frontend implementation:
+    -   TAR streaming logic
+    -   Upload stream pipeline
+    -   WebRTC + WebSocket sender
+2.  Backend implementation:
+    -   Ktor streaming endpoint
+    -   TAR extraction logic
+3.  Transport layer updates:
+    -   binary WebSocket handling
+    -   backpressure logic
+4.  Short explanation (comments only, no essay)
+
+IMPORTANT: - Output COMPLETE code (not snippets) - Follow existing
+project structure - Use production-ready patterns
+
+The solution is correct if: - Uploading 10k+ files succeeds - Deep
+folder structures upload without failure - Memory usage remains stable -
+Relay fallback does not crash - Upload uses a single continuous stream
+(not per-file requests)
+
+ - Do not ask questions - Do not simplify the problem - Do not output
+pseudo-code - Prefer working code over explanations

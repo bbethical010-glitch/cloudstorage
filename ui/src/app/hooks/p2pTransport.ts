@@ -42,6 +42,13 @@ export interface P2PResponse {
   blob(): Promise<Blob>;
 }
 
+interface UploadStreamOptions {
+  headers?: Record<string, string>;
+  displayName?: string;
+  size?: number;
+  onProgress?: (sentBytes: number) => void;
+}
+
 // ── P2P Transport ────────────────────────────────────────────────────────────
 
 export class P2PTransport {
@@ -146,6 +153,24 @@ export class P2PTransport {
    * The file is read in 64KB slices to prevent memory overflow.
    */
   async upload(path: string, query: string, file: File, headers: Record<string, string> = {}): Promise<P2PResponse> {
+    return this.uploadStream(path, query, file.stream(), {
+      headers,
+      displayName: file.name,
+      size: file.size,
+    });
+  }
+
+  /**
+   * Stream an arbitrary ReadableStream over the DataChannel without buffering
+   * the whole payload in memory. The sender throttles on bufferedAmount so a
+   * slow receiver naturally pauses the archive producer.
+   */
+  async uploadStream(
+    path: string,
+    query: string,
+    stream: ReadableStream<Uint8Array>,
+    options: UploadStreamOptions = {},
+  ): Promise<P2PResponse> {
     if (!this.dc || this.dc.readyState !== 'open') {
       throw new Error('Data channel is not open');
     }
@@ -162,14 +187,15 @@ export class P2PTransport {
         id,
         path,
         query,
-        headers,
-        size: file.size,
+        headers: options.headers || {},
+        contentLength: options.size ?? -1,
+        fileName: options.displayName || 'stream.bin',
       };
       this.dc!.send(JSON.stringify(startMsg));
 
-      // 2. Stream the file in 64KB chunks
-      const reader = new FileReader();
-      let offset = 0;
+      // 2. Stream the payload in 64KB packets
+      const reader = stream.getReader();
+      let sentBytes = 0;
       const idBytes = new TextEncoder().encode(id.padEnd(36, ' '));
 
       const waitForLowBuffer = (): Promise<void> => {
@@ -196,47 +222,49 @@ export class P2PTransport {
         });
       };
 
-      const readNextChunk = async () => {
+      const pumpNextChunk = async () => {
         try {
           await waitForLowBuffer();
         } catch (err) {
+          reader.cancel(err).catch(() => {});
           this.pending.delete(id);
           reject(err);
           return;
         }
 
-        if (offset >= file.size) {
-          // 3. Send upload-end control message
+        const { done, value } = await reader.read();
+        if (done) {
           this.dc!.send(JSON.stringify({ type: 'upload-end', id }));
           return;
         }
 
-        const slice = file.slice(offset, Math.min(offset + CHUNK_SIZE, file.size));
-        reader.readAsArrayBuffer(slice);
-      };
+        const chunkData = value instanceof Uint8Array ? value : new Uint8Array(value);
+        if (chunkData.byteLength === 0) {
+          await pumpNextChunk();
+          return;
+        }
 
-      reader.onload = () => {
-        const chunkData = new Uint8Array(reader.result as ArrayBuffer);
-        // Prefix with 36-byte request ID
         const packet = new Uint8Array(36 + chunkData.length);
         packet.set(idBytes.slice(0, 36), 0);
         packet.set(chunkData, 36);
-        this.dc!.send(packet.buffer);
-        offset += chunkData.length;
-        readNextChunk();
+        this.dc!.send(packet);
+
+        sentBytes += chunkData.length;
+        options.onProgress?.(sentBytes);
+        await pumpNextChunk();
       };
 
-      reader.onerror = () => {
+      pumpNextChunk().catch((error) => {
+        reader.cancel(error).catch(() => {});
         this.pending.delete(id);
-        reject(new Error('Failed to read file for upload'));
-      };
-
-      readNextChunk();
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
 
       // Timeout
       setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id);
+          reader.cancel().catch(() => {});
           reject(new Error('Upload timed out'));
         }
       }, 600_000); // 10 minutes for large uploads
