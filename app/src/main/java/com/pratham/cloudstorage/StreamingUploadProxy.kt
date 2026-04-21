@@ -123,7 +123,7 @@ class StreamingUploadProxySession(
             try {
                 localClient.prepareRequest(targetUrl) {
                     this.method = HttpMethod.parse(method)
-                    headers.forEach { (key, value) ->
+                    this@StreamingUploadProxySession.headers.forEach { (key, value) ->
                         if (!key.equals("Host", true) && !key.equals("Content-Length", true)) {
                             header(key, value)
                         }
