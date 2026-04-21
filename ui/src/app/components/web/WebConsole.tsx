@@ -316,6 +316,8 @@ export function WebConsole() {
   const [terminalLogs, setTerminalLogs] = useState<{ id: string; msg: string; type: 'sys' | 'net' | 'io'; timestamp: string }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const uploadQueueRef = useRef<File[][]>([]);
+  const isProcessingQueueRef = useRef<boolean>(false);
 
   type LoadPhase = 'intro' | 'password' | 'console';
 
@@ -1151,6 +1153,24 @@ export function WebConsole() {
 
   const processFiles = async (files: File[]) => {
     if (!files || files.length === 0) return;
+    
+    uploadQueueRef.current.push(files);
+    
+    if (isProcessingQueueRef.current) return;
+    isProcessingQueueRef.current = true;
+
+    try {
+      while (uploadQueueRef.current.length > 0) {
+        const currentBatch = uploadQueueRef.current.shift();
+        if (!currentBatch) continue;
+        await _processSingleBatch(currentBatch);
+      }
+    } finally {
+      isProcessingQueueRef.current = false;
+    }
+  };
+
+  const _processSingleBatch = async (files: File[]) => {
 
     setUploadStatus('uploading');
     setIsUploading(true);

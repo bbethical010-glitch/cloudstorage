@@ -1364,23 +1364,40 @@ class ServerService : Service() {
                                     sanitizeFilename = ::sanitizeFilename
                                 )
 
+                                val tempTarFile = java.io.File(this@ServerService.cacheDir, "extract_${uploadId}.tar")
                                 call.receiveChannel().toInputStream().use { input ->
-                                    extractor.extractTar(input, targetDir) { bytesRead ->
-                                        streamedBytes = bytesRead
-                                        if (contentLength > 0L) {
-                                            uploadNotificationManager?.onProgressUpdate(uploadId, minOf(bytesRead, contentLength))
-                                        }
+                                    tempTarFile.outputStream().use { out ->
+                                        input.copyTo(out)
+                                        out.flush()
                                     }
                                 }
+                                streamedBytes = tempTarFile.length()
 
-                                uploadNotificationManager?.onUploadComplete(uploadId)
                                 call.respondJson(true, data = mapOf(
                                     "archive" to archiveName,
                                     "bytesReceived" to streamedBytes,
                                     "targetPath" to targetPath
                                 ))
+
+                                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                                    try {
+                                        tempTarFile.inputStream().use { input ->
+                                            extractor.extractTar(input, targetDir) { bytesRead ->
+                                                if (contentLength > 0L) {
+                                                    uploadNotificationManager?.onProgressUpdate(uploadId, minOf(bytesRead, contentLength))
+                                                }
+                                            }
+                                        }
+                                        uploadNotificationManager?.onUploadComplete(uploadId)
+                                    } catch (e: Exception) {
+                                        uploadNotificationManager?.onUploadFailed(uploadId, e.message ?: "Archive extraction failed")
+                                        android.util.Log.e("UploadArchive", "Streaming archive extraction failed", e)
+                                    } finally {
+                                        tempTarFile.delete()
+                                    }
+                                }
                             } catch (e: Exception) {
-                                uploadNotificationManager?.onUploadFailed(uploadId, e.message ?: "Archive extraction failed")
+                                uploadNotificationManager?.onUploadFailed(uploadId, e.message ?: "Archive upload failed")
                                 android.util.Log.e("UploadArchive", "Streaming archive upload failed", e)
                                 call.respondJson(false, e.message ?: "Archive upload failed", "ARCHIVE_UPLOAD_FAILED")
                             }
