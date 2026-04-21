@@ -113,25 +113,30 @@ export class P2PTransport {
     // 1MB High Watermark
     if (this.dc.bufferedAmount > 1024 * 1024) {
       await new Promise<void>((resolve, reject) => {
-        const onLow = () => {
+        const cleanup = () => {
           this.dc?.removeEventListener('bufferedamountlow', onLow);
-          this.dc?.removeEventListener('close', onClose);
+          this.dc?.removeEventListener('close', onFail);
+          this.dc?.removeEventListener('error', onFail);
+        };
+
+        const onLow = () => {
+          cleanup();
           resolve();
         };
-        const onClose = () => {
-          this.dc?.removeEventListener('bufferedamountlow', onLow);
-          this.dc?.removeEventListener('close', onClose);
-          reject(new Error('DataChannel closed during backpressure wait'));
+
+        const onFail = (e: any) => {
+          cleanup();
+          reject(new Error('DataChannel closed or errored during backpressure wait'));
         };
 
         this.dc?.addEventListener('bufferedamountlow', onLow);
-        this.dc?.addEventListener('close', onClose);
+        this.dc?.addEventListener('close', onFail);
+        this.dc?.addEventListener('error', onFail);
 
-        // Fail-safe timeout
+        // Fail-safe timeout to prevent indefinite hanging
         setTimeout(() => {
-          this.dc?.removeEventListener('bufferedamountlow', onLow);
-          this.dc?.removeEventListener('close', onClose);
-          resolve();
+          cleanup();
+          resolve(); 
         }, 15000);
       });
     }

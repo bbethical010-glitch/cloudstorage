@@ -224,16 +224,16 @@ class WebRTCPeer(
 
             override fun onMessage(buffer: DataChannel.Buffer) {
                 try {
-                    if (!buffer.binary) {
-                        // JSON control message — still used for standard API requests (GET /api/files, etc.)
+                    if (buffer.binary) {
+                        // Strictly route binary chunks to the stream handler without string decoding
+                        handleBinaryChunk(browserId, dc, buffer.data)
+                    } else {
+                        // Only attempt to decode and parse as JSON if it's a text frame
                         val text = Charset.forName("UTF-8").decode(buffer.data).toString()
                         handleTextMessage(browserId, dc, text)
-                    } else {
-                        // Binary chunk — part of a file upload (START, DATA, or END)
-                        handleBinaryChunk(browserId, dc, buffer.data)
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "[DC_DEBUG] DataChannel message error", e)
+                    Log.e(TAG, "[DC_DEBUG] DataChannel message error (isBinary=${buffer.binary})", e)
                 }
             }
 

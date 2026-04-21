@@ -1414,7 +1414,7 @@ export function WebConsole() {
   };
 
 
-  const loadPhase: LoadPhase = (isCheckingAuth || p2pState === 'connecting' || p2pState === 'signaling' || p2pState === 'ice-gathering' || p2pState === 'dc-opening' || (p2pState === 'connected' && !isDataChannelReady))
+  const loadPhase: LoadPhase = (isCheckingAuth || ((p2pState === 'connecting' || p2pState === 'signaling' || p2pState === 'ice-gathering' || p2pState === 'dc-opening' || (p2pState === 'connected' && !isDataChannelReady)) && !isAuthenticated))
     ? 'intro'
     : (!isAuthenticated && authMode !== 'none' ? 'password' : 'console');
 
