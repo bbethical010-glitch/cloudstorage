@@ -122,7 +122,8 @@ class StreamingUploadProxySession(
         scope.launch(Dispatchers.IO) {
             try {
                 localClient.prepareRequest(targetUrl) {
-                    this.method = HttpMethod.parse(method)
+                    val methodStr = this@StreamingUploadProxySession.method
+                    this.method = HttpMethod.parse(methodStr)
                     this@StreamingUploadProxySession.headers.forEach { (key, value) ->
                         if (!key.equals("Host", true) && !key.equals("Content-Length", true)) {
                             header(key, value)

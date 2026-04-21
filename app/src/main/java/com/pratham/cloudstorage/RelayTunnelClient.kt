@@ -32,6 +32,8 @@ import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.TimeUnit
 import java.util.UUID
 import java.nio.ByteBuffer
+import java.util.Base64
+import java.util.concurrent.ConcurrentHashMap
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Relay Tunnel Client — signaling + relay API fallback
@@ -332,7 +334,11 @@ private fun String.toWebSocketUrl(shareCode: String): String {
 
 private fun String?.decodeBase64(): ByteArray? {
     if (this.isNullOrBlank()) return null
-    return Base64.getDecoder().decode(this)
+    return try {
+        Base64.getDecoder().decode(this)
+    } catch (_: Exception) {
+        null
+    }
 }
 
 private fun ByteArray?.encodeBase64(): String? {
