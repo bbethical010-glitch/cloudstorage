@@ -133,7 +133,7 @@ class RelayTunnelClient(
                                             }
                                             "stream-request-start" -> {
                                                 val requestId = envelope.requestId ?: continue
-                                                initializeRelaySession(requestId, envelope, { Frame.Text(it) }, { Frame.Binary(false, it) })
+                                                initializeRelaySession(requestId, envelope, { Frame.Text(it) }, { Frame.Binary(true, it) })
                                             }
                                             "stream-request-end" -> {
                                                 val requestId = envelope.requestId ?: continue
@@ -154,7 +154,7 @@ class RelayTunnelClient(
                                         if (type == 1) { // MSG_TYPE_START
                                             try {
                                                 val meta = relayGson.fromJson(chunk.decodeToString(), RelayEnvelope::class.java)
-                                                initializeRelaySession(requestId, meta, { Frame.Text(it) }, { Frame.Binary(false, it) })
+                                                initializeRelaySession(requestId, meta, { Frame.Text(it) }, { Frame.Binary(true, it) })
                                             } catch (e: Exception) {
                                                 Log.e(TAG, "Failed to parse binary START metadata", e)
                                             }
@@ -187,7 +187,7 @@ class RelayTunnelClient(
         }
     }
 
-    private suspend fun io.ktor.websocket.DefaultWebSocketServerSession.initializeRelaySession(
+    private suspend fun io.ktor.websocket.WebSocketSession.initializeRelaySession(
         requestId: String,
         envelope: RelayEnvelope,
         textWrapper: (String) -> Frame,

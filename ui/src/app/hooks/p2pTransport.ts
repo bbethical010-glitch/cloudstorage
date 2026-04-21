@@ -188,6 +188,8 @@ export class P2PTransport {
     return new Promise<P2PResponse>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
 
+      const idBytes = new TextEncoder().encode(id.padEnd(36, ' '));
+
       // 1. Send upload-start message (Type 1)
       const startPayload = JSON.stringify({
         path,
@@ -206,7 +208,6 @@ export class P2PTransport {
       // 2. Stream the payload in 64KB packets
       const reader = stream.getReader();
       let sentBytes = 0;
-      const idBytes = new TextEncoder().encode(id.padEnd(36, ' '));
 
       const waitForLowBuffer = (): Promise<void> => {
         return new Promise((resolveWait, rejectWait) => {
@@ -264,7 +265,6 @@ export class P2PTransport {
         packet.set([MSG_TYPE_DATA], 36);
         packet.set(chunkData, 37);
         this.dc!.send(packet);
- Riverside
 
         sentBytes += chunkData.length;
         options.onProgress?.(sentBytes);

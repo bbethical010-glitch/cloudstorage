@@ -331,7 +331,9 @@ class WebRTCPeer(
                     val path = meta["path"] as? String ?: "/api/upload"
                     val query = meta["query"] as? String ?: ""
                     val headers = (meta["headers"] as? Map<*, *>)?.mapNotNull { (k, v) ->
-                        (k as? String) to (v as? String ?: "")
+                        val key = k as? String ?: return@mapNotNull null
+                        val value = v as? String ?: ""
+                        key to value
                     }?.toMap() ?: emptyMap()
 
                     TransferManager.startTransfer(reqId, fileName, fileSize, isDownload = false)
@@ -348,7 +350,7 @@ class WebRTCPeer(
                         onProgress = { TransferManager.updateProgress(reqId, it) },
                         onResponse = { _, _, _ -> uploadSessions.remove(reqId) },
                         onFailure = { uploadSessions.remove(reqId) },
-                        onSignal = { ackType, ackPayload ->
+                        onSignal = { ackType: Int, ackPayload: ByteArray ->
                             val idBuf = reqId.padEnd(36, ' ').toByteArray().sliceArray(0..35)
                             val packet = ByteBuffer.allocate(36 + 1 + ackPayload.size)
                             packet.put(idBuf)

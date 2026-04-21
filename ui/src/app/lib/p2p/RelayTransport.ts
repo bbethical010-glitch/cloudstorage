@@ -135,7 +135,6 @@ export class RelayTransport {
           this.ws!.send(endPacket);
           return;
         }
- Riverside
 
         const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
         const packet = new Uint8Array(36 + 1 + chunk.length);
