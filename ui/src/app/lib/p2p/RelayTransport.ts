@@ -4,7 +4,7 @@ import type { P2PResponse } from '../../hooks/p2pTransport';
  * RelayTransport — Fast binary transport over WebSocket relay.
  * 
  * Used as a fallback when WebRTC P2P is unavailable. Replaces legacy JSON+Base64
- * logic with a high-performance binary frame protocol: [36 bytes UUID][1 byte TYPE][binary data].
+ * logic with a high-performance binary frame protocol: [16 bytes UUID][1 byte TYPE][4 byte Seq][binary data].
  */
 
 const MSG_TYPE_DATA = 0;
@@ -12,6 +12,7 @@ const MSG_TYPE_START = 1;
 const MSG_TYPE_END = 2;
 const MSG_TYPE_ACK = 3;
 const MSG_TYPE_ERROR = 4;
+
 export class RelayTransport {
   private ws: WebSocket | null = null;
   private pending = new Map<string, {
@@ -28,7 +29,6 @@ export class RelayTransport {
 
   attach(ws: WebSocket) {
     this.ws = ws;
-    // Set binaryType to 'arraybuffer' for standardized payload handling
     ws.binaryType = 'arraybuffer';
   }
 
@@ -45,7 +45,7 @@ export class RelayTransport {
     const id = crypto.randomUUID();
     const [path, query] = url.split('?');
     
-    // Convert body if present (only supports strings for regular requests)
+    // Convert body if present
     let bodyBase64: string | null = null;
     if (options.body) {
       if (typeof options.body === 'string') {
@@ -87,16 +87,17 @@ export class RelayTransport {
     options: {
       headers?: Record<string, string>;
       size?: number;
+      fileName?: string;
       onProgress?: (sent: number) => void;
     } = {}
   ): Promise<P2PResponse> {
     if (!this.ready) throw new Error('Relay WebSocket is not connected');
 
-    const id = crypto.randomUUID();
-    const requestIdBytes = new TextEncoder().encode(id.padEnd(36, ' '));
-    
+    const requestId = crypto.getRandomValues(new Uint8Array(16));
+    const idKey = Array.from(requestId).map(b => b.toString(16).padStart(2, '0')).join('');
+
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(idKey, { resolve, reject });
 
       // 1. Signaling start (Type 1)
       const startPayload = JSON.stringify({
@@ -104,23 +105,25 @@ export class RelayTransport {
         path,
         query,
         headers: options.headers || {},
-        contentLength: options.size ?? -1
+        contentLength: options.size ?? -1,
+        fileName: options.fileName || 'upload.tar'
       });
       const startPayloadBytes = new TextEncoder().encode(startPayload);
-      const startPacket = new Uint8Array(36 + 1 + startPayloadBytes.length);
-      startPacket.set(requestIdBytes, 0);
-      startPacket.set([MSG_TYPE_START], 36);
-      startPacket.set(startPayloadBytes, 37);
+      const startPacket = new Uint8Array(16 + 1 + 4 + startPayloadBytes.length);
+      startPacket.set(requestId, 0);
+      startPacket.set([MSG_TYPE_START], 16);
+      new DataView(startPacket.buffer).setUint32(17, 0, false);
+      startPacket.set(startPayloadBytes, 21);
       
       this.ws!.send(startPacket);
 
       // 2. Pump binary frames
       const reader = stream.getReader();
       let sentBytes = 0;
+      let seq = 1;
 
       const pump = async () => {
         // Backpressure check (WebSocket bufferedAmount)
-        // 256KB threshold to keep the pipe full but responsive
         if (this.ws!.bufferedAmount > 256 * 1024) {
           await new Promise(r => setTimeout(r, 50));
           return pump();
@@ -128,38 +131,38 @@ export class RelayTransport {
 
         const { done, value } = await reader.read();
         if (done) {
-          // 3. Signaling end (Type 2)
-          const endPacket = new Uint8Array(36 + 1);
-          endPacket.set(requestIdBytes, 0);
-          endPacket.set([MSG_TYPE_END], 36);
+          const endPacket = new Uint8Array(16 + 1 + 4);
+          endPacket.set(requestId, 0);
+          endPacket.set([MSG_TYPE_END], 16);
+          new DataView(endPacket.buffer).setUint32(17, seq++, false);
           this.ws!.send(endPacket);
           return;
         }
 
         const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
-        const packet = new Uint8Array(36 + 1 + chunk.length);
-        packet.set(requestIdBytes.slice(0, 36), 0);
-        packet.set([MSG_TYPE_DATA], 36);
-        packet.set(chunk, 37);
+        const packet = new Uint8Array(16 + 1 + 4 + chunk.length);
+        packet.set(requestId, 0);
+        packet.set([MSG_TYPE_DATA], 16);
+        new DataView(packet.buffer).setUint32(17, seq++, false);
+        packet.set(chunk, 21);
 
         this.ws!.send(packet);
         sentBytes += chunk.length;
         options.onProgress?.(sentBytes);
         
-        // Immediate next pump attempt
         return pump();
       };
 
       pump().catch(err => {
         reader.cancel().catch(() => {});
-        this.pending.delete(id);
+        this.pending.delete(idKey);
         reject(err);
       });
     });
   }
 
   /**
-   * Inbound message handler called by useWebRTC
+   * Inbound message handler
    */
   handleMessage(data: string | ArrayBuffer) {
     if (typeof data === 'string') {
@@ -177,14 +180,13 @@ export class RelayTransport {
         console.warn('[Relay] Failed to handle text message', e);
       }
     } else {
-      // Direct binary frame from relay
       const buffer = data as ArrayBuffer;
-      if (buffer.byteLength < 37) return;
+      if (buffer.byteLength < 21) return;
 
-      const idBytes = new Uint8Array(buffer, 0, 36);
-      const requestId = new TextDecoder().decode(idBytes).trim();
-      const type = new Uint8Array(buffer, 36, 1)[0];
-      const payload = new Uint8Array(buffer, 37);
+      const idBytes = new Uint8Array(buffer, 0, 16);
+      const requestId = Array.from(idBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+      const type = new Uint8Array(buffer, 16, 1)[0];
+      const payload = new Uint8Array(buffer, 21);
 
       const req = this.pending.get(requestId);
       if (!req) return;

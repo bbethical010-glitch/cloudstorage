@@ -51,6 +51,7 @@ export interface P2PResponse {
 
 interface UploadStreamOptions {
   headers?: Record<string, string>;
+  fileName?: string;
   displayName?: string;
   size?: number;
   onProgress?: (sentBytes: number) => void;
@@ -70,7 +71,7 @@ export class P2PTransport {
   attach(dataChannel: RTCDataChannel) {
     this.dc = dataChannel;
     dataChannel.binaryType = 'arraybuffer';
-    dataChannel.bufferedAmountLowThreshold = 1048576; // 1MB threshold for streaming backpressure
+    dataChannel.bufferedAmountLowThreshold = 256 * 1024; // 256KB threshold for streaming backpressure
 
     dataChannel.addEventListener('open', () => {
       this._ready = true;
@@ -162,7 +163,7 @@ export class P2PTransport {
   async upload(path: string, query: string, file: File, headers: Record<string, string> = {}): Promise<P2PResponse> {
     return this.uploadStream(path, query, file.stream(), {
       headers,
-      displayName: file.name,
+      fileName: file.name,
       size: file.size,
     });
   }
@@ -182,30 +183,31 @@ export class P2PTransport {
       throw new Error('Data channel is not open');
     }
 
-    const id = crypto.randomUUID();
-    console.log(`[REQ_DEBUG] P2P Upload: ${path} [${id}]`);
+    const requestId = crypto.getRandomValues(new Uint8Array(16));
+    const idKey = Array.from(requestId).map(b => b.toString(16).padStart(2, '0')).join('');
+
+    console.log(`[REQ_DEBUG] P2P Upload: ${path} [${idKey}]`);
 
     return new Promise<P2PResponse>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(idKey, { resolve, reject });
 
-      const idBytes = new TextEncoder().encode(id.padEnd(36, ' '));
-
-      // 1. Send upload-start message (Type 1)
       const startPayload = JSON.stringify({
+        method: 'POST',
         path,
         query,
         headers: options.headers || {},
         contentLength: options.size ?? -1,
-        fileName: options.displayName || 'stream.bin',
+        fileName: options.fileName || options.displayName || 'upload.tar'
       });
       const startPayloadBytes = new TextEncoder().encode(startPayload);
-      const startPacket = new Uint8Array(36 + 1 + startPayloadBytes.length);
-      startPacket.set(idBytes.slice(0, 36), 0);
-      startPacket.set([MSG_TYPE_START], 36);
-      startPacket.set(startPayloadBytes, 37);
+      let seqNum = 0;
+      const startPacket = new Uint8Array(16 + 1 + 4 + startPayloadBytes.length);
+      startPacket.set(requestId, 0);
+      startPacket.set([MSG_TYPE_START], 16);
+      new DataView(startPacket.buffer).setUint32(17, seqNum++, false);
+      startPacket.set(startPayloadBytes, 21);
       this.dc!.send(startPacket);
 
-      // 2. Stream the payload in 64KB packets
       const reader = stream.getReader();
       let sentBytes = 0;
 
@@ -215,7 +217,7 @@ export class P2PTransport {
             rejectWait(new Error('Data channel closed'));
             return;
           }
-          if (this.dc.bufferedAmount <= this.dc.bufferedAmountLowThreshold) {
+          if (this.dc.bufferedAmount <= (this.dc.bufferedAmountLowThreshold || 256 * 1024)) {
             resolveWait();
             return;
           }
@@ -236,55 +238,49 @@ export class P2PTransport {
       const pumpNextChunk = async () => {
         try {
           await waitForLowBuffer();
-        } catch (err) {
-          reader.cancel(err).catch(() => {});
-          this.pending.delete(id);
-          reject(err);
-          return;
-        }
+          const { done, value } = await reader.read();
+          if (done) {
+            const endPacket = new Uint8Array(16 + 1 + 4);
+            endPacket.set(requestId, 0);
+            endPacket.set([MSG_TYPE_END], 16);
+            new DataView(endPacket.buffer).setUint32(17, seqNum++, false);
+            this.dc!.send(endPacket);
+            console.log(`[REQ_DEBUG] P2P Upload END sent [${idKey}]. Waiting for ACK...`);
+            return;
+          }
 
-        const { done, value } = await reader.read();
-        if (done) {
-          // 3. Send upload-end message (Type 2)
-          const endPacket = new Uint8Array(36 + 1);
-          endPacket.set(idBytes.slice(0, 36), 0);
-          endPacket.set([MSG_TYPE_END], 36);
-          this.dc!.send(endPacket);
-          console.log(`[REQ_DEBUG] P2P Upload END sent [${id}]. Waiting for ACK...`);
-          return;
-        }
+          const chunkData = value instanceof Uint8Array ? value : new Uint8Array(value);
+          if (chunkData.byteLength === 0) {
+            await pumpNextChunk();
+            return;
+          }
 
-        const chunkData = value instanceof Uint8Array ? value : new Uint8Array(value);
-        if (chunkData.byteLength === 0) {
+          const packet = new Uint8Array(16 + 1 + 4 + chunkData.length);
+          packet.set(requestId, 0);
+          packet.set([MSG_TYPE_DATA], 16);
+          new DataView(packet.buffer).setUint32(17, seqNum++, false);
+          packet.set(chunkData, 21);
+          this.dc!.send(packet);
+
+          sentBytes += chunkData.length;
+          options.onProgress?.(sentBytes);
           await pumpNextChunk();
-          return;
+        } catch (error) {
+          reader.cancel(error).catch(() => {});
+          this.pending.delete(idKey);
+          reject(error instanceof Error ? error : new Error(String(error)));
         }
-
-        const packet = new Uint8Array(36 + 1 + chunkData.length);
-        packet.set(idBytes.slice(0, 36), 0);
-        packet.set([MSG_TYPE_DATA], 36);
-        packet.set(chunkData, 37);
-        this.dc!.send(packet);
-
-        sentBytes += chunkData.length;
-        options.onProgress?.(sentBytes);
-        await pumpNextChunk();
       };
 
-      pumpNextChunk().catch((error) => {
-        reader.cancel(error).catch(() => {});
-        this.pending.delete(id);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      });
+      pumpNextChunk();
 
-      // Timeout
       setTimeout(() => {
-        if (this.pending.has(id)) {
-          this.pending.delete(id);
+        if (this.pending.has(idKey)) {
+          this.pending.delete(idKey);
           reader.cancel().catch(() => {});
           reject(new Error('Upload timed out'));
         }
-      }, 600_000); // 10 minutes for large uploads
+      }, 600_000);
     });
   }
 
@@ -347,28 +343,26 @@ export class P2PTransport {
   }
 
   private handleBinaryChunk(data: ArrayBuffer) {
-    if (data.byteLength < 36) return;
+    if (data.byteLength < 21) return;
 
-    // First 36 bytes = request ID
-    const idBytes = new Uint8Array(data, 0, 36);
-    const reqId = new TextDecoder().decode(idBytes).trim();
+    const idBytes = new Uint8Array(data, 0, 16);
+    const idKey = Array.from(idBytes).map(b => b.toString(16).padStart(2, '0')).join('');
 
-    const req = this.pending.get(reqId);
-    if (!req || !req.chunks) return;
+    const req = this.pending.get(idKey);
+    if (!req) return;
 
-    // Remaining bytes: First byte is TYPE, then payload
-    const type = new Uint8Array(data, 36, 1)[0];
-    const payload = new Uint8Array(data, 37);
+    const type = new Uint8Array(data, 16, 1)[0];
+    const payload = new Uint8Array(data, 21);
 
     if (type === MSG_TYPE_DATA) {
-      req.chunks.push(payload);
+      if (req.chunks) req.chunks.push(payload);
     } else if (type === MSG_TYPE_ACK) {
-      this.pending.delete(reqId);
-      console.log(`[REQ_DEBUG] P2P Upload ACK received [${reqId}]`);
+      this.pending.delete(idKey);
+      console.log(`[REQ_DEBUG] P2P Upload ACK received [${idKey}]`);
       const body = payload.length > 0 ? JSON.parse(new TextDecoder().decode(payload)) : { success: true };
       req.resolve(createP2PResponse(200, { 'Content-Type': 'application/json' }, new TextEncoder().encode(JSON.stringify(body))));
     } else if (type === MSG_TYPE_ERROR) {
-      this.pending.delete(reqId);
+      this.pending.delete(idKey);
       const errorText = new TextDecoder().decode(payload);
       req.reject(new Error(errorText || 'Upload failed on backend'));
     }

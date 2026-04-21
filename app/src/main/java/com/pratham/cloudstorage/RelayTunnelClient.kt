@@ -29,9 +29,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.util.Base64
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.UUID
+import java.nio.ByteBuffer
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Relay Tunnel Client — signaling + relay API fallback
@@ -77,7 +77,7 @@ class RelayTunnelClient(
         expectSuccess = false
     }
     private val outgoingMutex = Mutex()
-    private val streamSessions = ConcurrentHashMap<String, StreamingUploadProxySession>()
+    private val streamSessions = ConcurrentHashMap<UUID, StreamingUploadProxySession>()
 
     private var webRTCPeer: WebRTCPeer? = null
 
@@ -145,11 +145,13 @@ class RelayTunnelClient(
                                     }
                                     is Frame.Binary -> {
                                         val payload = frame.data
-                                        if (payload.size < 37) continue
+                                        if (payload.size < 21) continue // 16 (UUID) + 1 (Type) + 4 (Seq)
                                         
-                                        val requestId = payload.copyOfRange(0, 36).decodeToString().trim()
-                                        val type = payload[36].toInt()
-                                        val chunk = payload.copyOfRange(37, payload.size)
+                                        val bb = ByteBuffer.wrap(payload)
+                                        val requestId = UUID(bb.long, bb.long)
+                                        val type = payload[16].toInt()
+                                        val seqNum = bb.getInt(17).toLong() and 0xFFFFFFFFL
+                                        val chunk = payload.copyOfRange(21, payload.size)
                                         
                                         if (type == 1) { // MSG_TYPE_START
                                             try {
@@ -159,7 +161,7 @@ class RelayTunnelClient(
                                                 Log.e(TAG, "Failed to parse binary START metadata", e)
                                             }
                                         } else {
-                                            streamSessions[requestId]?.handlePacket(type, chunk)
+                                            streamSessions[requestId]?.handlePacket(type, seqNum, chunk)
                                         }
                                     }
                                     else -> Unit
@@ -188,7 +190,7 @@ class RelayTunnelClient(
     }
 
     private suspend fun io.ktor.websocket.WebSocketSession.initializeRelaySession(
-        requestId: String,
+        requestId: UUID,
         envelope: RelayEnvelope,
         textWrapper: (String) -> Frame,
         binaryWrapper: (ByteArray) -> Frame
@@ -199,6 +201,7 @@ class RelayTunnelClient(
         val headers = envelope.headers.orEmpty()
         val contentLength = envelope.contentLength ?: envelope.size ?: -1L
 
+        val tempFile = java.io.File(context.cacheDir, "upload_relay_${requestId}.tar")
         streamSessions[requestId]?.cancel()
         streamSessions[requestId] = StreamingUploadProxySession(
             scope = scope,
@@ -208,14 +211,17 @@ class RelayTunnelClient(
             query = query,
             headers = headers,
             contentLength = contentLength,
+            tempFile = tempFile,
             onResponse = { _, _, _ -> streamSessions.remove(requestId) },
             onFailure = { streamSessions.remove(requestId) },
             onSignal = { ackType, ackPayload ->
-                val idBytes = requestId.padEnd(36, ' ').toByteArray().sliceArray(0..35)
-                val packet = ByteArray(36 + 1 + ackPayload.size)
-                System.arraycopy(idBytes, 0, packet, 0, 36)
-                packet[36] = ackType.toByte()
-                System.arraycopy(ackPayload, 0, packet, 37, ackPayload.size)
+                val packet = ByteArray(16 + 1 + 4 + ackPayload.size)
+                val bb = ByteBuffer.wrap(packet)
+                bb.putLong(requestId.mostSignificantBits)
+                bb.putLong(requestId.leastSignificantBits)
+                bb.put(ackType.toByte())
+                bb.putInt(0) // Seq number for ACKs
+                bb.put(ackPayload)
                 
                 scope.launch {
                     outgoingMutex.withLock {

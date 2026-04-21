@@ -292,7 +292,7 @@ export function WebConsole() {
   const [activeTab, setActiveTab] = useState("Drive");
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'success' | 'error' | 'partial'>('idle');
+  const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'finalizing' | 'extracting' | 'success' | 'error' | 'partial'>('idle');
   const [uploadProgress, setUploadProgress] = useState(0);
   const [folderProgress, setFolderProgress] = useState({ success: 0, uploading: 0, failed: 0, total: 0 });
   const [failedUploads, setFailedUploads] = useState<{ file: File, error: string }[]>([]);
@@ -1162,26 +1162,38 @@ export function WebConsole() {
         : `upload-${new Date().getTime()}.tar`;
       const uploadId = crypto.randomUUID();
 
+      setUploadStatus('finalizing');
+      
       let uploadResult: any = null;
       let lastError: Error | null = null;
 
-      // A clean restart is cheaper and more reliable than resuming thousands of
-      // tiny files. Retrying from offset 0 keeps the extractor idempotent.
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           const tarArchive = createTarArchiveStream(archiveEntries);
+          const totalSize = tarArchive.byteLength;
+          
           uploadResult = await uploadArchiveViaBestPath(
             archiveLabel,
             uploadId,
-            tarArchive.byteLength,
+            totalSize,
             () => tarArchive.stream,
-            attempt
+            attempt,
+            (sent) => {
+              const p = Math.round((sent / totalSize) * 100);
+              if (p >= 100) {
+                setUploadStatus('extracting');
+                setUploadProgress(99); 
+              } else {
+                setUploadProgress(p);
+              }
+            }
           );
           lastError = null;
           break;
         } catch (error) {
           lastError = error instanceof Error ? error : new Error(String(error));
           if (attempt === 0) {
+            setUploadStatus('uploading'); // Reset state for retry
             await new Promise((resolve) => setTimeout(resolve, 1200));
           }
         }
@@ -1194,7 +1206,7 @@ export function WebConsole() {
       setFolderProgress({ success: 1, uploading: 0, failed: 0, total: 1 });
       setUploadStatus('success');
       setUploadProgress(100);
-      setSanitizedUploads(uploadResult?.data?.sanitizedNames || {});
+      setSanitizedUploads(uploadResult?.status === 200 ? uploadResult.data?.sanitizedNames || {} : {});
       await loadFiles(currentPath);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Archive upload failed';
@@ -2078,7 +2090,12 @@ export function WebConsole() {
             <div style={{ flex: 1 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
                 <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "white" }}>
-                  {uploadStatus === "uploading" ? "Uploading..." : uploadStatus === "success" ? "Complete" : uploadStatus === "error" ? "Failed" : uploadStatus === "partial" ? "Partial" : "Idle"}
+                  {uploadStatus === "uploading" ? "Uploading..." : 
+                   uploadStatus === "finalizing" ? "Finalizing..." :
+                   uploadStatus === "extracting" ? "Extracting..." :
+                   uploadStatus === "success" ? "Complete" : 
+                   uploadStatus === "error" ? "Failed" : 
+                   uploadStatus === "partial" ? "Partial" : "Idle"}
                 </span>
                 <span style={{ fontSize: 10, fontFamily: "monospace", fontWeight: 700, color: "white" }}>{uploadProgress}%</span>
               </div>

@@ -24,6 +24,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 // ──────────────────────────────────────────────────────────────────────────────
 // WebRTC Peer — Android-side P2P connection handler
@@ -219,16 +220,16 @@ class WebRTCPeer(
      */
     private fun setupDataChannel(browserId: String, dc: DataChannel) {
         dc.registerObserver(object : DataChannel.Observer {
-            private val uploadSessions = ConcurrentHashMap<String, StreamingUploadProxySession>()
+            private val uploadSessions = ConcurrentHashMap<UUID, StreamingUploadProxySession>()
 
             override fun onMessage(buffer: DataChannel.Buffer) {
                 try {
                     if (!buffer.binary) {
-                        // JSON control message (API request or upload control)
+                        // JSON control message — still used for standard API requests (GET /api/files, etc.)
                         val text = Charset.forName("UTF-8").decode(buffer.data).toString()
                         handleTextMessage(browserId, dc, text)
                     } else {
-                        // Binary chunk — part of a file upload
+                        // Binary chunk — part of a file upload (START, DATA, or END)
                         handleBinaryChunk(browserId, dc, buffer.data)
                     }
                 } catch (e: Exception) {
@@ -239,88 +240,26 @@ class WebRTCPeer(
             private fun handleTextMessage(browserId: String, dc: DataChannel, text: String) {
                 val msg = gson.fromJson(text, Map::class.java) as? Map<*, *> ?: return
                 val type = msg["type"] as? String ?: return
-                val reqId = msg["id"] as? String ?: ""
 
-                when (type) {
-                    "req" -> {
-                        // Standard API request — forward to local Ktor server
-                        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                            forwardRequestToLocalServer(dc, msg)
-                        }
-                    }
-                    "upload-start" -> {
-                        val fileName = msg["fileName"] as? String ?: "Uploading archive..."
-                        val fileSize = when (val rawLength = msg["contentLength"] ?: msg["size"] ?: msg["fileSize"]) {
-                            is Double -> rawLength.toLong()
-                            is Number -> rawLength.toLong()
-                            else -> -1L
-                        }
-                        TransferManager.startTransfer(reqId, fileName, fileSize, isDownload = false)
-                        val path = msg["path"] as? String ?: "/api/upload"
-                        val query = msg["query"] as? String ?: ""
-                        val headers = (msg["headers"] as? Map<*, *>)?.mapNotNull { (key, value) ->
-                            val headerName = key as? String ?: return@mapNotNull null
-                            val headerValue = value as? String ?: return@mapNotNull null
-                            headerName to headerValue
-                        }?.toMap() ?: emptyMap()
-
-                        uploadSessions[reqId]?.cancel()
-                        uploadSessions[reqId] = StreamingUploadProxySession(
-                            scope = kotlinx.coroutines.GlobalScope,
-                            localClient = localClient,
-                            method = "POST",
-                            path = path,
-                            query = query,
-                            headers = headers,
-                            contentLength = fileSize,
-                            onProgress = { bytesReceived ->
-                                TransferManager.updateProgress(reqId, bytesReceived)
-                            },
-                            onResponse = { status, responseHeaders, body ->
-                                uploadSessions.remove(reqId)
-                                val bodyB64 = if (body.isNotEmpty()) {
-                                    java.util.Base64.getEncoder().encodeToString(body)
-                                } else {
-                                    null
-                                }
-                                val resMsg = gson.toJson(mapOf(
-                                    "type" to "res",
-                                    "id" to reqId,
-                                    "status" to status,
-                                    "headers" to responseHeaders,
-                                    "body" to bodyB64
-                                ))
-                                sendText(dc, resMsg)
-                            },
-                            onFailure = { error ->
-                                uploadSessions.remove(reqId)
-                                val errMsg = gson.toJson(mapOf(
-                                    "type" to "res",
-                                    "id" to reqId,
-                                    "status" to 502,
-                                    "headers" to mapOf("Content-Type" to "text/plain"),
-                                    "body" to java.util.Base64.getEncoder().encodeToString(
-                                        "Upload failed: ${error.message}".toByteArray()
-                                    )
-                                ))
-                                sendText(dc, errMsg)
-                            }
-                        )
-                        Log.d(TAG, "[DC_DEBUG] Upload started: $reqId ($fileName)")
-                    }
-                    "upload-end" -> {
-                        uploadSessions.remove(reqId)?.finish()
+                if (type == "req") {
+                    // Standard API request — forward to local Ktor server
+                    kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        forwardRequestToLocalServer(dc, msg)
                     }
                 }
             }
 
             private fun handleBinaryChunk(browserId: String, dc: DataChannel, data: ByteBuffer) {
-                if (data.remaining() < 37) return
-                val idBytes = ByteArray(36)
-                data.get(idBytes)
-                val reqId = String(idBytes, Charsets.UTF_8).trim()
+                if (data.remaining() < 21) return // 16 (UUID) + 1 (Type) + 4 (Seq)
+                
+                val uuidBytes = ByteArray(16)
+                data.get(uuidBytes)
+                val uuidBuf = ByteBuffer.wrap(uuidBytes)
+                val uploadId = UUID(uuidBuf.long, uuidBuf.long)
 
                 val type = data.get().toInt()
+                val seqNum = data.int.toLong() and 0xFFFFFFFFL // Network Byte Order (Big Endian)
+                
                 val payload = ByteArray(data.remaining())
                 data.get(payload)
 
@@ -328,7 +267,7 @@ class WebRTCPeer(
                     val meta = gson.fromJson(String(payload, Charsets.UTF_8), Map::class.java) ?: return
                     val fileName = meta["fileName"] as? String ?: "stream.bin"
                     val fileSize = (meta["contentLength"] as? Double)?.toLong() ?: -1L
-                    val path = meta["path"] as? String ?: "/api/upload"
+                    val path = meta["path"] as? String ?: "/api/upload/archive"
                     val query = meta["query"] as? String ?: ""
                     val headers = (meta["headers"] as? Map<*, *>)?.mapNotNull { (k, v) ->
                         val key = k as? String ?: return@mapNotNull null
@@ -336,10 +275,11 @@ class WebRTCPeer(
                         key to value
                     }?.toMap() ?: emptyMap()
 
-                    TransferManager.startTransfer(reqId, fileName, fileSize, isDownload = false)
+                    TransferManager.startTransfer(uploadId.toString(), fileName, fileSize, isDownload = false)
                     
-                    uploadSessions[reqId]?.cancel()
-                    uploadSessions[reqId] = StreamingUploadProxySession(
+                    val tempFile = java.io.File(context.cacheDir, "upload_${uploadId}.tar")
+                    uploadSessions[uploadId]?.cancel()
+                    uploadSessions[uploadId] = StreamingUploadProxySession(
                         scope = GlobalScope,
                         localClient = localClient,
                         method = "POST",
@@ -347,27 +287,40 @@ class WebRTCPeer(
                         query = query,
                         headers = headers,
                         contentLength = fileSize,
-                        onProgress = { TransferManager.updateProgress(reqId, it) },
-                        onResponse = { _, _, _ -> uploadSessions.remove(reqId) },
-                        onFailure = { uploadSessions.remove(reqId) },
+                        tempFile = tempFile,
+                        onProgress = { TransferManager.updateProgress(uploadId.toString(), it) },
+                        onResponse = { _, _, _ -> uploadSessions.remove(uploadId) },
+                        onFailure = { uploadSessions.remove(uploadId) },
                         onSignal = { ackType: Int, ackPayload: ByteArray ->
-                            val idBuf = reqId.padEnd(36, ' ').toByteArray().sliceArray(0..35)
-                            val packet = ByteBuffer.allocate(36 + 1 + ackPayload.size)
-                            packet.put(idBuf)
+                            // Send binary ACK back
+                            val packet = ByteBuffer.allocate(16 + 1 + 4 + ackPayload.size)
+                            
+                            val outUuid = ByteBuffer.allocate(16)
+                            outUuid.putLong(uploadId.mostSignificantBits)
+                            outUuid.putLong(uploadId.leastSignificantBits)
+                            packet.put(outUuid.array())
+                            
                             packet.put(ackType.toByte())
+                            packet.putInt(0) // Sequence number for ACKs from backend (fixed 0)
                             packet.put(ackPayload)
                             packet.flip()
                             sendBinary(dc, packet)
                         }
                     )
                 } else {
-                    uploadSessions[reqId]?.handlePacket(type, payload)
+                    uploadSessions[uploadId]?.handlePacket(type, seqNum, payload)
                 }
             }
 
-            override fun onBufferedAmountChange(amount: Long) {}
+            override fun onBufferedAmountChange(amount: Long) {
+                // Potential future optimization: if (amount == 0L) ...
+            }
             override fun onStateChange() {
                 Log.i(TAG, "[DC_DEBUG] DataChannel state: ${dc.state()}")
+                if (dc.state() == DataChannel.State.CLOSED) {
+                    uploadSessions.values.forEach { it.cancel(RuntimeException("DataChannel closed prematurely")) }
+                    uploadSessions.clear()
+                }
             }
         })
     }
