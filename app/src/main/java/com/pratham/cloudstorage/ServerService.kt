@@ -54,6 +54,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.newSingleThreadContext
 import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.serialization.gson.*
@@ -84,6 +86,8 @@ class ServerService : Service() {
     private var relayTunnelClient: RelayTunnelClient? = null
     private var uploadNotificationManager: UploadNotificationManager? = null
     private val scope = CoroutineScope(Dispatchers.IO)
+    private val extractionDispatcher = newSingleThreadContext("ExtractionWorker")
+    private val extractionScope = CoroutineScope(extractionDispatcher + SupervisorJob())
     private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
@@ -1379,7 +1383,7 @@ class ServerService : Service() {
                                     "targetPath" to targetPath
                                 ))
 
-                                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                                extractionScope.launch {
                                     try {
                                         tempTarFile.inputStream().use { input ->
                                             extractor.extractTar(input, targetDir) { bytesRead ->
@@ -1652,9 +1656,10 @@ class ServerService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        stopServer()
+        extractionDispatcher.close()
         super.onDestroy()
         uploadNotificationManager?.cancelAll()
-        stopServer()
     }
 
     private fun hasConsecutiveIdenticalSegments(path: String?): Boolean {

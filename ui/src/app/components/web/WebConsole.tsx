@@ -68,7 +68,7 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { PreviewModal } from "./PreviewModal";
-import { createTarArchiveStream, filesToArchiveEntries } from "../../lib/upload/tarStream";
+import { uploadManager, type UploadStatus } from "../../lib/upload/UploadManager";
 import "../../../styles/console.css";
 import "../../../styles/animated-inputs.css";
 import "./animated-folder.css";
@@ -316,8 +316,6 @@ export function WebConsole() {
   const [terminalLogs, setTerminalLogs] = useState<{ id: string; msg: string; type: 'sys' | 'net' | 'io'; timestamp: string }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
-  const uploadQueueRef = useRef<File[][]>([]);
-  const isProcessingQueueRef = useRef<boolean>(false);
 
   type LoadPhase = 'intro' | 'password' | 'console';
 
@@ -1153,99 +1151,27 @@ export function WebConsole() {
 
   const processFiles = async (files: File[]) => {
     if (!files || files.length === 0) return;
-    
-    uploadQueueRef.current.push(files);
-    
-    if (isProcessingQueueRef.current) return;
-    isProcessingQueueRef.current = true;
 
-    try {
-      while (uploadQueueRef.current.length > 0) {
-        const currentBatch = uploadQueueRef.current.shift();
-        if (!currentBatch) continue;
-        await _processSingleBatch(currentBatch);
-      }
-    } finally {
-      isProcessingQueueRef.current = false;
-    }
-  };
-
-  const _processSingleBatch = async (files: File[]) => {
-
-    setUploadStatus('uploading');
-    setIsUploading(true);
-    setUploadProgress(0);
-    setFolderProgress({ success: 0, uploading: 1, failed: 0, total: 1 });
-    setFailedUploads([]);
-    setSanitizedUploads({});
-
-    try {
-      const archiveEntries = filesToArchiveEntries(files);
-      const rootNames = new Set(
-        archiveEntries
-          .map((entry) => entry.path.split('/')[0])
-          .filter((segment) => segment && segment.length > 0)
-      );
-      const archiveLabel = rootNames.size === 1
-        ? `${[...rootNames][0]}.tar`
-        : `upload-${new Date().getTime()}.tar`;
-      const uploadId = crypto.randomUUID();
-      
-      let uploadResult: any = null;
-      let lastError: Error | null = null;
-
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-          const tarArchive = createTarArchiveStream(archiveEntries);
-          const totalSize = tarArchive.byteLength;
-          
-          uploadResult = await uploadArchiveViaBestPath(
-            archiveLabel,
-            uploadId,
-            totalSize,
-            () => tarArchive.stream,
-            attempt,
-            (sent) => {
-              const p = Math.round((sent / totalSize) * 100);
-              if (p >= 100) {
-                setUploadStatus('extracting');
-                setUploadProgress(99); 
-              } else {
-                setUploadProgress(p);
-              }
-            }
-          );
-          lastError = null;
-          break;
-        } catch (error) {
-          lastError = error instanceof Error ? error : new Error(String(error));
-          if (attempt === 0) {
-            setUploadStatus('uploading'); // Reset state for retry
-            await new Promise((resolve) => setTimeout(resolve, 1200));
-          }
+    await uploadManager.enqueue(
+      files,
+      (sent, total, status) => {
+        setUploadStatus(status as any);
+        if (status === 'uploading' || status === 'extracting') {
+          setIsUploading(true);
+          const p = total > 0 ? Math.round((sent / total) * 100) : 0;
+          setUploadProgress(status === 'extracting' ? 99 : p);
+        } else if (status === 'success') {
+          setIsUploading(false);
+          setUploadProgress(100);
+          setFolderProgress({ success: 1, uploading: 0, failed: 0, total: 1 });
+          loadFiles(currentPath);
+        } else if (status === 'error') {
+          setIsUploading(false);
+          setFolderProgress({ success: 0, uploading: 0, failed: 1, total: 1 });
         }
-      }
-
-      if (lastError) {
-        throw lastError;
-      }
-
-      setFolderProgress({ success: 1, uploading: 0, failed: 0, total: 1 });
-      setUploadStatus('success');
-      setUploadProgress(100);
-      setSanitizedUploads(uploadResult?.status === 200 ? uploadResult.data?.sanitizedNames || {} : {});
-      await loadFiles(currentPath);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Archive upload failed';
-      setFolderProgress({ success: 0, uploading: 0, failed: 1, total: 1 });
-      setUploadStatus('error');
-      setFailedUploads(files.map((file) => ({ file, error: message })));
-      toast.error(message);
-    } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      if (folderInputRef.current) folderInputRef.current.value = "";
-    }
+      },
+      uploadArchiveViaBestPath
+    );
   };
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
