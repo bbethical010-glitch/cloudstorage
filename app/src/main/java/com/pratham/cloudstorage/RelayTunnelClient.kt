@@ -134,11 +134,13 @@ class RelayTunnelClient(
                                                 sendTextSafely(relayGson.toJson(response))
                                             }
                                             "stream-request-start" -> {
-                                                val requestId = envelope.requestId ?: continue
+                                                val requestIdStr = envelope.requestId ?: continue
+                                                val requestId = try { UUID.fromString(requestIdStr) } catch(_: Exception) { continue }
                                                 initializeRelaySession(requestId, envelope, { Frame.Text(it) }, { Frame.Binary(true, it) })
                                             }
                                             "stream-request-end" -> {
-                                                val requestId = envelope.requestId ?: continue
+                                                val requestIdStr = envelope.requestId ?: continue
+                                                val requestId = try { UUID.fromString(requestIdStr) } catch(_: Exception) { continue }
                                                 streamSessions.remove(requestId)?.finish()
                                             }
                                             "connected" -> Log.i(TAG, "Relay confirmed registration for $shareCode")
