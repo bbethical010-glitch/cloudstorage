@@ -582,13 +582,22 @@ export function WebConsole() {
 
   const { connectionState: p2pState, transport: p2pTransport, relayTransport, isReady: p2pReady, isDataChannelReady, reconnect: p2pReconnect } = webrtc;
 
-  // Unified "Online" Detection: Node is online if signaling OR P2P is healthy OR we are on a direct local connection
   useEffect(() => {
-    // We are NOT offline if we are actively connecting
+    // We are NOT offline if we are actively connecting or in fallback (Relay) mode
     const isConnecting = (p2pState === 'connecting' || p2pState === 'signaling' || p2pState === 'ice-gathering' || p2pState === 'dc-opening' || (p2pState === 'connected' && !isDataChannelReady));
-    const isOnline = isLocalSession || isSignalingOnline || (p2pState === 'connected' && isDataChannelReady) || isConnecting;
+    const isOnline = isLocalSession || isSignalingOnline || (p2pState === 'connected' && isDataChannelReady) || isConnecting || p2pState === 'fallback';
     setIsNodeOffline(!isOnline);
   }, [isLocalSession, isSignalingOnline, p2pState, isDataChannelReady]);
+
+  // Toast for P2P -> Relay fallback
+  useEffect(() => {
+    if (p2pState === 'fallback') {
+      toast.warning("P2P connection lost. Falling back to Relay mode.", {
+        description: "Your session will continue over a secure relay tunnel.",
+        duration: 5000,
+      });
+    }
+  }, [p2pState]);
 
   const canUseNodeApi = isLocalSession || (p2pState === 'connected' && isDataChannelReady) || p2pState === 'fallback';
 

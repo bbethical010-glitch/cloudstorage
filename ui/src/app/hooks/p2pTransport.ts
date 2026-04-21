@@ -50,6 +50,7 @@ export interface P2PResponse {
 }
 
 interface UploadStreamOptions {
+  method?: string;
   headers?: Record<string, string>;
   fileName?: string;
   displayName?: string;
@@ -81,8 +82,9 @@ export class P2PTransport {
     dataChannel.addEventListener('close', () => {
       this._ready = false;
       console.log('[P2P] DataChannel closed');
-      // Reject all pending requests
-      this.pending.forEach((req) => req.reject(new Error('DataChannel closed')));
+      // Reject all pending requests with a specific error so UI can handle it
+      const error = new Error('DataChannel closed');
+      this.pending.forEach((req) => req.reject(error));
       this.pending.clear();
     });
 
@@ -148,10 +150,50 @@ export class P2PTransport {
   async fetch(path: string, options: {
     method?: string;
     headers?: Record<string, string>;
-    body?: string | ArrayBuffer | null;
+    body?: string | ArrayBuffer | Blob | ReadableStream | null;
   } = {}): Promise<P2PResponse> {
     if (!this.dc || this.dc.readyState !== 'open') {
       throw new Error('Data channel is not open');
+    }
+
+    // Determine if we should use the binary streaming protocol for the request body.
+    // We use it if the body is a Blob, Stream, or an ArrayBuffer/String larger than 16KB.
+    const isLarge = (body: any) => {
+      if (!body) return false;
+      if (body instanceof Blob || body instanceof ReadableStream) return true;
+      if (typeof body === 'string') return body.length > 16384;
+      if (body instanceof ArrayBuffer) return body.byteLength > 16384;
+      return false;
+    };
+
+    if (isLarge(options.body)) {
+      const [pathPart, queryPart] = path.split('?');
+      let bodyStream: ReadableStream<Uint8Array>;
+      let bodySize = -1;
+
+      if (options.body instanceof ReadableStream) {
+        bodyStream = options.body;
+      } else if (options.body instanceof Blob) {
+        bodyStream = options.body.stream();
+        bodySize = options.body.size;
+      } else {
+        const bytes = typeof options.body === 'string' 
+          ? new TextEncoder().encode(options.body) 
+          : new Uint8Array(options.body as ArrayBuffer);
+        bodySize = bytes.length;
+        bodyStream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(bytes);
+            controller.close();
+          }
+        });
+      }
+
+      return this.uploadStream(pathPart, queryPart || '', bodyStream, {
+        method: options.method || 'POST',
+        headers: options.headers,
+        size: bodySize,
+      });
     }
 
     const id = crypto.randomUUID();
@@ -159,13 +201,13 @@ export class P2PTransport {
 
     console.log(`[REQ_DEBUG] P2P Fetch: ${method} ${path} [${id}]`);
 
-    // Encode body as base64 if present
+    // Encode body as base64 if present (safe for small payloads)
     let bodyB64: string | null = null;
     if (options.body) {
       if (typeof options.body === 'string') {
         bodyB64 = btoa(options.body);
       } else {
-        bodyB64 = arrayBufferToBase64(options.body);
+        bodyB64 = arrayBufferToBase64(options.body as ArrayBuffer);
       }
     }
 
@@ -185,16 +227,32 @@ export class P2PTransport {
     return new Promise<P2PResponse>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
 
-      // Send the JSON request over the DataChannel
-      this.dc!.send(JSON.stringify(request));
+      try {
+        // Send the JSON request over the DataChannel
+        this.dc!.send(JSON.stringify(request));
+      } catch (e) {
+        this.pending.delete(id);
+        reject(e);
+        return;
+      }
 
-      // Timeout after 3 minutes
-      setTimeout(() => {
+      // Timeout after 3 minutes for regular API calls
+      const timeout = setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id);
-          reject(new Error('P2P request timed out'));
+          reject(new Error(`P2P request timed out: ${method} ${path}`));
         }
       }, 180_000);
+
+      // Link request to channel state
+      const checkClose = () => {
+        if (this.dc?.readyState !== 'open') {
+          clearTimeout(timeout);
+          this.pending.delete(id);
+          reject(new Error('DataChannel closed during request'));
+        }
+      };
+      this.dc?.addEventListener('close', checkClose, { once: true });
     });
   }
 
@@ -227,14 +285,15 @@ export class P2PTransport {
 
     const requestId = crypto.getRandomValues(new Uint8Array(16));
     const idKey = Array.from(requestId).map(b => b.toString(16).padStart(2, '0')).join('');
+    const method = options.method || 'POST';
 
-    console.log(`[REQ_DEBUG] P2P Upload: ${path} [${idKey}]`);
+    console.log(`[REQ_DEBUG] P2P Binary Stream: ${method} ${path} [${idKey}]`);
 
     return new Promise<P2PResponse>((resolve, reject) => {
       this.pending.set(idKey, { resolve, reject });
 
       const startPayload = JSON.stringify({
-        method: 'POST',
+        method,
         path,
         query,
         headers: options.headers || {},
