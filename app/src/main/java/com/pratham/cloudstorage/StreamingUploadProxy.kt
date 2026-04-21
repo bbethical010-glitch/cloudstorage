@@ -109,7 +109,7 @@ class StreamingUploadProxySession(
         }
     }
 
-    private fun finish() {
+    fun finish() {
         Log.i(STREAMING_PROXY_TAG, "All chunks received ($bytesReceived bytes). Starting extraction...")
         state = UploadState.FINALIZING
         try {
