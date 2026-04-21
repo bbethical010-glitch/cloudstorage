@@ -133,48 +133,7 @@ class RelayTunnelClient(
                                             }
                                             "stream-request-start" -> {
                                                 val requestId = envelope.requestId ?: continue
-                                                val targetPath = envelope.path ?: "/api/upload/archive"
-                                                val query = envelope.query.orEmpty()
-                                                val method = envelope.method ?: HttpMethod.Post.value
-                                                val headers = envelope.headers.orEmpty()
-                                                val contentLength = envelope.contentLength ?: -1L
-                                                val uploadRestart = envelope.headers?.get("X-Upload-Restart") == "true"
-
-                                                streamSessions[requestId]?.cancel()
-                                                streamSessions[requestId] = StreamingUploadProxySession(
-                                                    scope = scope,
-                                                    localClient = localNodeClient,
-                                                    method = method,
-                                                    path = targetPath,
-                                                    query = query,
-                                                    headers = headers,
-                                                    contentLength = contentLength,
-                                                    onResponse = { status, responseHeaders, body ->
-                                                        streamSessions.remove(requestId)
-                                                        sendTextSafely(relayGson.toJson(
-                                                            RelayEnvelope(
-                                                                type = "stream-response",
-                                                                requestId = requestId,
-                                                                status = status,
-                                                                headers = responseHeaders,
-                                                                bodyBase64 = body.encodeBase64()
-                                                            )
-                                                        ))
-                                                    },
-                                                    onFailure = { error ->
-                                                        streamSessions.remove(requestId)
-                                                        sendTextSafely(relayGson.toJson(
-                                                            RelayEnvelope(
-                                                                type = "stream-response",
-                                                                requestId = requestId,
-                                                                status = 502,
-                                                                headers = mapOf(HttpHeaders.ContentType to "application/json; charset=utf-8"),
-                                                                bodyBase64 = """{"error":"local_node_unreachable"}""".encodeToByteArray().encodeBase64(),
-                                                                error = error.message
-                                                            )
-                                                        ))
-                                                    }
-                                                )
+                                                initializeRelaySession(requestId, envelope, { Frame.Text(it) }, { Frame.Binary(false, it) })
                                             }
                                             "stream-request-end" -> {
                                                 val requestId = envelope.requestId ?: continue
@@ -186,13 +145,21 @@ class RelayTunnelClient(
                                     }
                                     is Frame.Binary -> {
                                         val payload = frame.data
-                                        if (payload.size < 36) continue
-                                        // ID is first 36 bytes, padded with spaces if needed
-                                        val requestId = payload.copyOfRange(0, 36).decodeToString().trim()
-                                        val chunk = payload.copyOfRange(36, payload.size)
+                                        if (payload.size < 37) continue
                                         
-                                        if (chunk.isNotEmpty()) {
-                                            streamSessions[requestId]?.writeChunk(chunk)
+                                        val requestId = payload.copyOfRange(0, 36).decodeToString().trim()
+                                        val type = payload[36].toInt()
+                                        val chunk = payload.copyOfRange(37, payload.size)
+                                        
+                                        if (type == 1) { // MSG_TYPE_START
+                                            try {
+                                                val meta = relayGson.fromJson(chunk.decodeToString(), RelayEnvelope::class.java)
+                                                initializeRelaySession(requestId, meta, { Frame.Text(it) }, { Frame.Binary(false, it) })
+                                            } catch (e: Exception) {
+                                                Log.e(TAG, "Failed to parse binary START metadata", e)
+                                            }
+                                        } else {
+                                            streamSessions[requestId]?.handlePacket(type, chunk)
                                         }
                                     }
                                     else -> Unit
@@ -218,6 +185,45 @@ class RelayTunnelClient(
                 }
             }
         }
+    }
+
+    private suspend fun io.ktor.websocket.DefaultWebSocketServerSession.initializeRelaySession(
+        requestId: String,
+        envelope: RelayEnvelope,
+        textWrapper: (String) -> Frame,
+        binaryWrapper: (ByteArray) -> Frame
+    ) {
+        val targetPath = envelope.path ?: "/api/upload/archive"
+        val query = envelope.query.orEmpty()
+        val method = envelope.method ?: HttpMethod.Post.value
+        val headers = envelope.headers.orEmpty()
+        val contentLength = envelope.contentLength ?: envelope.size ?: -1L
+
+        streamSessions[requestId]?.cancel()
+        streamSessions[requestId] = StreamingUploadProxySession(
+            scope = scope,
+            localClient = localNodeClient,
+            method = method,
+            path = targetPath,
+            query = query,
+            headers = headers,
+            contentLength = contentLength,
+            onResponse = { _, _, _ -> streamSessions.remove(requestId) },
+            onFailure = { streamSessions.remove(requestId) },
+            onSignal = { ackType, ackPayload ->
+                val idBytes = requestId.padEnd(36, ' ').toByteArray().sliceArray(0..35)
+                val packet = ByteArray(36 + 1 + ackPayload.size)
+                System.arraycopy(idBytes, 0, packet, 0, 36)
+                packet[36] = ackType.toByte()
+                System.arraycopy(ackPayload, 0, packet, 37, ackPayload.size)
+                
+                scope.launch {
+                    outgoingMutex.withLock {
+                        outgoing.send(binaryWrapper(packet))
+                    }
+                }
+            }
+        )
     }
 
     fun stop() {
@@ -292,6 +298,7 @@ private data class RelayEnvelope(
     val headers: Map<String, String>? = null,
     val bodyBase64: String? = null,
     val contentLength: Long? = null,
+    val size: Long? = null, // Alias for contentLength
     val status: Int? = null,
     val error: String? = null
 )

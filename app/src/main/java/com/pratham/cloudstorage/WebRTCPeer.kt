@@ -315,14 +315,52 @@ class WebRTCPeer(
             }
 
             private fun handleBinaryChunk(browserId: String, dc: DataChannel, data: ByteBuffer) {
-                if (data.remaining() < 36) return
+                if (data.remaining() < 37) return
                 val idBytes = ByteArray(36)
                 data.get(idBytes)
                 val reqId = String(idBytes, Charsets.UTF_8).trim()
 
-                val remaining = ByteArray(data.remaining())
-                data.get(remaining)
-                uploadSessions[reqId]?.writeChunk(remaining)
+                val type = data.get().toInt()
+                val payload = ByteArray(data.remaining())
+                data.get(payload)
+
+                if (type == 1) { // MSG_TYPE_START
+                    val meta = gson.fromJson(String(payload, Charsets.UTF_8), Map::class.java) ?: return
+                    val fileName = meta["fileName"] as? String ?: "stream.bin"
+                    val fileSize = (meta["contentLength"] as? Double)?.toLong() ?: -1L
+                    val path = meta["path"] as? String ?: "/api/upload"
+                    val query = meta["query"] as? String ?: ""
+                    val headers = (meta["headers"] as? Map<*, *>)?.mapNotNull { (k, v) ->
+                        (k as? String) to (v as? String ?: "")
+                    }?.toMap() ?: emptyMap()
+
+                    TransferManager.startTransfer(reqId, fileName, fileSize, isDownload = false)
+                    
+                    uploadSessions[reqId]?.cancel()
+                    uploadSessions[reqId] = StreamingUploadProxySession(
+                        scope = GlobalScope,
+                        localClient = localClient,
+                        method = "POST",
+                        path = path,
+                        query = query,
+                        headers = headers,
+                        contentLength = fileSize,
+                        onProgress = { TransferManager.updateProgress(reqId, it) },
+                        onResponse = { _, _, _ -> uploadSessions.remove(reqId) },
+                        onFailure = { uploadSessions.remove(reqId) },
+                        onSignal = { ackType, ackPayload ->
+                            val idBuf = reqId.padEnd(36, ' ').toByteArray().sliceArray(0..35)
+                            val packet = ByteBuffer.allocate(36 + 1 + ackPayload.size)
+                            packet.put(idBuf)
+                            packet.put(ackType.toByte())
+                            packet.put(ackPayload)
+                            packet.flip()
+                            sendBinary(dc, packet)
+                        }
+                    )
+                } else {
+                    uploadSessions[reqId]?.handlePacket(type, payload)
+                }
             }
 
             override fun onBufferedAmountChange(amount: Long) {}

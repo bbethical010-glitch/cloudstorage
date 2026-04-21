@@ -16,6 +16,13 @@
 
 const CHUNK_SIZE = 64 * 1024; // 64KB — matches Android peer's chunk size
 
+// Binary Protocol Message Types
+const MSG_TYPE_DATA = 0;
+const MSG_TYPE_START = 1;
+const MSG_TYPE_END = 2;
+const MSG_TYPE_ACK = 3;
+const MSG_TYPE_ERROR = 4;
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface PendingRequest {
@@ -181,17 +188,20 @@ export class P2PTransport {
     return new Promise<P2PResponse>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
 
-      // 1. Send upload-start control message
-      const startMsg = {
-        type: 'upload-start',
-        id,
+      // 1. Send upload-start message (Type 1)
+      const startPayload = JSON.stringify({
         path,
         query,
         headers: options.headers || {},
         contentLength: options.size ?? -1,
         fileName: options.displayName || 'stream.bin',
-      };
-      this.dc!.send(JSON.stringify(startMsg));
+      });
+      const startPayloadBytes = new TextEncoder().encode(startPayload);
+      const startPacket = new Uint8Array(36 + 1 + startPayloadBytes.length);
+      startPacket.set(idBytes.slice(0, 36), 0);
+      startPacket.set([MSG_TYPE_START], 36);
+      startPacket.set(startPayloadBytes, 37);
+      this.dc!.send(startPacket);
 
       // 2. Stream the payload in 64KB packets
       const reader = stream.getReader();
@@ -234,7 +244,12 @@ export class P2PTransport {
 
         const { done, value } = await reader.read();
         if (done) {
-          this.dc!.send(JSON.stringify({ type: 'upload-end', id }));
+          // 3. Send upload-end message (Type 2)
+          const endPacket = new Uint8Array(36 + 1);
+          endPacket.set(idBytes.slice(0, 36), 0);
+          endPacket.set([MSG_TYPE_END], 36);
+          this.dc!.send(endPacket);
+          console.log(`[REQ_DEBUG] P2P Upload END sent [${id}]. Waiting for ACK...`);
           return;
         }
 
@@ -244,10 +259,12 @@ export class P2PTransport {
           return;
         }
 
-        const packet = new Uint8Array(36 + chunkData.length);
+        const packet = new Uint8Array(36 + 1 + chunkData.length);
         packet.set(idBytes.slice(0, 36), 0);
-        packet.set(chunkData, 36);
+        packet.set([MSG_TYPE_DATA], 36);
+        packet.set(chunkData, 37);
         this.dc!.send(packet);
+ Riverside
 
         sentBytes += chunkData.length;
         options.onProgress?.(sentBytes);
@@ -339,9 +356,22 @@ export class P2PTransport {
     const req = this.pending.get(reqId);
     if (!req || !req.chunks) return;
 
-    // Remaining bytes = file data chunk
-    const chunkData = new Uint8Array(data, 36);
-    req.chunks.push(chunkData);
+    // Remaining bytes: First byte is TYPE, then payload
+    const type = new Uint8Array(data, 36, 1)[0];
+    const payload = new Uint8Array(data, 37);
+
+    if (type === MSG_TYPE_DATA) {
+      req.chunks.push(payload);
+    } else if (type === MSG_TYPE_ACK) {
+      this.pending.delete(reqId);
+      console.log(`[REQ_DEBUG] P2P Upload ACK received [${reqId}]`);
+      const body = payload.length > 0 ? JSON.parse(new TextDecoder().decode(payload)) : { success: true };
+      req.resolve(createP2PResponse(200, { 'Content-Type': 'application/json' }, new TextEncoder().encode(JSON.stringify(body))));
+    } else if (type === MSG_TYPE_ERROR) {
+      this.pending.delete(reqId);
+      const errorText = new TextDecoder().decode(payload);
+      req.reject(new Error(errorText || 'Upload failed on backend'));
+    }
   }
 
   destroy() {

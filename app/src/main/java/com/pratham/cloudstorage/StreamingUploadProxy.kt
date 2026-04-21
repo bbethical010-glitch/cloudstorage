@@ -20,6 +20,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
+import java.nio.ByteBuffer
+
+private const val MSG_TYPE_DATA = 0
+private const val MSG_TYPE_START = 1
+private const val MSG_TYPE_END = 2
+private const val MSG_TYPE_ACK = 3
+private const val MSG_TYPE_ERROR = 4
 
 private const val STREAMING_PROXY_TAG = "StreamingUploadProxy"
 
@@ -38,13 +45,15 @@ class StreamingUploadProxySession(
     contentLength: Long,
     private val onProgress: (Long) -> Unit = {},
     private val onResponse: suspend (status: Int, headers: Map<String, String>, body: ByteArray) -> Unit,
-    private val onFailure: suspend (Throwable) -> Unit
+    private val onFailure: suspend (Throwable) -> Unit,
+    private val onSignal: ((type: Int, payload: ByteArray) -> Unit)? = null
 ) {
-    private val pipeInput = PipedInputStream(256 * 1024)
+    private val pipeInput = PipedInputStream(1024 * 1024) // 1MB buffer for high-velocity chunks
     private val pipeOutput = PipedOutputStream(pipeInput)
     private val writeLock = Any()
     private var bytesForwarded = 0L
     private var closed = false
+    private var isFinalized = false
 
     init {
         val querySuffix = if (query.isNotBlank()) "?$query" else ""
@@ -91,13 +100,25 @@ class StreamingUploadProxySession(
                         .associate { (key, values) -> key to values.joinToString(", ") }
                     val responseBody = statement.bodyAsChannel().readRemaining().readBytes()
                     onResponse(statement.status.value, responseHeaders, responseBody)
+                    
+                    // Signal ACK back to frontend
+                    onSignal?.invoke(MSG_TYPE_ACK, responseBody)
                 }
             } catch (error: Throwable) {
                 Log.e(STREAMING_PROXY_TAG, "Streaming proxy request failed", error)
                 onFailure(error)
+                onSignal?.invoke(MSG_TYPE_ERROR, error.message?.toByteArray() ?: "Proxy failure".toByteArray())
             } finally {
                 closeQuietly()
             }
+        }
+    }
+
+    fun handlePacket(type: Int, payload: ByteArray) {
+        when (type) {
+            MSG_TYPE_DATA -> writeChunk(payload)
+            MSG_TYPE_END -> finish()
+            MSG_TYPE_START -> { /* START is handled by session creation, but can be used for reset */ }
         }
     }
 

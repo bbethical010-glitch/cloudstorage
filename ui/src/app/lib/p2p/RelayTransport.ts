@@ -4,8 +4,14 @@ import type { P2PResponse } from '../../hooks/p2pTransport';
  * RelayTransport — Fast binary transport over WebSocket relay.
  * 
  * Used as a fallback when WebRTC P2P is unavailable. Replaces legacy JSON+Base64
- * logic with a high-performance binary frame protocol: [36 bytes UUID][binary data].
+ * logic with a high-performance binary frame protocol: [36 bytes UUID][1 byte TYPE][binary data].
  */
+
+const MSG_TYPE_DATA = 0;
+const MSG_TYPE_START = 1;
+const MSG_TYPE_END = 2;
+const MSG_TYPE_ACK = 3;
+const MSG_TYPE_ERROR = 4;
 export class RelayTransport {
   private ws: WebSocket | null = null;
   private pending = new Map<string, {
@@ -92,16 +98,21 @@ export class RelayTransport {
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
 
-      // 1. Signaling start
-      this.ws!.send(JSON.stringify({
-        type: 'stream-request-start',
-        requestId: id,
+      // 1. Signaling start (Type 1)
+      const startPayload = JSON.stringify({
         method: 'POST',
         path,
         query,
         headers: options.headers || {},
         contentLength: options.size ?? -1
-      }));
+      });
+      const startPayloadBytes = new TextEncoder().encode(startPayload);
+      const startPacket = new Uint8Array(36 + 1 + startPayloadBytes.length);
+      startPacket.set(requestIdBytes, 0);
+      startPacket.set([MSG_TYPE_START], 36);
+      startPacket.set(startPayloadBytes, 37);
+      
+      this.ws!.send(startPacket);
 
       // 2. Pump binary frames
       const reader = stream.getReader();
@@ -117,14 +128,20 @@ export class RelayTransport {
 
         const { done, value } = await reader.read();
         if (done) {
-          this.ws!.send(JSON.stringify({ type: 'stream-request-end', requestId: id }));
+          // 3. Signaling end (Type 2)
+          const endPacket = new Uint8Array(36 + 1);
+          endPacket.set(requestIdBytes, 0);
+          endPacket.set([MSG_TYPE_END], 36);
+          this.ws!.send(endPacket);
           return;
         }
+ Riverside
 
         const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
-        const packet = new Uint8Array(36 + chunk.length);
+        const packet = new Uint8Array(36 + 1 + chunk.length);
         packet.set(requestIdBytes.slice(0, 36), 0);
-        packet.set(chunk, 36);
+        packet.set([MSG_TYPE_DATA], 36);
+        packet.set(chunk, 37);
 
         this.ws!.send(packet);
         sentBytes += chunk.length;
@@ -161,8 +178,27 @@ export class RelayTransport {
         console.warn('[Relay] Failed to handle text message', e);
       }
     } else {
-      // Binary implementation if the relay server sends binary responses back
-      // Currently the relay server wraps responses in JSON, but we can optimize this later
+      // Direct binary frame from relay
+      const buffer = data as ArrayBuffer;
+      if (buffer.byteLength < 37) return;
+
+      const idBytes = new Uint8Array(buffer, 0, 36);
+      const requestId = new TextDecoder().decode(idBytes).trim();
+      const type = new Uint8Array(buffer, 36, 1)[0];
+      const payload = new Uint8Array(buffer, 37);
+
+      const req = this.pending.get(requestId);
+      if (!req) return;
+
+      if (type === MSG_TYPE_ACK) {
+        this.pending.delete(requestId);
+        const body = payload.length > 0 ? JSON.parse(new TextDecoder().decode(payload)) : { success: true };
+        req.resolve(this.createResponse(200, { 'Content-Type': 'application/json' }, new TextEncoder().encode(JSON.stringify(body))));
+      } else if (type === MSG_TYPE_ERROR) {
+        this.pending.delete(requestId);
+        const errorText = new TextDecoder().decode(payload);
+        req.reject(new Error(errorText || 'Relay streaming failed'));
+      }
     }
   }
 
