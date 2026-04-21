@@ -307,9 +307,10 @@ class WebRTCPeer(
                             sendBinary(dc, packet)
                         }
                     )
-                } else {
-                    uploadSessions[uploadId]?.handlePacket(type, seqNum, payload)
                 }
+                
+                // Always handle the packet in the session to advance sequence tracking
+                uploadSessions[uploadId]?.handlePacket(type, seqNum, payload)
             }
 
             override fun onBufferedAmountChange(amount: Long) {
