@@ -129,11 +129,11 @@ class StreamingUploadProxySession(
                         }
                     }
 
-                    val contentType = headers.entries
+                    val contentType = this@StreamingUploadProxySession.headers.entries
                         .firstOrNull { it.key.equals("Content-Type", true) }
                         ?.value
                         ?.takeIf { it.isNotBlank() }
-                        ?.let(ContentType::parse)
+                        ?.let { ContentType.parse(it) }
 
                     setBody(object : OutgoingContent.WriteChannelContent() {
                         override val contentLength: Long = tempFile.length()
