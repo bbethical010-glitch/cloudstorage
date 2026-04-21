@@ -311,7 +311,6 @@ export function WebConsole() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareConfig, setShareConfig] = useState({ expiry: '24h', readOnly: true });
-  const [activePreviewFile, setActivePreviewFile] = useState<FileNode | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<FileNode | null>(null);
   const [terminalLogs, setTerminalLogs] = useState<{ id: string; msg: string; type: 'sys' | 'net' | 'io'; timestamp: string }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -473,12 +472,7 @@ export function WebConsole() {
     setTerminalLogs(prev => [{ id, msg, type, timestamp }, ...prev].slice(0, 15));
   }, []);
 
-  const openPreview = (file: FileNode) => {
-    setActivePreviewFile(file);
-    logActivity(`PREVIEW_REQUEST: ${file.name}`, 'sys');
-    setTimeout(() => logActivity(`P2P_STREAM_INIT: ${file.id}`, 'net'), 400);
-    setTimeout(() => logActivity(`BLOB_GENERATED: success`, 'io'), 800);
-  };
+
 
   const SidebarContent = () => (
     <div className="sidebar-content-wrapper" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -1236,7 +1230,6 @@ export function WebConsole() {
       if (res.ok) {
         toast.success(file.isDirectory ? "Folder deleted" : "File deleted");
         if (selectedFile?.id === file.id) setSelectedFile(null);
-        if (activePreviewFile?.id === file.id) setActivePreviewFile(null);
         loadFiles(currentPath);
         loadStorageStats();
       } else {
@@ -1871,7 +1864,7 @@ export function WebConsole() {
                         className={`file-row ${selectedFile?.id === file.id ? "selected" : ""} ${isPreviewable ? "cursor-zoom-in" : ""}`}
                         onClick={() => {
                           if (file.isDirectory) navigateTo(file.path);
-                          else if (isPreviewable) openPreview(file);
+                          else if (isPreviewable) setSelectedFile(file);
                           else setSelectedFile(file);
                         }}
                       >
@@ -2156,36 +2149,7 @@ export function WebConsole() {
         )}
       </AnimatePresence>
 
-      {/* Preview Modal */}
-      <AnimatePresence>
-        {activePreviewFile && (
-          <div className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-md p-4 md:p-8 flex items-center justify-center">
-            <div className="w-full max-w-5xl h-[90vh] bg-[#08090E] rounded-[2rem] border border-[#1C2035] shadow-2xl overflow-hidden relative">
-              <PreviewModal
-                selectedFile={activePreviewFile}
-                currentPath={currentPath}
-                apiFetch={apiFetch}
-                onClose={() => setActivePreviewFile(null)}
-                onRename={handleRename}
-                onShare={() => setShowShareModal(true)}
-                onMove={(file) => {
-                  const dest = prompt("Enter destination folder path (e.g. Documents):");
-                  if (dest !== null) {
-                    setSelectedFiles(new Set([file.id]));
-                    handleBulkAction('move', dest);
-                  }
-                }}
-                onDelete={(file) => setDeleteCandidate(file)}
-                formatSize={formatSize}
-                formatDate={formatDate}
-                getFileIcon={getFileIcon}
-                connectionMode={p2pState === 'fallback' ? 'relay' : isLocalSession ? 'local' : 'p2p'}
-                getAuthenticatedUrl={getAuthenticatedUrl}
-              />
-            </div>
-          </div>
-        )}
-      </AnimatePresence>
+
 
       <svg width="0" height="0" style={{ position: "absolute" }}>
         <defs>

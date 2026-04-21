@@ -412,12 +412,11 @@ export function PreviewModal({
             </Button>
           </div>
 
-          <div className="aspect-square shrink-0 w-full min-h-[180px] bg-gradient-to-br from-[#111827] to-[#0B1220] rounded-[2rem] border border-[#1F2937] flex items-center justify-center mb-8 shadow-2xl relative overflow-hidden group">
-            <div className="absolute inset-0 bg-[#2563EB]/5 opacity-0 group-hover:opacity-100 transition-opacity" />
-            {renderPreviewContent()}
-          </div>
-
-          <div className="flex-1 overflow-y-auto space-y-8 pr-2 scrollbar-hide">
+          <div className="flex-1 overflow-y-auto space-y-8 pr-2 scrollbar-hide py-2">
+            <div className="aspect-square shrink-0 w-full min-h-[180px] bg-gradient-to-br from-[#111827] to-[#0B1220] rounded-[2rem] border border-[#1F2937] flex items-center justify-center mb-8 shadow-2xl relative overflow-hidden group">
+              <div className="absolute inset-0 bg-[#2563EB]/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+              {renderPreviewContent()}
+            </div>
             <div>
               <h3 className="text-xl font-bold break-words pr-4 text-white leading-tight">{selectedFile.name}</h3>
               <div className="flex items-center gap-2 mt-2">

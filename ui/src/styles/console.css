@@ -708,8 +708,7 @@
   grid-area: preview;
   background: #0F1117;
   border-left: 1px solid #1C2035;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   min-width: 0;
