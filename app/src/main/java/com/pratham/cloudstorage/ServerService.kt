@@ -1423,22 +1423,24 @@ class ServerService : Service() {
                                 // Signal extraction phase for UI tracking
                                 uploadNotificationManager?.onExtractionStarted(batchId)
                                 
-                                val extractionResult = withContext(Dispatchers.IO) {
-                                    extractTarToSaf(tempFile, targetDir)
-                                }
-                                
-                                // Signal completion after extraction is finished
-                                uploadNotificationManager?.onUploadComplete(batchId)
-                                
-                                tempFile.delete()
-                                
+                                // Release socket immediately
                                 call.respond(HttpStatusCode.OK, mapOf(
                                     "success" to true,
                                     "batchId" to batchId,
-                                    "filesExtracted" to extractionResult.filesExtracted,
-                                    "directoriesCreated" to extractionResult.directoriesCreated,
-                                    "totalBytesWritten" to extractionResult.totalBytesWritten
+                                    "status" to "extracting"
                                 ))
+                                
+                                // Background extraction
+                                scope.launch(Dispatchers.IO) {
+                                    try {
+                                        extractTarToSaf(tempFile, targetDir)
+                                        uploadNotificationManager?.onUploadComplete(batchId)
+                                    } catch (e: Exception) {
+                                        Log.e("ArchiveUpload", "Background extraction failed", e)
+                                    } finally {
+                                        tempFile.delete()
+                                    }
+                                }
                                 
                             } catch (e: Exception) {
                                 if (tempFile.exists()) tempFile.delete()
@@ -1491,20 +1493,24 @@ class ServerService : Service() {
                                     // Signal extraction phase
                                     uploadNotificationManager?.onExtractionStarted(batchId)
 
-                                    val result = withContext(Dispatchers.IO) {
-                                        extractTarToSaf(tempFile, targetDir)
-                                    }
-
-                                    // Signal completion
-                                    uploadNotificationManager?.onUploadComplete(batchId)
-                                    
-                                    tempFile.delete()
-                                    
+                                    // Respond immediately to release the socket
                                     call.respond(HttpStatusCode.OK, mapOf(
                                         "success" to true,
                                         "batchId" to batchId,
-                                        "filesExtracted" to result.filesExtracted
+                                        "status" to "extracting"
                                     ))
+
+                                    // Background extraction
+                                    scope.launch(Dispatchers.IO) {
+                                        try {
+                                            extractTarToSaf(tempFile, targetDir)
+                                            uploadNotificationManager?.onUploadComplete(batchId)
+                                        } catch (e: Exception) {
+                                            Log.e("ArchiveUpload", "Background chunk extraction failed", e)
+                                        } finally {
+                                            tempFile.delete()
+                                        }
+                                    }
                                 } catch (e: Exception) {
                                     if (tempFile.exists()) tempFile.delete()
                                     call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Extraction failed")))

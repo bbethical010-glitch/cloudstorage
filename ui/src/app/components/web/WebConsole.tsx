@@ -1133,19 +1133,31 @@ export function WebConsole() {
       },
     });
 
-    const response = await fetch(buildApiUrl(endpoint), {
-      method: 'POST',
-      headers: archiveHeaders,
-      body: progressStream,
-      // Chromium requires duplex when the request body is a ReadableStream.
-      duplex: 'half',
-    } as RequestInit & { duplex: 'half' });
+    // Add 5-minute timeout for archive uploads to accommodate background extraction.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 300000);
 
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok || !payload.success) {
-      throw new Error(payload.error || `Archive upload failed (${response.status})`);
+    try {
+      const response = await fetch(buildApiUrl(endpoint), {
+        method: 'POST',
+        headers: archiveHeaders,
+        body: progressStream,
+        signal: controller.signal,
+        // Chromium requires duplex when the request body is a ReadableStream.
+        duplex: 'half',
+      } as RequestInit & { duplex: 'half' });
+
+      clearTimeout(timeoutId);
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error || `Archive upload failed (${response.status})`);
+      }
+      return payload;
+    } catch (err) {
+      clearTimeout(timeoutId);
+      throw err;
     }
-    return payload;
   }, [buildApiUrl, currentPath, getHeaders, isDataChannelReady, p2pReady, p2pTransport, relayTransport]);
 
   const processFiles = async (files: File[]) => {

@@ -39,7 +39,7 @@ export class RelayTransport {
   /**
    * Primary entry point for making requests over the relay.
    */
-  async fetch(url: string, options: RequestInit = {}): Promise<P2PResponse> {
+  async fetch(url: string, options: RequestInit & { timeout?: number } = {}): Promise<P2PResponse> {
     if (!this.ready) throw new Error('Relay WebSocket is not connected');
 
     const id = crypto.randomUUID();
@@ -69,13 +69,14 @@ export class RelayTransport {
       this.pending.set(id, { resolve, reject });
       this.ws!.send(JSON.stringify(envelope));
 
-      // 60s timeout for regular requests
+      // Default 60s timeout for regular requests, can be overridden
+      const timeoutMs = options.timeout || 60000;
       setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id);
-          reject(new Error('Relay request timed out'));
+          reject(new Error(`Relay request timed out after ${timeoutMs}ms`));
         }
-      }, 60000);
+      }, timeoutMs);
     });
   }
 
@@ -105,7 +106,8 @@ export class RelayTransport {
       const response = await this.fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream' },
-        body: data as any
+        body: data as any,
+        timeout: 300000 // 5-minute timeout for archive chunks (includes extraction delay)
       });
       if (!response.ok) throw new Error(`Chunk ${chunkIndex} failed`);
       chunkIndex++;

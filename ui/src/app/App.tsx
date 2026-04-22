@@ -107,10 +107,11 @@ function Main() {
       const checkRemoteAuth = async () => {
         try {
           // Check if we have a stored session token
-          const storedToken = sessionStorage.getItem('cloud_storage_session_token');
+          // Get nodeId from URL hash if present
+          const nodeId = new URLSearchParams(window.location.hash.split('?')[1]).get('nodeId') || '';
           
           // Check auth status from the node
-          const authRes = await fetch(`/api/auth/status?t=${Date.now()}`);
+          const authRes = await fetch(`/api/auth/status?nodeId=${encodeURIComponent(nodeId)}&t=${Date.now()}`);
           if (authRes.ok) {
             const { hasAccount } = await authRes.json();
             
@@ -228,7 +229,8 @@ function Main() {
         const pwd = new URLSearchParams(window.location.hash.split('?')[1]).get('pwd') || appStateRaw?.node.shareCode || '';
         const token = localStorage.getItem('cloud_storage_android_token') || pwd;
         
-        const authStat = await fetch(localNodeApi(`/api/auth/status?t=${Date.now()}`));
+        const nodeId = appStateRaw?.node.shareCode || '';
+        const authStat = await fetch(localNodeApi(`/api/auth/status?nodeId=${encodeURIComponent(nodeId)}&t=${Date.now()}`));
         if (authStat.ok) {
            const { hasAccount } = await authStat.json();
            
