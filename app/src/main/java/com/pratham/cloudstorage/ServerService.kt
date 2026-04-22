@@ -84,6 +84,15 @@ private sealed class ManifestResult {
     ) : ManifestResult()
 }
 
+/**
+ * Event emitted when a background extraction task completes.
+ */
+data class ExtractionEvent(
+    val batchId: String,
+    val success: Boolean,
+    val error: String? = null
+)
+
 class ServerService : Service() {
     private val fileLocks = java.util.concurrent.ConcurrentHashMap<String, Any>()
     private val manifestMutex = Mutex()
@@ -112,7 +121,15 @@ class ServerService : Service() {
 
 
         val tunnelStatusFlow = kotlinx.coroutines.flow.MutableStateFlow(TunnelStatus.Offline)
+
+        /**
+         * Shared flow for extraction results, consumed by the WebRTC signaling layer.
+         */
+        val extractionEvents = kotlinx.coroutines.flow.MutableSharedFlow<ExtractionEvent>(
+            extraBufferCapacity = 64
+        )
     }
+
     private val activeSanitizationMap = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val archiveChunks = ConcurrentHashMap<String, MutableList<Pair<Int, ByteArray>>>()
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -1435,8 +1452,10 @@ class ServerService : Service() {
                                     try {
                                         extractTarToSaf(tempFile, targetDir)
                                         uploadNotificationManager?.onUploadComplete(batchId)
+                                        extractionEvents.emit(ExtractionEvent(batchId, true))
                                     } catch (e: Exception) {
                                         Log.e("ArchiveUpload", "Background extraction failed", e)
+                                        extractionEvents.emit(ExtractionEvent(batchId, false, e.message))
                                     } finally {
                                         tempFile.delete()
                                     }

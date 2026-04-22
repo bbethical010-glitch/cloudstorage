@@ -303,8 +303,13 @@ class WebRTCPeer(
                             contentLength = fileSize,
                             tempFile = tempFile,
                             onProgress = { TransferManager.updateProgress(uploadId.toString(), it) },
-                            onResponse = { _, _, _ -> uploadSessions.remove(uploadId) },
-                            onFailure = { uploadSessions.remove(uploadId) },
+                            onResponse = { _, _, responseBody -> 
+                                 val respText = String(responseBody, Charsets.UTF_8)
+                                 if (!respText.contains("\"status\":\"extracting\"")) {
+                                     uploadSessions.remove(uploadId)
+                                 }
+                             },
+                             onFailure = { uploadSessions.remove(uploadId) },
                             onSignal = { ackType: Int, ackPayload: ByteArray ->
                                 // Send binary ACK back
                                 val packet = ByteBuffer.allocate(16 + 1 + 4 + ackPayload.size)

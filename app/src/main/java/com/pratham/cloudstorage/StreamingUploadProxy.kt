@@ -30,6 +30,7 @@ private const val STREAMING_PROXY_TAG = "StreamingUploadProxy"
 enum class UploadState {
     RECEIVING, // Receiving DATA chunks
     FINALIZING, // END_UPLOAD received, buffering/sending to Ktor
+    EXTRACTING, // Background extraction in progress on local Ktor node
     COMPLETE,  // ACK received from Ktor and sent back to frontend
     FAILED     // Error occurred
 }
@@ -160,14 +161,48 @@ class StreamingUploadProxySession(
                         }
                         .associate { (key, values) -> key to values.joinToString(", ") }
                     val responseBody = statement.bodyAsChannel().readRemaining().readBytes()
-                    
-                    synchronized(writeLock) {
-                        state = UploadState.COMPLETE
-                    }
+                    val responseText = String(responseBody, Charsets.UTF_8)
 
-                    onResponse(statement.status.value, responseHeaders, responseBody)
-                    // Signal ACK back to frontend
-                    onSignal?.invoke(MSG_TYPE_ACK, responseBody)
+                    if (responseText.contains("\"status\":\"extracting\"")) {
+                        Log.i(STREAMING_PROXY_TAG, "Server acknowledged receipt, extraction starting in background...")
+                        synchronized(writeLock) {
+                            state = UploadState.EXTRACTING
+                        }
+                        
+                        // Detect batchId to match with the extraction event
+                        val batchId = extractBatchId(responseText)
+                        if (batchId != null) {
+                            scope.launch {
+                                ServerService.extractionEvents.collect { event ->
+                                    if (event.batchId == batchId) {
+                                        if (event.success) {
+                                            Log.i(STREAMING_PROXY_TAG, "Background extraction completed for $batchId")
+                                            synchronized(writeLock) { state = UploadState.COMPLETE }
+                                            val finalBody = "{\"success\":true,\"status\":\"complete\",\"batchId\":\"$batchId\"}".toByteArray()
+                                            onResponse(200, emptyMap(), finalBody)
+                                            onSignal?.invoke(MSG_TYPE_ACK, finalBody)
+                                        } else {
+                                            Log.e(STREAMING_PROXY_TAG, "Background extraction failed for $batchId: ${event.error}")
+                                            fail("Extraction failure: ${event.error ?: "Unknown error"}")
+                                        }
+                                        this.cancel() // Stop collecting once we match our batch
+                                    }
+                                }
+                            }
+                        } else {
+                            // Fallback if batchId is missing - complete immediately
+                            Log.w(STREAMING_PROXY_TAG, "Missing batchId in extraction response, completing immediately")
+                            synchronized(writeLock) { state = UploadState.COMPLETE }
+                            onResponse(statement.status.value, responseHeaders, responseBody)
+                            onSignal?.invoke(MSG_TYPE_ACK, responseBody)
+                        }
+                    } else {
+                        synchronized(writeLock) {
+                            state = UploadState.COMPLETE
+                        }
+                        onResponse(statement.status.value, responseHeaders, responseBody)
+                        onSignal?.invoke(MSG_TYPE_ACK, responseBody)
+                    }
                 }
             } catch (error: Throwable) {
                 Log.e(STREAMING_PROXY_TAG, "Extraction request failed", error)
@@ -176,6 +211,11 @@ class StreamingUploadProxySession(
                 cleanup()
             }
         }
+    }
+
+    private fun extractBatchId(json: String): String? {
+        val regex = "\"batchId\"\\s*:\\s*\"([^\"]+)\"".toRegex()
+        return regex.find(json)?.groupValues?.get(1)
     }
 
     private fun fail(message: String) {
