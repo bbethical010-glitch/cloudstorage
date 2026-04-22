@@ -18,6 +18,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.cancel
 
 private const val MSG_TYPE_DATA = 0
 private const val MSG_TYPE_START = 1
@@ -173,23 +175,25 @@ class StreamingUploadProxySession(
                         val batchId = extractBatchId(responseText)
                         if (batchId != null) {
                             scope.launch {
-                                ServerService.extractionEvents.collect { event ->
-                                    if (event.batchId == batchId) {
-                                        if (event.success) {
-                                            Log.i(STREAMING_PROXY_TAG, "Background extraction completed for $batchId")
-                                            synchronized(writeLock) { state = UploadState.COMPLETE }
-                                            val finalBody = "{\"success\":true,\"status\":\"complete\",\"batchId\":\"$batchId\"}".toByteArray()
-                                            onResponse(200, emptyMap(), finalBody)
-                                            onSignal?.invoke(MSG_TYPE_ACK, finalBody)
-                                        } else {
-                                            Log.e(STREAMING_PROXY_TAG, "Background extraction failed for $batchId: ${event.error}")
-                                            fail("Extraction failure: ${event.error ?: "Unknown error"}")
-                                        }
-                                        this.cancel() // Stop collecting once we match our batch
+                                try {
+                                    val event = ServerService.extractionEvents.first { it.batchId == batchId }
+                                    if (event.success) {
+                                        Log.i(STREAMING_PROXY_TAG, "Background extraction completed for $batchId")
+                                        synchronized(writeLock) { state = UploadState.COMPLETE }
+                                        val finalBody = "{\"success\":true,\"status\":\"complete\",\"batchId\":\"$batchId\"}".toByteArray()
+                                        onResponse(200, emptyMap(), finalBody)
+                                        onSignal?.invoke(MSG_TYPE_ACK, finalBody)
+                                    } else {
+                                        Log.e(STREAMING_PROXY_TAG, "Background extraction failed for $batchId: ${event.error}")
+                                        fail("Extraction failure: ${event.error ?: "Unknown error"}")
                                     }
+                                } catch (e: Exception) {
+                                    Log.e(STREAMING_PROXY_TAG, "Error waiting for extraction event", e)
+                                    fail("Extraction event error: ${e.message}")
                                 }
                             }
-                        } else {
+                        }
+ else {
                             // Fallback if batchId is missing - complete immediately
                             Log.w(STREAMING_PROXY_TAG, "Missing batchId in extraction response, completing immediately")
                             synchronized(writeLock) { state = UploadState.COMPLETE }
