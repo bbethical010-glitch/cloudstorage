@@ -1082,7 +1082,7 @@ export function WebConsole() {
       'X-Upload-Restart': retryAttempt > 0 ? 'true' : 'false',
     } as Record<string, string>;
 
-    if (p2pReady && isDataChannelReady && p2pTransport?.ready) {
+    if (p2pReady && p2pTransport?.ready) {
       const response = await p2pTransport.uploadStream(archivePath, archiveQuery, streamFactory(), {
         headers: archiveHeaders,
         displayName: archiveName,
@@ -1152,31 +1152,66 @@ export function WebConsole() {
   const processFiles = async (files: File[]) => {
     if (!files || files.length === 0) return;
 
-    await uploadManager.enqueue(
-      files,
-      (sent, total, status) => {
-        setUploadStatus(status as any);
-        if (status === 'uploading' || status === 'extracting') {
-          setIsUploading(true);
-          const p = total > 0 ? Math.round((sent / total) * 100) : 0;
-          setUploadProgress(status === 'extracting' ? 99 : p);
-        } else if (status === 'success') {
-          setIsUploading(false);
-          setUploadProgress(100);
-          setFolderProgress({ success: 1, uploading: 0, failed: 0, total: 1 });
-          loadFiles(currentPath);
-        } else if (status === 'error') {
-          setIsUploading(false);
-          setFolderProgress({ success: 0, uploading: 0, failed: 1, total: 1 });
+    // Immediately show upload progress at 0%
+    setIsUploading(true);
+    setUploadProgress(0);
+    setUploadStatus('uploading');
+
+    try {
+      // Patient Channel Readiness: If P2P is expected but connecting, wait for it
+      if (p2pReady && p2pTransport) {
+        const channel = p2pTransport.dataChannel;
+        if (channel && channel.readyState === 'connecting') {
+          console.log("[P2P_DEBUG] DataChannel is connecting. Waiting for 'open' event before starting queue...");
+          await new Promise<void>((resolve) => {
+            const onOpen = () => {
+              channel.removeEventListener('open', onOpen);
+              resolve();
+            };
+            channel.addEventListener('open', onOpen);
+            // Safety timeout: don't wait forever, let the upload attempt handle it if it still fails
+            setTimeout(() => {
+              channel.removeEventListener('open', onOpen);
+              resolve();
+            }, 5000);
+          });
         }
-      },
-      uploadArchiveViaBestPath
-    );
+      }
+
+      await uploadManager.enqueue(
+        files,
+        (sent, total, status) => {
+          setUploadStatus(status as any);
+          if (status === 'uploading' || status === 'extracting') {
+            setIsUploading(true);
+            const p = total > 0 ? Math.round((sent / total) * 100) : 0;
+            setUploadProgress(status === 'extracting' ? 99 : p);
+          } else if (status === 'success') {
+            setIsUploading(false);
+            setUploadProgress(100);
+            setFolderProgress({ success: 1, uploading: 0, failed: 0, total: 1 });
+            loadFiles(currentPath);
+          } else if (status === 'error') {
+            setIsUploading(false);
+            setFolderProgress({ success: 0, uploading: 0, failed: 1, total: 1 });
+          }
+        },
+        uploadArchiveViaBestPath
+      );
+    } catch (err) {
+      console.error("Upload Queue Failed:", err);
+      // Reset UI state on early failure
+      setIsUploading(false);
+      setUploadStatus('error');
+      toast.error("Upload failed to start");
+    }
   };
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       processFiles(Array.from(e.target.files));
+      // Reset input value so the same file can be uploaded again
+      e.target.value = '';
     }
   };
 

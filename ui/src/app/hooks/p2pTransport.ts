@@ -65,6 +65,10 @@ export class P2PTransport {
   private pending = new Map<string, PendingRequest>();
   private _ready = false;
 
+  public get dataChannel(): RTCDataChannel | null {
+    return this.dc;
+  }
+
   get ready(): boolean {
     return this._ready && this.dc?.readyState === 'open';
   }
