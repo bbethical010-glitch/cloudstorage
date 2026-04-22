@@ -59,7 +59,6 @@ import kotlinx.coroutines.newSingleThreadContext
 import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.serialization.gson.*
-import io.ktor.server.plugins.timeout.HttpTimeout
 import android.webkit.MimeTypeMap
 import android.util.Log
 import java.util.concurrent.ConcurrentHashMap
@@ -177,18 +176,12 @@ class ServerService : Service() {
         UploadNotificationManager.updateNodeStatus(NodeStatus.STARTING)
         scope.launch {
             server = embeddedServer(Netty, port = DEFAULT_PORT, configure = {
-                // Socket read timeout — how long to wait for data between reads
-                // Set to 0 (infinite) for archive endpoint, handled by request-level timeout
-                socketReadTimeoutSeconds = 0
-                
-                // Connection timeout for initial handshake
-                connectionIdleTimeoutSeconds = 300  // 5 minutes
-                
                 // Request read timeout — time to read the full request body
-                requestReadTimeoutSeconds = 0  // Disable global — handle per-route
+                // Set to -1 to disable timeout for large archive uploads
+                requestReadTimeoutSeconds = -1
                 
                 // Response write timeout
-                responseWriteTimeoutSeconds = 300
+                responseWriteTimeoutSeconds = 600 // 10 minutes
             }) {
                 // Enforce CORS universally, including error responses that can
                 // otherwise bypass the CORS plugin and surface as WebView JS errors.
@@ -202,13 +195,6 @@ class ServerService : Service() {
                         "Authorization,Content-Type,Range,Accept-Ranges,Accept,X-Node-Id,X-Requested-With,pwd,Cache-Control,X-Archive-Name,X-Upload-Id,X-Upload-Restart,X-Target-Path,X-Batch-Id"
                     )
                     call.response.header("Access-Control-Expose-Headers", "Content-Length,Content-Range,Accept-Ranges")
-                }
-
-                install(HttpTimeout) {
-                    // Disable global timeout — use per-route timeouts
-                    requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
-                    connectTimeoutMillis = 30_000L
-                    socketTimeoutMillis  = HttpTimeout.INFINITE_TIMEOUT_MS
                 }
  
                 install(StatusPages) {
