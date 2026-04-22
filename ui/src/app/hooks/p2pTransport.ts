@@ -33,6 +33,7 @@ interface PendingRequest {
   /** Response metadata received via res-start */
   headers?: Record<string, string>;
   status?: number;
+  ackTimeout?: any;
 }
 
 export interface P2PResponse {
@@ -361,6 +362,19 @@ export class P2PTransport {
             
             console.log(`[REQ_DEBUG] P2P Upload END sent [${idKey}]. Waiting for ACK...`);
 
+            // Fix 4 — ACK Watchdog
+            // If the server finishes receiving but fails to extract/ACK, the UI should not hang.
+            const ackTimeout = setTimeout(() => {
+              if (this.pending.has(idKey)) {
+                console.error(`[P2P] ACK Timeout [${idKey}]: Server received data but never acknowledged extraction.`);
+                this.pending.delete(idKey);
+                reject(new Error('Extraction timed out. The files might still be processing on the device.'));
+              }
+            }, 120_000); // 2 minute watchdog for extraction ACK
+
+            const pendingReq = this.pending.get(idKey);
+            if (pendingReq) pendingReq.ackTimeout = ackTimeout;
+
           } finally {
             reader.releaseLock();
           }
@@ -457,11 +471,13 @@ export class P2PTransport {
     if (type === MSG_TYPE_DATA) {
       if (req.chunks) req.chunks.push(payload);
     } else if (type === MSG_TYPE_ACK) {
+      if (req.ackTimeout) clearTimeout(req.ackTimeout);
       this.pending.delete(idKey);
       console.log(`[REQ_DEBUG] P2P Upload ACK received [${idKey}]`);
       const body = payload.length > 0 ? JSON.parse(new TextDecoder().decode(payload)) : { success: true };
       req.resolve(createP2PResponse(200, { 'Content-Type': 'application/json' }, new TextEncoder().encode(JSON.stringify(body))));
     } else if (type === MSG_TYPE_ERROR) {
+      if (req.ackTimeout) clearTimeout(req.ackTimeout);
       this.pending.delete(idKey);
       const errorText = new TextDecoder().decode(payload);
       req.reject(new Error(errorText || 'Upload failed on backend'));

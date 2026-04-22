@@ -59,6 +59,13 @@ import kotlinx.coroutines.newSingleThreadContext
 import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.serialization.gson.*
+import io.ktor.server.plugins.timeout.HttpTimeout
+import android.webkit.MimeTypeMap
+import android.util.Log
+import java.util.concurrent.ConcurrentHashMap
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import io.ktor.server.application.ApplicationCall
+import kotlinx.coroutines.withContext
 
 /**
  * Typed result from the folder manifest handler.
@@ -108,6 +115,7 @@ class ServerService : Service() {
         val tunnelStatusFlow = kotlinx.coroutines.flow.MutableStateFlow(TunnelStatus.Offline)
     }
     private val activeSanitizationMap = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val archiveChunks = ConcurrentHashMap<String, MutableList<Pair<Int, ByteArray>>>()
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START_SERVER -> {
@@ -168,7 +176,20 @@ class ServerService : Service() {
 
         UploadNotificationManager.updateNodeStatus(NodeStatus.STARTING)
         scope.launch {
-            server = embeddedServer(Netty, port = DEFAULT_PORT) {
+            server = embeddedServer(Netty, port = DEFAULT_PORT, configure = {
+                // Socket read timeout — how long to wait for data between reads
+                // Set to 0 (infinite) for archive endpoint, handled by request-level timeout
+                socketReadTimeoutSeconds = 0
+                
+                // Connection timeout for initial handshake
+                connectionIdleTimeoutSeconds = 300  // 5 minutes
+                
+                // Request read timeout — time to read the full request body
+                requestReadTimeoutSeconds = 0  // Disable global — handle per-route
+                
+                // Response write timeout
+                responseWriteTimeoutSeconds = 300
+            }) {
                 // Enforce CORS universally, including error responses that can
                 // otherwise bypass the CORS plugin and surface as WebView JS errors.
                 intercept(io.ktor.server.application.ApplicationCallPipeline.Plugins) {
@@ -178,11 +199,18 @@ class ServerService : Service() {
                     call.response.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,PATCH,OPTIONS")
                     call.response.header(
                         "Access-Control-Allow-Headers",
-                        "Authorization,Content-Type,Range,Accept-Ranges,Accept,X-Node-Id,X-Requested-With,pwd,Cache-Control,X-Archive-Name,X-Upload-Id,X-Upload-Restart"
+                        "Authorization,Content-Type,Range,Accept-Ranges,Accept,X-Node-Id,X-Requested-With,pwd,Cache-Control,X-Archive-Name,X-Upload-Id,X-Upload-Restart,X-Target-Path,X-Batch-Id"
                     )
                     call.response.header("Access-Control-Expose-Headers", "Content-Length,Content-Range,Accept-Ranges")
                 }
 
+                install(HttpTimeout) {
+                    // Disable global timeout — use per-route timeouts
+                    requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
+                    connectTimeoutMillis = 30_000L
+                    socketTimeoutMillis  = HttpTimeout.INFINITE_TIMEOUT_MS
+                }
+ 
                 install(StatusPages) {
                     exception<Throwable> { call, cause ->
                         android.util.Log.e("Ktor", "Unhandled exception: ${cause::class.simpleName}", cause)
@@ -1342,68 +1370,165 @@ class ServerService : Service() {
 
                         post("/upload/archive") {
                             if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
-
-                            val archiveName = call.request.headers["X-Archive-Name"]?.takeIf { it.isNotBlank() } ?: "upload.tar"
-                            val uploadId = call.request.headers["X-Upload-Id"]?.takeIf { it.isNotBlank() } ?: archiveName
-                            val contentLength = call.request.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: -1L
-
+                            
+                            val batchId = call.request.headers["X-Batch-Id"]
+                                ?: call.request.queryParameters["batchId"]
+                                ?: java.util.UUID.randomUUID().toString()
+                            
+                            val targetPath = call.request.headers["X-Target-Path"]
+                                ?: call.request.queryParameters["targetPath"]
+                                ?: ""
+                            
+                            Log.d("ArchiveUpload", "Starting archive receive: batchId=$batchId targetPath=$targetPath")
+                            
+                            // Write archive to a temp file as it streams in — never buffer in RAM
+                            val tempFile = java.io.File(cacheDir, "archive_${batchId}.tar")
+                            
                             try {
-                                val targetPath = call.request.queryParameters["path"] ?: ""
-                                val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
-                                    ?: return@post call.respondJson(false, "Storage not mounted", "STORAGE_OFFLINE")
-                                val targetDir = if (targetPath.isBlank()) {
-                                    root
-                                } else {
-                                    resolveSafePath(root, targetPath)
-                                        ?: return@post call.respondJson(false, "Upload target directory not found", "TARGET_NOT_FOUND")
-                                }
-
-                                uploadNotificationManager?.onUploadStarted(uploadId, archiveName, maxOf(contentLength, 0L))
-
-                                var streamedBytes = 0L
-                                val extractor = ArchiveStreamExtractor(
-                                    contentResolver = contentResolver,
-                                    resolveOrCreateDirectory = ::resolveOrCreateDirectory,
-                                    findFileReliable = ::findFileReliable,
-                                    sanitizeFilename = ::sanitizeFilename
-                                )
-
-                                val tempTarFile = java.io.File(this@ServerService.cacheDir, "extract_${uploadId}.tar")
-                                call.receiveChannel().toInputStream().use { input ->
-                                    tempTarFile.outputStream().use { out ->
-                                        input.copyTo(out)
-                                        out.flush()
-                                    }
-                                }
-                                streamedBytes = tempTarFile.length()
-
-                                call.respondJson(true, data = mapOf(
-                                    "archive" to archiveName,
-                                    "bytesReceived" to streamedBytes,
-                                    "targetPath" to targetPath
-                                ))
-
-                                extractionScope.launch {
-                                    try {
-                                        tempTarFile.inputStream().use { input ->
-                                            extractor.extractTar(input, targetDir) { bytesRead ->
-                                                if (contentLength > 0L) {
-                                                    uploadNotificationManager?.onProgressUpdate(uploadId, minOf(bytesRead, contentLength))
-                                                }
+                                var bytesReceived = 0L
+                                val startTime = System.currentTimeMillis()
+                                
+                                withContext(Dispatchers.IO) {
+                                    tempFile.outputStream().buffered(65536).use { output ->
+                                        val channel = call.receiveChannel()
+                                        val buffer = ByteArray(65536)
+                                        
+                                        while (!channel.isClosedForRead) {
+                                            val bytesRead = channel.readAvailable(buffer)
+                                            if (bytesRead <= 0) break
+                                            output.write(buffer, 0, bytesRead)
+                                            bytesReceived += bytesRead
+                                            
+                                            // Log progress every 10MB
+                                            if (bytesReceived % (10 * 1024 * 1024) < 65536) {
+                                                val elapsed = System.currentTimeMillis() - startTime
+                                                val speedMBps = (bytesReceived / 1024.0 / 1024.0) / (elapsed / 1000.0)
+                                                Log.d("ArchiveUpload", 
+                                                    "Received ${bytesReceived / 1024 / 1024}MB" +
+                                                    " (%.1f MB/s)".format(speedMBps))
                                             }
                                         }
-                                        uploadNotificationManager?.onUploadComplete(uploadId)
-                                    } catch (e: Exception) {
-                                        uploadNotificationManager?.onUploadFailed(uploadId, e.message ?: "Archive extraction failed")
-                                        android.util.Log.e("UploadArchive", "Streaming archive extraction failed", e)
-                                    } finally {
-                                        tempTarFile.delete()
+                                        output.flush()
                                     }
                                 }
+                                
+                                Log.d("ArchiveUpload", 
+                                    "Archive fully received: $bytesReceived bytes, starting extraction")
+                                
+                                // Extract the TAR archive to the target directory
+                                val rootDoc = DocumentFile.fromTreeUri(this@ServerService, rootUri)
+                                    ?: run {
+                                        tempFile.delete()
+                                        call.respond(HttpStatusCode.ServiceUnavailable,
+                                            mapOf("error" to "storage_unavailable"))
+                                        return@post
+                                    }
+                                
+                                val targetDir = if (targetPath.isBlank()) rootDoc
+                                    else resolveOrCreatePath(rootDoc, targetPath)
+                                
+                                if (targetDir == null) {
+                                    tempFile.delete()
+                                    call.respond(HttpStatusCode.BadRequest,
+                                        mapOf("error" to "target_path_invalid", "path" to targetPath))
+                                    return@post
+                                }
+                                
+                                // Signal extraction phase for UI tracking
+                                uploadNotificationManager?.onExtractionStarted(batchId)
+                                
+                                val extractionResult = withContext(Dispatchers.IO) {
+                                    extractTarToSaf(tempFile, targetDir)
+                                }
+                                
+                                // Signal completion after extraction is finished
+                                uploadNotificationManager?.onUploadComplete(batchId)
+                                
+                                tempFile.delete()
+                                
+                                call.respond(HttpStatusCode.OK, mapOf(
+                                    "success" to true,
+                                    "batchId" to batchId,
+                                    "filesExtracted" to extractionResult.filesExtracted,
+                                    "directoriesCreated" to extractionResult.directoriesCreated,
+                                    "totalBytesWritten" to extractionResult.totalBytesWritten
+                                ))
+                                
                             } catch (e: Exception) {
-                                uploadNotificationManager?.onUploadFailed(uploadId, e.message ?: "Archive upload failed")
-                                android.util.Log.e("UploadArchive", "Streaming archive upload failed", e)
-                                call.respondJson(false, e.message ?: "Archive upload failed", "ARCHIVE_UPLOAD_FAILED")
+                                if (tempFile.exists()) tempFile.delete()
+                                Log.e("ArchiveUpload", "Archive upload failed: batchId=$batchId", e)
+                                call.respond(HttpStatusCode.InternalServerError, mapOf(
+                                    "error" to (e::class.simpleName ?: "UnknownError"),
+                                    "message" to (e.message ?: "Archive processing failed"),
+                                    "batchId" to batchId
+                                ))
+                            }
+                        }
+
+                        post("/upload/archive/chunk") {
+                            if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            val batchId     = call.request.queryParameters["batchId"] ?: return@post
+                            val chunkIndex  = call.request.queryParameters["chunkIndex"]?.toIntOrNull() ?: 0
+                            val totalChunks = call.request.queryParameters["totalChunks"]?.toIntOrNull() ?: 1
+                            val targetPath  = call.request.queryParameters["targetPath"] ?: ""
+                            val isFinal     = call.request.queryParameters["isFinal"]?.toBooleanStrictOrNull() ?: false
+                            
+                            val chunkBytes = call.receive<ByteArray>()
+                            
+                            // Store this chunk
+                            archiveChunks.getOrPut(batchId) { mutableListOf() }
+                                .add(Pair(chunkIndex, chunkBytes))
+                            
+                            if (isFinal || archiveChunks[batchId]?.size == totalChunks) {
+                                // All chunks received — reassemble and extract
+                                val chunks = archiveChunks.remove(batchId)
+                                    ?.sortedBy { it.first }
+                                    ?.map { it.second }
+                                    ?: run {
+                                        call.respond(HttpStatusCode.BadRequest,
+                                            mapOf("error" to "chunks_not_found"))
+                                        return@post
+                                    }
+                                
+                                // Write reassembled archive to temp file
+                                val tempFile = java.io.File(cacheDir, "relay_archive_${batchId}.tar")
+                                try {
+                                    tempFile.outputStream().use { out ->
+                                        chunks.forEach { out.write(it) }
+                                    }
+                                    
+                                    // Extract using existing TAR extraction logic
+                                    val rootDoc = DocumentFile.fromTreeUri(this@ServerService, rootUri)!!
+                                    val targetDir = if (targetPath.isBlank()) rootDoc
+                                        else resolveOrCreatePath(rootDoc, targetPath)!!
+                                    
+                                    // Signal extraction phase
+                                    uploadNotificationManager?.onExtractionStarted(batchId)
+
+                                    val result = withContext(Dispatchers.IO) {
+                                        extractTarToSaf(tempFile, targetDir)
+                                    }
+
+                                    // Signal completion
+                                    uploadNotificationManager?.onUploadComplete(batchId)
+                                    
+                                    tempFile.delete()
+                                    
+                                    call.respond(HttpStatusCode.OK, mapOf(
+                                        "success" to true,
+                                        "batchId" to batchId,
+                                        "filesExtracted" to result.filesExtracted
+                                    ))
+                                } catch (e: Exception) {
+                                    if (tempFile.exists()) tempFile.delete()
+                                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Extraction failed")))
+                                }
+                            } else {
+                                // Chunk received, waiting for more
+                                call.respond(HttpStatusCode.Accepted, mapOf(
+                                    "received" to chunkIndex,
+                                    "waiting" to (totalChunks - (archiveChunks[batchId]?.size ?: 0))
+                                ))
                             }
                         }
 
@@ -2052,5 +2177,69 @@ class ServerService : Service() {
         if (code != null) map["code"] = code
         if (data != null) map["data"] = data
         this.respond(map)
+    }
+
+    data class ExtractionResult(
+        val filesExtracted: Int,
+        val directoriesCreated: Int,
+        val totalBytesWritten: Long
+    )
+
+    private fun extractTarToSaf(tarFile: File, targetDir: DocumentFile): ExtractionResult {
+        var filesCount = 0
+        var dirsCount = 0
+        var totalBytes = 0L
+
+        tarFile.inputStream().buffered().use { fis ->
+            TarArchiveInputStream(fis).use { tais ->
+                var entry = tais.nextEntry
+                while (entry != null) {
+                    if (tais.canReadEntryData(entry)) {
+                        val name = entry.name
+                        if (entry.isDirectory) {
+                            resolveOrCreatePath(targetDir, name)
+                            dirsCount++
+                        } else {
+                            val parentPath = name.substringBeforeLast("/", "")
+                            val fileName = name.substringAfterLast("/")
+                            
+                            val destDir = if (parentPath.isEmpty()) targetDir 
+                                         else resolveOrCreatePath(targetDir, parentPath)
+                            
+                            if (destDir != null) {
+                                val mimeType = MimeTypeMap.getSingleton()
+                                    .getMimeTypeFromExtension(fileName.substringAfterLast(".", "")) 
+                                    ?: "application/octet-stream"
+                                
+                                val newFile = destDir.createFile(mimeType, fileName)
+                                if (newFile != null) {
+                                    contentResolver.openOutputStream(newFile.uri)?.use { out ->
+                                        val buffer = ByteArray(65536)
+                                        var bytesRead: Int
+                                        while (tais.read(buffer).also { bytesRead = it } != -1) {
+                                            out.write(buffer, 0, bytesRead)
+                                            totalBytes += bytesRead
+                                        }
+                                        out.flush()
+                                    }
+                                    filesCount++
+                                }
+                            }
+                        }
+                    }
+                    entry = tais.nextEntry
+                }
+            }
+        }
+        return ExtractionResult(filesCount, dirsCount, totalBytes)
+    }
+
+    private fun resolveOrCreatePath(root: DocumentFile, path: String): DocumentFile? {
+        var current = root
+        val segments = path.split("/").filter { it.isNotBlank() }
+        for (segment in segments) {
+            current = current.findFile(segment) ?: current.createDirectory(segment) ?: return null
+        }
+        return current
     }
 }

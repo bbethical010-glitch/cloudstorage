@@ -40,6 +40,11 @@ sealed class TransferCardState {
         val elapsedMs: Long
     ) : TransferCardState()
     
+    data class Extracting(
+        val fileName: String,
+        val totalBytes: Long
+    ) : TransferCardState()
+
     data class Completing(
         val fileName: String,
         val totalBytes: Long
@@ -129,6 +134,28 @@ class UploadNotificationManager(private val context: Context) {
         
         updateNotification(transferId)
         updateSummaryNotification()
+    }
+
+    fun onExtractionStarted(transferId: String) {
+        val progress = activeUploads[transferId] ?: return
+        
+        updateCardState(TransferCardState.Extracting(
+            fileName = progress.filename,
+            totalBytes = progress.totalBytes
+        ))
+        
+        // Update notification to show extraction
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setContentTitle("Extracting ${progress.filename}")
+            .setContentText("Processing archive contents...")
+            .setSubText("Extracting")
+            .setProgress(100, 0, true) // Indeterminate progress
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setGroup("uploads")
+
+        notificationManager.notify(transferId.hashCode(), builder.build())
     }
 
     fun onProgressUpdate(transferId: String, bytesWritten: Long) {

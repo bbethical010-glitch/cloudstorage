@@ -1099,19 +1099,18 @@ export function WebConsole() {
     }
 
     if (relayTransport?.ready) {
-      // Optimized binary streaming over WebSocket relay
-      const response = await relayTransport.uploadStream(archivePath, archiveQuery, streamFactory(), {
-        headers: archiveHeaders,
-        size: totalBytes,
-        onProgress: (sentBytes) => {
+      // Fix 5 — Chunked Relay Upload
+      // Use HTTP chunks for relay transport to bypass Render's 30s streaming limit.
+      return await relayTransport.uploadArchiveViaRelay(
+        archiveName,
+        uploadId,
+        totalBytes,
+        streamFactory,
+        currentPath || '',
+        (sentBytes) => {
           setUploadProgress(totalBytes > 0 ? Math.min(100, Math.round((sentBytes / totalBytes) * 100)) : 0);
         }
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || !payload.success) {
-        throw new Error(payload.error || `Archive upload via relay failed (${response.status})`);
-      }
-      return payload;
+      );
     }
 
     let sentBytes = 0;
@@ -2085,7 +2084,9 @@ export function WebConsole() {
                    uploadStatus === "error" ? "Failed" : 
                    uploadStatus === "partial" ? "Partial" : "Idle"}
                 </span>
-                <span style={{ fontSize: 10, fontFamily: "monospace", fontWeight: 700, color: "white" }}>{uploadProgress}%</span>
+                <span style={{ fontSize: 10, fontFamily: "monospace", fontWeight: 700, color: "white" }}>
+                  {uploadStatus === 'extracting' ? '...' : `${uploadProgress}%`}
+                </span>
               </div>
               <Progress value={uploadProgress} className={`h-1 bg-[#0B1220] ${uploadStatus === "success" ? "[&>div]:bg-[#10B981]" : uploadStatus === "error" ? "[&>div]:bg-[#EF4444]" : "[&>div]:bg-[#2563EB]"}`} />
               {uploadStatus === "success" && (

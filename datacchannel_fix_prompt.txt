@@ -1,0 +1,145 @@
+You are a senior realtime systems and networking engineer specializing
+in WebRTC, streaming protocols, and fault-tolerant data transfer
+systems. You build production-grade transport layers with strict
+guarantees around delivery, ordering, and lifecycle control.
+
+Fix a critical bug where the WebRTC DataChannel closes prematurely
+during archive upload, causing: - upload to stop at low percentage
+(e.g., 2%) - only folder structure to be created (no file contents) - UI
+to get stuck in uploading state
+
+System architecture: - React frontend streaming TAR archive - WebRTC
+DataChannel (primary transport) - WebSocket relay fallback - Android
+Ktor backend for extraction
+
+Observed logs: - DataChannel opens successfully - Upload starts
+(/api/upload/archive) - DataChannel closes almost immediately - No END
+signal sent - Backend extracts partial data (folders only) - UI remains
+stuck
+
+This indicates a transport-layer failure, not a UI issue.
+
+The system lacks proper stream lifecycle control and transport safety:
+
+1.  DataChannel is being closed prematurely (manually or due to buffer
+    overflow)
+2.  No backpressure handling (bufferedAmount not respected)
+3.  No explicit END_UPLOAD signal
+4.  No ACK from backend
+5.  Upload incorrectly depends on connection stability
+
+Result: Partial archive transmission and incomplete extraction.
+
+Implement a robust, fault-tolerant WebRTC streaming transport layer that
+guarantees:
+
+-   DataChannel remains open during full upload
+-   Proper backpressure handling
+-   Explicit stream lifecycle (START → DATA → END → ACK)
+-   Safe handling of premature closure
+
+STEP 1 — Prevent Premature Channel Closure
+
+-   Audit all occurrences of: dataChannel.close()
+
+-   Remove any close triggered by:
+
+    -   upload progress
+    -   last chunk sent
+
+-   Only allow close AFTER: ACK_COMPLETE is received from backend
+
+------------------------------------------------------------------------
+
+STEP 2 — Implement Backpressure Control
+
+Before sending chunk:
+
+if (dataChannel.bufferedAmount > 1_000_000) { wait until bufferedAmount
+drops below threshold }
+
+Use: dataChannel.onbufferedamountlow
+
+Set: dataChannel.bufferedAmountLowThreshold = 256KB
+
+------------------------------------------------------------------------
+
+STEP 3 — Add Explicit Protocol Messages
+
+Define:
+
+START_UPLOAD DATA_CHUNK END_UPLOAD ACK_COMPLETE ERROR
+
+Each message must include: - uploadId - sequenceNumber
+
+------------------------------------------------------------------------
+
+STEP 4 — Fix Frontend Sender
+
+-   Open DataChannel once
+-   Send START_UPLOAD
+-   Stream TAR as DATA_CHUNK
+-   After last chunk: send END_UPLOAD
+-   WAIT for ACK_COMPLETE
+-   DO NOT close channel early
+
+------------------------------------------------------------------------
+
+STEP 5 — Fix Backend Receiver
+
+On START_UPLOAD: - initialize stream
+
+On DATA_CHUNK: - append to stream file
+
+On END_UPLOAD: - finalize stream - validate TAR integrity - extract
+archive - send ACK_COMPLETE
+
+------------------------------------------------------------------------
+
+STEP 6 — Handle Channel Closure Safely
+
+dataChannel.onclose:
+
+if upload NOT complete: - mark upload failed - cleanup temp files -
+notify UI
+
+------------------------------------------------------------------------
+
+STEP 7 — Fix UI Completion Logic
+
+Replace:
+
+uploadProgress === 100
+
+WITH:
+
+uploadCompleted === true (after ACK_COMPLETE)
+
+------------------------------------------------------------------------
+
+STEP 8 — Add Debug Logging
+
+Frontend: - log each chunk send - log bufferedAmount - log END_UPLOAD
+
+Backend: - log chunk received - log stream end - log extraction
+success - log ACK sent
+
+ - Must support large uploads (GB-scale) - Must handle unstable
+networks - Must NOT rely on connection close for completion
+
+Return:
+
+1.  Updated WebRTC sender implementation
+2.  Backpressure control logic
+3.  Backend streaming + extraction logic
+4.  Protocol definition
+
+All code must be complete and production-ready.
+
+The solution is correct if: - DataChannel remains open during upload -
+Upload completes fully without interruption - All files are correctly
+extracted - UI exits uploading state correctly - No partial uploads
+occur
+
+ - Do not output pseudo-code - Do not skip edge cases - Focus on
+correctness and transport reliability

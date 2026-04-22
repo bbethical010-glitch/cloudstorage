@@ -288,6 +288,7 @@ private fun ActiveNodeCard(
     modifier: Modifier = Modifier
 ) {
     val isTransferActive = transferState is TransferCardState.Active
+    val isExtracting = transferState is TransferCardState.Extracting
     val isCompleting = transferState is TransferCardState.Completing
 
     Column(
@@ -349,6 +350,18 @@ private fun ActiveNodeCard(
             val activeState = transferState as? TransferCardState.Active
             if (activeState != null) {
                 TransferProgressRow(activeState)
+            }
+        }
+
+        // Extraction activity — show when processing archive
+        AnimatedVisibility(
+            visible = isExtracting,
+            enter = fadeIn(tween(300)) + expandVertically(tween(300)),
+            exit  = fadeOut(tween(200)) + shrinkVertically(tween(200))
+        ) {
+            val extractingState = transferState as? TransferCardState.Extracting
+            if (extractingState != null) {
+                TransferExtractingRow(extractingState)
             }
         }
 
@@ -461,6 +474,55 @@ private fun TransferProgressRow(state: TransferCardState.Active) {
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun TransferExtractingRow(state: TransferCardState.Extracting) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF1C2035)))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                RunningDots() // Reusing the dots animation for extraction
+                Text(
+                    text = "Extracting ${state.fileName}",
+                    style = TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        color = Color(0xFFE2E5F0)
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 200.dp)
+                )
+            }
+        }
+
+        LinearProgressIndicator(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(2.dp)
+                .clip(RoundedCornerShape(1.dp)),
+            color = Color(0xFF8B5CF6), // Purple color for extraction
+            trackColor = Color(0xFF1C2035),
+        )
+
+        Text(
+            text = "Processing archive contents — please wait...",
+            style = TextStyle(
+                fontSize = 9.sp,
+                color = Color(0xFF3A3F58),
+                fontFamily = FontFamily.Monospace
+            )
+        )
     }
 }
 

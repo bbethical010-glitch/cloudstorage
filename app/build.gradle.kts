@@ -95,6 +95,7 @@ dependencies {
 
     // WebRTC for peer-to-peer data channel file transfer
     implementation("io.getstream:stream-webrtc-android:1.3.10")
+    implementation("org.apache.commons:commons-compress:1.26.1")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")

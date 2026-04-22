@@ -29,6 +29,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.readAvailable
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Easy Storage Relay — WebRTC Signaling + API Fallback Relay
@@ -58,6 +60,9 @@ fun Application.relayModule() {
         allowHeader(HttpHeaders.ContentType)
         allowHeader(HttpHeaders.Authorization)
         allowHeader("X-Node-Id")
+        allowHeader("X-Archive-Name")
+        allowHeader("X-Upload-Id")
+        allowHeader("X-Upload-Restart")
         anyHost() // Since this is a public relay Gateway
     }
     install(WebSockets) {
@@ -116,7 +121,7 @@ fun Application.relayModule() {
                     if (frame is Frame.Text) {
                         val text = frame.readText()
                         val envelope = text.toEnvelopeOrNull()
-                        if (envelope?.type == "response") {
+                        if (envelope?.type == "response" || envelope?.type == "stream-response") {
                             registry.completeResponse(envelope)
                             continue
                         }
@@ -283,6 +288,37 @@ private class SignalingRegistry {
         }
     }
 
+    suspend fun forwardStreamingEnvelope(
+        agent: AgentConnection,
+        request: RelayEnvelope,
+        bodyChannel: ByteReadChannel
+    ): RelayEnvelope? {
+        val requestId = request.requestId ?: return null
+        val deferred = CompletableDeferred<RelayEnvelope>()
+        pendingResponses[requestId] = deferred
+
+        return try {
+            agent.sendEnvelope(request)
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val bytesRead = bodyChannel.readAvailable(buffer, 0, buffer.size)
+                if (bytesRead == -1) break
+                if (bytesRead > 0) {
+                    val packet = ByteArray(36 + bytesRead)
+                    requestId.padEnd(36, ' ')
+                        .toByteArray(Charsets.UTF_8)
+                        .copyInto(packet, 0, 0, 36)
+                    buffer.copyInto(packet, 36, 0, bytesRead)
+                    agent.sendBinary(packet)
+                }
+            }
+            agent.sendEnvelope(RelayEnvelope(type = "stream-request-end", requestId = requestId))
+            withTimeoutOrNull(20 * 60_000) { deferred.await() }
+        } finally {
+            pendingResponses.remove(requestId)
+        }
+    }
+
     fun completeResponse(response: RelayEnvelope) {
         val requestId = response.requestId ?: return
         pendingResponses.remove(requestId)?.complete(response)
@@ -305,6 +341,12 @@ private data class AgentConnection(
             session.send(Frame.Text(message))
         }
     }
+
+    suspend fun sendBinary(payload: ByteArray) {
+        sendMutex.withLock {
+            session.send(Frame.Binary(true, payload))
+        }
+    }
 }
 
 private data class RelayEnvelope(
@@ -316,6 +358,7 @@ private data class RelayEnvelope(
     val query: String? = null,
     val headers: Map<String, String>? = null,
     val bodyBase64: String? = null,
+    val contentLength: Long? = null,
     val status: Int? = null,
     val error: String? = null
 )
@@ -365,7 +408,6 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyApiRequest(
     }
 
     val requestId = UUID.randomUUID().toString()
-    val requestBody = receiveStream().readBytes()
     val forwardedQuery = request.queryParameters.flattenEntries()
         .filterNot { (key, _) -> key.equals("nodeId", ignoreCase = true) }
         .formUrlEncode()
@@ -383,11 +425,22 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyApiRequest(
         method = request.httpMethod.value,
         path = request.path(),
         query = forwardedQuery,
-        headers = forwardedHeaders,
-        bodyBase64 = requestBody.encodeBase64()
+        headers = forwardedHeaders
     )
 
-    val relayResponse = registry.forwardEnvelope(agent, relayRequest)
+    val relayResponse = if (request.path().endsWith("/upload/archive", ignoreCase = true)) {
+        registry.forwardStreamingEnvelope(
+            agent,
+            relayRequest.copy(
+                type = "stream-request-start",
+                contentLength = request.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: -1L
+            ),
+            receiveChannel()
+        )
+    } else {
+        val requestBody = receiveStream().readBytes()
+        registry.forwardEnvelope(agent, relayRequest.copy(bodyBase64 = requestBody.encodeBase64()))
+    }
     if (relayResponse == null) {
         respondJson(mapOf("error" to "node_timeout"), HttpStatusCode.GatewayTimeout)
         return

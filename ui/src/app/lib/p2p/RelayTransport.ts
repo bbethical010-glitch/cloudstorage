@@ -50,6 +50,8 @@ export class RelayTransport {
     if (options.body) {
       if (typeof options.body === 'string') {
         bodyBase64 = btoa(options.body);
+      } else if (options.body instanceof Uint8Array) {
+        bodyBase64 = btoa(Array.from(options.body).map(b => String.fromCharCode(b)).join(''));
       }
     }
 
@@ -75,6 +77,69 @@ export class RelayTransport {
         }
       }, 60000);
     });
+  }
+
+  /**
+   * Fix 5 — Chunked Relay Upload
+   * Splits a large TAR stream into 5MB HTTP chunks to bypass relay timeouts.
+   */
+  async uploadArchiveViaRelay(
+    archiveName: string,
+    batchId: string,
+    totalSize: number,
+    streamFactory: () => ReadableStream<Uint8Array>,
+    targetPath: string,
+    onProgress: (sent: number) => void
+  ): Promise<any> {
+    const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
+    let sentTotal = 0;
+    const reader = streamFactory().getReader();
+    let chunkIndex = 0;
+    const totalChunksCount = totalSize > 0 ? Math.ceil(totalSize / CHUNK_SIZE) : -1;
+    
+    // We'll read from the stream and accumulate into chunks
+    let currentChunk = new Uint8Array(0);
+    
+    const uploadChunk = async (data: Uint8Array, isFinal: boolean) => {
+      const url = `/api/upload/archive/chunk?batchId=${batchId}&chunkIndex=${chunkIndex}&totalChunks=${totalChunksCount}&targetPath=${encodeURIComponent(targetPath)}&isFinal=${isFinal}`;
+      const response = await this.fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: data as any
+      });
+      if (!response.ok) throw new Error(`Chunk ${chunkIndex} failed`);
+      chunkIndex++;
+    };
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          if (currentChunk.length > 0 || chunkIndex === 0) {
+            await uploadChunk(currentChunk, true);
+          }
+          break;
+        }
+        
+        // Append to current chunk
+        const newChunk = new Uint8Array(currentChunk.length + value.length);
+        newChunk.set(currentChunk);
+        newChunk.set(value, currentChunk.length);
+        currentChunk = newChunk;
+        
+        sentTotal += value.length;
+        onProgress(sentTotal);
+
+        if (currentChunk.length >= CHUNK_SIZE) {
+          await uploadChunk(currentChunk, false);
+          currentChunk = new Uint8Array(0);
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    
+    return { success: true, batchId };
   }
 
   /**
