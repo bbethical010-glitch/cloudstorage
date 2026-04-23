@@ -51,7 +51,9 @@ private val protocolDispatcher = kotlinx.coroutines.newSingleThreadContext("WebR
 class WebRTCPeer(
     private val context: Context,
     private val rootUri: Uri,
-    private val onSignal: suspend (String) -> Unit // Callback to send signaling messages via relay WS
+    private val onSignal: suspend (String) -> Unit, // Callback to send signaling messages via relay WS
+    private val onPeerConnected: (String) -> Unit = {},    // Callback when a DataChannel opens for a browserId
+    private val onPeerDisconnected: (String) -> Unit = {}  // Callback when a peer ICE state disconnects/fails
 ) {
     private val gson = Gson()
     private val factory: PeerConnectionFactory
@@ -136,12 +138,14 @@ class WebRTCPeer(
                 Log.i(TAG, "[DC_DEBUG] DATA_CHANNEL_OPEN: ${dc.label()}")
                 dataChannels[browserId] = dc
                 setupDataChannel(browserId, dc)
+                onPeerConnected(browserId)
             }
 
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
                 Log.i(TAG, "[ICE_DEBUG] ICE connection state for $browserId: $state")
                 if (state == PeerConnection.IceConnectionState.DISCONNECTED ||
                     state == PeerConnection.IceConnectionState.FAILED) {
+                    onPeerDisconnected(browserId)
                     cleanup(browserId)
                 }
             }
@@ -547,6 +551,13 @@ class WebRTCPeer(
     private fun sendBinary(dc: DataChannel, data: ByteBuffer) {
         dc.send(DataChannel.Buffer(data, true))
     }
+
+    // ── Peer introspection ────────────────────────────────────────────────
+
+    /**
+     * Returns the set of currently connected browser IDs.
+     */
+    fun getConnectedPeerIds(): Set<String> = dataChannels.keys.toSet()
 
     // ── Cleanup ─────────────────────────────────────────────────────────────
 

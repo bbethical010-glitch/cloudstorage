@@ -96,6 +96,7 @@ data class ExtractionEvent(
 class ServerService : Service() {
     private val fileLocks = java.util.concurrent.ConcurrentHashMap<String, Any>()
     private val manifestMutex = Mutex()
+    private val fileOpMutex = Mutex()
 
     private var server: ApplicationEngine? = null
     private var relayTunnelClient: RelayTunnelClient? = null
@@ -127,6 +128,18 @@ class ServerService : Service() {
          */
         val extractionEvents = kotlinx.coroutines.flow.MutableSharedFlow<ExtractionEvent>(
             extraBufferCapacity = 64
+        )
+
+        /**
+         * Live list of connected peers, observed by MainActivity for WebView state.
+         */
+        val connectedPeersFlow = kotlinx.coroutines.flow.MutableStateFlow<List<PeerInfo>>(emptyList())
+
+        /**
+         * Peer lifecycle events (join/leave) for toast notifications.
+         */
+        val peerEventsFlow = kotlinx.coroutines.flow.MutableSharedFlow<PeerEvent>(
+            extraBufferCapacity = 32
         )
     }
 
@@ -341,6 +354,54 @@ class ServerService : Service() {
                                 call.respondText("{\"status\":\"online\"}", ContentType.Application.Json)
                             } else {
                                 call.respond(HttpStatusCode.ServiceUnavailable, "{\"status\":\"offline\"}")
+                            }
+                        }
+
+                        // ── Connected Peers Endpoint ─────────────────────────
+                        get("/peers") {
+                            if (!call.hasValidAuth()) return@get call.respond(HttpStatusCode.Unauthorized)
+                            val peers = connectedPeersFlow.value.map { peer ->
+                                mapOf(
+                                    "browserId" to peer.browserId,
+                                    "connectedAt" to peer.connectedAt,
+                                    "displayName" to peer.displayName
+                                )
+                            }
+                            call.respond(mapOf("peers" to peers, "count" to peers.size))
+                        }
+
+                        // ── Guest Access Route ───────────────────────────────
+                        route("/guest") {
+                            get("/files") {
+                                val guestPrefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
+                                if (!guestPrefs.getBoolean("guest_access_enabled", false)) {
+                                    return@get call.respond(HttpStatusCode.Forbidden, mapOf("error" to "guest_access_disabled"))
+                                }
+
+                                val root = DocumentFile.fromTreeUri(this@ServerService, rootUri)
+                                    ?: return@get call.respond(HttpStatusCode.ServiceUnavailable)
+                                val publicDir = root.findFile("Public")
+                                    ?: return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to "public_folder_not_found", "message" to "Create a 'Public' folder to enable guest access"))
+
+                                val subPath = call.request.queryParameters["path"]?.takeIf { it.isNotBlank() }
+                                val targetDir = if (subPath != null) {
+                                    if (subPath.contains("..")) return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "invalid_path"))
+                                    resolveSafePath(publicDir, subPath)
+                                        ?: return@get call.respond(HttpStatusCode.NotFound)
+                                } else {
+                                    publicDir
+                                }
+
+                                val items = targetDir.listFiles().mapNotNull { f ->
+                                    val name = f.name ?: return@mapNotNull null
+                                    mapOf(
+                                        "name" to name,
+                                        "type" to if (f.isDirectory) "folder" else "file",
+                                        "size" to f.length(),
+                                        "lastModified" to f.lastModified()
+                                    )
+                                }
+                                call.respond(mapOf("path" to (subPath ?: "/"), "items" to items))
                             }
                         }
 
@@ -696,8 +757,10 @@ class ServerService : Service() {
                             val targetDir = resolveSafePath(root, path) ?: return@post call.respond(HttpStatusCode.NotFound)
                             val targetFile = targetDir.findFile(oldName) ?: return@post call.respond(HttpStatusCode.NotFound)
 
-                            if (targetFile.renameTo(newName)) call.respond(HttpStatusCode.OK)
-                            else call.respond(HttpStatusCode.InternalServerError)
+                            fileOpMutex.withLock {
+                                if (targetFile.renameTo(newName)) call.respond(HttpStatusCode.OK)
+                                else call.respond(HttpStatusCode.InternalServerError)
+                            }
                         }
 
                         suspend fun deletePath(deleteCall: io.ktor.server.application.ApplicationCall, fullPath: String) {
@@ -724,7 +787,9 @@ class ServerService : Service() {
 
                             val isDirectory = target.isDirectory
                             val name = target.name ?: fullPath
-                            val success = target.delete()
+                            val success = fileOpMutex.withLock {
+                                target.delete()
+                            }
 
                             if (success) {
                                 deleteCall.respond(
@@ -1786,7 +1851,30 @@ class ServerService : Service() {
             onStatusChange = { status ->
                 tunnelStatusFlow.value = status
             }
-        ).also { it.start() }
+        ).also { client ->
+            client.start()
+
+            // Observe peer lifecycle from the PeerManager when it becomes available
+            scope.launch {
+                // Wait briefly for relay to connect and create the PeerManager
+                kotlinx.coroutines.delay(2000)
+                val manager = client.getPeerManager()
+                if (manager != null) {
+                    // Forward connected peers state to the static flow
+                    launch {
+                        manager.connectedPeers.collect { peers ->
+                            connectedPeersFlow.value = peers
+                        }
+                    }
+                    // Forward peer events to the static shared flow
+                    launch {
+                        manager.peerEvents.collect { event ->
+                            peerEventsFlow.tryEmit(event)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

@@ -16,8 +16,12 @@ import {
   Wifi,
   Save,
   X,
-  Bell
+  Bell,
+  Users,
+  Eye,
+  EyeOff
 } from "lucide-react";
+import { Switch } from "../ui/switch";
 import { Card } from "../ui/card";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -128,6 +132,8 @@ export function AndroidSettings() {
       ]
     }
   ];
+
+  const guestAccessEnabled = appState?.node?.guestAccessEnabled ?? false;
 
   return (
     <div className="min-h-screen bg-[#0B1220] text-[#E5E7EB] pb-32">
@@ -242,6 +248,44 @@ export function AndroidSettings() {
               <span className="text-xl font-bold text-[#E5E7EB]">{appState?.node?.health?.io || "Idle"}</span>
             </Card>
           </div>
+        </section>
+
+        {/* Guest Access Card */}
+        <section className="space-y-3">
+          <h3 className="text-xs font-bold text-[#9CA3AF] uppercase tracking-widest px-1">Guest Access</h3>
+          <Card className="bg-[#111827] border-[#374151] p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${guestAccessEnabled ? 'bg-[#10B981]/10 text-[#10B981]' : 'bg-[#0B1220] text-[#6B7280]'}`}>
+                  {guestAccessEnabled ? <Eye className="w-5 h-5" /> : <EyeOff className="w-5 h-5" />}
+                </div>
+                <div>
+                  <span className="text-sm font-medium block">Public Folder Access</span>
+                  <p className="text-[10px] text-[#9CA3AF] mt-0.5">Allow unauthenticated read-only access to /Public</p>
+                </div>
+              </div>
+              <Switch
+                checked={guestAccessEnabled}
+                onCheckedChange={(checked) => androidBridge.toggleGuestAccess(checked)}
+              />
+            </div>
+            {guestAccessEnabled && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                className="mt-3 bg-[#0B1220] border border-[#374151] rounded-xl p-3 overflow-hidden"
+              >
+                <div className="flex items-center gap-2">
+                  <Users className="w-3.5 h-3.5 text-[#10B981]" />
+                  <span className="text-[10px] text-[#10B981] font-bold">ACTIVE</span>
+                </div>
+                <p className="text-[10px] text-[#9CA3AF] mt-1">
+                  Guests can browse files in the "Public" folder without a password.
+                  Create a folder named "Public" in your storage root to get started.
+                </p>
+              </motion.div>
+            )}
+          </Card>
         </section>
 
         {sections.map((section: SettingsSection, idx) => (

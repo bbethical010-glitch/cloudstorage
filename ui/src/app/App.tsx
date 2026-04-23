@@ -279,6 +279,29 @@ function Main() {
         console.error("[API_DEBUG] Native state update failed", e);
       }
     };
+
+    // Peer lifecycle event handler — triggered by Android native bridge
+    window.onPeerEvent = (eventJson: string) => {
+      try {
+        const event = JSON.parse(eventJson);
+        if (event.type === 'joined') {
+          toast.info(`${event.displayName} connected`, {
+            description: 'New peer joined your node',
+            duration: 4000,
+          });
+        } else if (event.type === 'left') {
+          toast(`${event.displayName} disconnected`, {
+            duration: 3000,
+          });
+        }
+      } catch (e) {
+        console.error("[PEER_EVENT] Failed to parse peer event", e);
+      }
+    };
+
+    return () => {
+      window.onPeerEvent = undefined;
+    };
   }, [setAppState]);
 
   const performAuth = async (e: React.FormEvent) => {

@@ -5,7 +5,9 @@ import {
   Link2,
   FolderOpen,
   Power,
-  QrCode
+  QrCode,
+  Users,
+  Circle
 } from "lucide-react";
 import { Card } from "../ui/card";
 import { Button } from "../ui/button";
@@ -158,6 +160,79 @@ export function AndroidDashboard() {
                   <p className="text-[10px] font-mono text-[#6B7280] mt-2 break-all bg-[#0B1220] py-2 px-3 rounded-lg border border-[#1F2937]">
                     {appState?.node?.publicUrl || `https://${appState?.node?.relayBaseUrl}/node/${shareCode}/console`}
                   </p>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </Card>
+
+          {/* Connected Users Card */}
+          <Card className="bg-[#111827] border-[#1F2937] p-6 lg:p-8">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-[13px] font-bold text-white tracking-wider flex items-center gap-2">
+                <Users className="w-4 h-4 text-[#3B82F6]" />
+                CONNECTED USERS
+              </h3>
+              <Badge 
+                variant="outline" 
+                className={`px-2 py-0.5 text-[9px] font-bold rounded-full tracking-wider ${
+                  (appState?.node?.connectedPeers?.length || 0) > 0
+                    ? 'border-[#3B82F6] text-[#60A5FA] bg-[#3B82F6]/10'
+                    : 'border-[#374151] text-[#6B7280] bg-[#1F2937]/50'
+                }`}
+              >
+                {(appState?.node?.connectedPeers?.length || 0) > 0
+                  ? `${appState?.node?.connectedPeers?.length} ONLINE`
+                  : 'NO USERS'
+                }
+              </Badge>
+            </div>
+
+            <AnimatePresence mode="popLayout">
+              {(appState?.node?.connectedPeers?.length || 0) > 0 ? (
+                <div className="flex flex-col gap-2">
+                  {appState?.node?.connectedPeers?.map((peer, index) => {
+                    const colors = ['#3B82F6', '#A855F7', '#10B981', '#F59E0B', '#EF4444', '#EC4899'];
+                    const avatarColor = colors[index % colors.length];
+                    const connectedMs = Date.now() - peer.connectedAt;
+                    const connectedMin = Math.floor(connectedMs / 60000);
+                    const durationText = connectedMin < 1 ? 'Just now' : connectedMin < 60 ? `${connectedMin}m ago` : `${Math.floor(connectedMin / 60)}h ago`;
+
+                    return (
+                      <motion.div
+                        key={peer.browserId}
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: 20 }}
+                        transition={{ duration: 0.3 }}
+                        className="flex items-center gap-3 bg-[#0B1220] rounded-2xl px-4 py-3 border border-[#1F2937]"
+                      >
+                        <div
+                          className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
+                          style={{ backgroundColor: avatarColor }}
+                        >
+                          {peer.displayName.charAt(peer.displayName.length - 1)}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-xs font-bold text-white block truncate">{peer.displayName}</span>
+                          <span className="text-[10px] text-[#6B7280] block truncate">{peer.browserId.slice(0, 8)}...</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <Circle className="w-2 h-2 text-[#10B981] fill-[#10B981]" />
+                          <span className="text-[10px] text-[#9CA3AF] font-medium">{durationText}</span>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="flex flex-col items-center py-4 gap-2"
+                >
+                  <Users className="w-8 h-8 text-[#374151]" />
+                  <span className="text-[11px] text-[#6B7280] font-medium">No active connections</span>
+                  <span className="text-[10px] text-[#4B5563]">Users will appear here when they connect</span>
                 </motion.div>
               )}
             </AnimatePresence>

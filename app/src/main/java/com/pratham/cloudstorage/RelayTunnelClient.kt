@@ -81,7 +81,8 @@ class RelayTunnelClient(
     private val outgoingMutex = Mutex()
     private val streamSessions = ConcurrentHashMap<UUID, StreamingUploadProxySession>()
 
-    private var webRTCPeer: WebRTCPeer? = null
+    private var peerManager: PeerManager? = null
+        private set
 
     fun start() {
         if (relayWebSocketUrl.isBlank()) return
@@ -103,10 +104,10 @@ class RelayTunnelClient(
                         onStatusChange(TunnelStatus.Connected)
                         backoffMs = 1_000L
 
-                        val peer = WebRTCPeer(context, rootUri) { signalJson ->
+                        val manager = PeerManager(context, rootUri) { signalJson ->
                             outgoing.send(Frame.Text(signalJson))
                         }
-                        webRTCPeer = peer
+                        peerManager = manager
 
                         outgoing.send(Frame.Text("""{"type":"register","nodeId":"$shareCode"}"""))
 
@@ -128,7 +129,7 @@ class RelayTunnelClient(
                                         val text = frame.readText()
                                         val envelope = text.toEnvelopeOrNull()
                                         when (envelope?.type) {
-                                            "signal" -> peer.handleSignalingMessage(text)
+                                            "signal" -> manager.handleSignalingMessage(text)
                                             "request" -> {
                                                 val response = forwardToLocalNode(envelope)
                                                 sendTextSafely(relayGson.toJson(response))
@@ -175,8 +176,8 @@ class RelayTunnelClient(
                             keepaliveJob.cancel()
                             streamSessions.values.forEach { it.cancel() }
                             streamSessions.clear()
-                            peer.destroy()
-                            webRTCPeer = null
+                            manager.destroy()
+                            peerManager = null
                         }
                     }
                 } catch (error: Exception) {
@@ -238,12 +239,18 @@ class RelayTunnelClient(
 
     fun stop() {
         onStatusChange(TunnelStatus.Offline)
-        webRTCPeer?.destroy()
-        webRTCPeer = null
+        peerManager?.destroy()
+        peerManager = null
         scope.cancel()
         relayClient.close()
         localNodeClient.close()
     }
+
+    /**
+     * Returns the current PeerManager instance, if a relay session is active.
+     * Used by ServerService to observe connected peers.
+     */
+    fun getPeerManager(): PeerManager? = peerManager
 
     private suspend fun forwardToLocalNode(request: RelayEnvelope): RelayEnvelope {
         val targetPath = request.path?.takeIf { it.isNotBlank() } ?: "/"

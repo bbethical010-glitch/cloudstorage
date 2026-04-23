@@ -285,6 +285,46 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        // Observe connected peers changes and update web state
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                ServerService.connectedPeersFlow
+                    .collect {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            updateWebState()
+                        }
+                    }
+            }
+        }
+
+        // Forward peer join/leave events to WebView as JS callbacks
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                ServerService.peerEventsFlow.collect { event ->
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        if (::webView.isInitialized) {
+                            val eventJson = when (event) {
+                                is PeerEvent.Joined -> org.json.JSONObject().apply {
+                                    put("type", "joined")
+                                    put("browserId", event.peer.browserId)
+                                    put("displayName", event.peer.displayName)
+                                }.toString()
+                                is PeerEvent.Left -> org.json.JSONObject().apply {
+                                    put("type", "left")
+                                    put("browserId", event.browserId)
+                                    put("displayName", event.displayName)
+                                }.toString()
+                            }
+                            val escaped = eventJson.replace("\\", "\\\\").replace("'", "\\'")
+                            webView.evaluateJavascript(
+                                "if(window.onPeerEvent) window.onPeerEvent('$escaped');", null
+                            )
+                        }
+                    }
+                }
+            }
+        }
         
         // Health metrics polling loop
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -703,6 +743,19 @@ class MainActivity : ComponentActivity() {
                         put("ping", healthPing)
                         put("io", healthIo)
                     })
+                    // Connected peers
+                    val peersArray = org.json.JSONArray()
+                    ServerService.connectedPeersFlow.value.forEach { peer ->
+                        peersArray.put(org.json.JSONObject().apply {
+                            put("browserId", peer.browserId)
+                            put("connectedAt", peer.connectedAt)
+                            put("displayName", peer.displayName)
+                        })
+                    }
+                    put("connectedPeers", peersArray)
+                    // Guest access
+                    val authPrefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
+                    put("guestAccessEnabled", authPrefs.getBoolean("guest_access_enabled", false))
                 })
                 put("storage", JSONObject().apply {
                     put("usedBytes", stats.first)
@@ -772,6 +825,20 @@ class MainActivity : ComponentActivity() {
                 updateWebState() // Broadcast new state if needed
             }
         }
+
+        @JavascriptInterface
+        fun toggleGuestAccess(enabled: Boolean) {
+            runOnUiThread {
+                val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
+                prefs.edit().putBoolean("guest_access_enabled", enabled).apply()
+                android.widget.Toast.makeText(
+                    this@MainActivity,
+                    if (enabled) "Guest Access Enabled" else "Guest Access Disabled",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+                updateWebState()
+            }
+        }
     }
 
     private fun updateWebState() {
@@ -805,6 +872,19 @@ class MainActivity : ComponentActivity() {
                     put("ping", healthPing)
                     put("io", healthIo)
                 })
+                // Connected peers
+                val peersArray = org.json.JSONArray()
+                ServerService.connectedPeersFlow.value.forEach { peer ->
+                    peersArray.put(org.json.JSONObject().apply {
+                        put("browserId", peer.browserId)
+                        put("connectedAt", peer.connectedAt)
+                        put("displayName", peer.displayName)
+                    })
+                }
+                put("connectedPeers", peersArray)
+                // Guest access
+                val authPrefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
+                put("guestAccessEnabled", authPrefs.getBoolean("guest_access_enabled", false))
             })
                 put("storage", JSONObject().apply {
                     put("usedBytes", stats.first)

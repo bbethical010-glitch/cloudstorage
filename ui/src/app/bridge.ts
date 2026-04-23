@@ -8,6 +8,12 @@ export interface FileItem {
   lastModified: number;
 }
 
+export interface ConnectedPeer {
+  browserId: string;
+  connectedAt: number;
+  displayName: string;
+}
+
 export interface AppState {
   node: {
     isRunning: boolean;
@@ -23,6 +29,8 @@ export interface AppState {
       ping: string;
       io: string;
     };
+    connectedPeers?: ConnectedPeer[];
+    guestAccessEnabled?: boolean;
   };
   storage: {
     totalBytes: number;
@@ -56,8 +64,10 @@ declare global {
       scanQRCode?(): void;
       shareLink?(text: string): void;
       resetNodePassword?(): void;
+      toggleGuestAccess?(enabled: boolean): void;
     };
     updateWebState?: (stateJson: string) => void;
+    onPeerEvent?: (eventJson: string) => void;
   }
 }
 
@@ -117,6 +127,12 @@ export const androidBridge = {
   resetNodePassword: () => {
     if (window.Android?.resetNodePassword) {
       window.Android.resetNodePassword();
+    }
+  },
+
+  toggleGuestAccess: (enabled: boolean) => {
+    if (window.Android?.toggleGuestAccess) {
+      window.Android.toggleGuestAccess(enabled);
     }
   }
 };
