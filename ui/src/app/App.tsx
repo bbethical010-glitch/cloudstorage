@@ -15,7 +15,16 @@ import { WelcomeScreen } from "./components/android/WelcomeScreen";
 import { AndroidOnboarding } from "./components/android/AndroidOnboarding";
 import { androidBridge, AppState, GlobalContextType } from "./bridge";
 
+export interface ActivityEvent {
+  action: string;
+  fileName: string;
+  actor: string;
+  timestamp: number;
+  details: string;
+}
+
 export const AppStateContext = createContext<GlobalContextType | null>(null);
+export const ActivityFeedContext = createContext<ActivityEvent[]>([]);
 
 const LOCAL_NODE_ORIGIN = "http://127.0.0.1:8080";
 
@@ -29,6 +38,7 @@ function localNodeApi(endpoint: string) {
 function Main() {
   const [appStateRaw, setAppStateRaw] = useState<AppState | null>(null);
   const [step, setStep] = useState<"loading" | "welcome" | "tutorial" | "auth" | "app">("loading");
+  const [activityFeed, setActivityFeed] = useState<ActivityEvent[]>([]);
 
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup' | 'none'>('none');
@@ -299,8 +309,35 @@ function Main() {
       }
     };
 
+    // Activity event handler — triggered by Android native bridge
+    window.onActivityEvent = (eventJson: string) => {
+      try {
+        const event = JSON.parse(eventJson) as ActivityEvent;
+        setActivityFeed(prev => [event, ...prev].slice(0, 50));
+
+        // Show toast for activity events (not from Admin to avoid self-notifications)
+        const actionLabels: Record<string, string> = {
+          upload: '📤 uploaded',
+          delete: '🗑️ deleted',
+          rename: '✏️ renamed',
+          create_folder: '📁 created folder',
+          bulk_delete: '🗑️ bulk deleted',
+          bulk_move: '📦 bulk moved',
+          role_change: '🔑 role changed for',
+        };
+        const label = actionLabels[event.action] || event.action;
+        const detail = event.details ? ` (${event.details})` : '';
+        toast.info(`${event.actor} ${label} ${event.fileName}${detail}`, {
+          duration: 4000,
+        });
+      } catch (e) {
+        console.error("[ACTIVITY_EVENT] Failed to parse activity event", e);
+      }
+    };
+
     return () => {
       window.onPeerEvent = undefined;
+      window.onActivityEvent = undefined;
     };
   }, [setAppState]);
 
@@ -351,6 +388,7 @@ function Main() {
 
   return (
     <AppStateContext.Provider value={contextValue}>
+    <ActivityFeedContext.Provider value={activityFeed}>
       <div className={isWebConsole
         ? "w-full h-dvh min-h-dvh overflow-hidden bg-[#08090E]"
         : "w-full h-dvh min-h-dvh overflow-y-auto overflow-x-hidden overscroll-y-contain bg-[#0B1220] shadow-2xl shadow-blue-900/5"
@@ -421,6 +459,7 @@ function Main() {
 
         {step === "app" && <RouterProvider router={router} />}
       </div>
+    </ActivityFeedContext.Provider>
     </AppStateContext.Provider>
   );
 }

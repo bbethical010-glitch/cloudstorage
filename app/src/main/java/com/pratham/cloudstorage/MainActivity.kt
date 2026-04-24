@@ -325,6 +325,29 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        // Forward activity events (uploads, deletes, etc.) to WebView
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                ServerService.activityEventsFlow.collect { event ->
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        if (::webView.isInitialized) {
+                            val eventJson = org.json.JSONObject().apply {
+                                put("action", event.action)
+                                put("fileName", event.fileName)
+                                put("actor", event.actor)
+                                put("timestamp", event.timestamp)
+                                put("details", event.details)
+                            }.toString()
+                            val escaped = eventJson.replace("\\", "\\\\").replace("'", "\\'")
+                            webView.evaluateJavascript(
+                                "if(window.onActivityEvent) window.onActivityEvent('$escaped');", null
+                            )
+                        }
+                    }
+                }
+            }
+        }
         
         // Health metrics polling loop
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -839,6 +862,27 @@ class MainActivity : ComponentActivity() {
                 updateWebState()
             }
         }
+
+        @JavascriptInterface
+        fun changePeerRole(browserId: String, role: String) {
+            runOnUiThread {
+                val currentPeers = ServerService.connectedPeersFlow.value
+                val peerIndex = currentPeers.indexOfFirst { it.browserId == browserId }
+                if (peerIndex != -1 && PeerRole.isValid(role)) {
+                    val updated = currentPeers[peerIndex].copy(role = role.lowercase())
+                    val newList = currentPeers.toMutableList()
+                    newList[peerIndex] = updated
+                    ServerService.connectedPeersFlow.value = newList
+                    ServerService.emitActivity("role_change", updated.displayName, "Admin", "Role changed to $role")
+                    android.widget.Toast.makeText(
+                        this@MainActivity,
+                        "${updated.displayName} → ${role.replaceFirstChar { it.uppercase() }}",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                    updateWebState()
+                }
+            }
+        }
     }
 
     private fun updateWebState() {
@@ -879,6 +923,7 @@ class MainActivity : ComponentActivity() {
                         put("browserId", peer.browserId)
                         put("connectedAt", peer.connectedAt)
                         put("displayName", peer.displayName)
+                        put("role", peer.role)
                     })
                 }
                 put("connectedPeers", peersArray)

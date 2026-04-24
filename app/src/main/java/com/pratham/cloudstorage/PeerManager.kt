@@ -28,13 +28,25 @@ import java.util.concurrent.atomic.AtomicInteger
 
 private const val TAG = "PeerManager"
 
+// ── Peer Roles ───────────────────────────────────────────────────────────────
+object PeerRole {
+    const val VIEWER = "viewer"           // Read-only: GET files, download, storage, status
+    const val CONTRIBUTOR = "contributor" // Read + upload + create folders
+    const val MANAGER = "manager"         // Full access except server settings
+    const val ADMIN = "admin"             // Full access (node owner)
+
+    val ALL = setOf(VIEWER, CONTRIBUTOR, MANAGER, ADMIN)
+    fun isValid(role: String): Boolean = role.lowercase() in ALL
+}
+
 /**
  * Metadata about a connected browser peer, exposed to the UI.
  */
 data class PeerInfo(
     val browserId: String,
     val connectedAt: Long,
-    val displayName: String
+    val displayName: String,
+    val role: String = PeerRole.VIEWER
 )
 
 /**
@@ -43,6 +55,54 @@ data class PeerInfo(
 sealed class PeerEvent {
     data class Joined(val peer: PeerInfo) : PeerEvent()
     data class Left(val browserId: String, val displayName: String) : PeerEvent()
+}
+
+// ── Activity Event ───────────────────────────────────────────────────────────
+
+/**
+ * Represents a file-system activity performed on the node.
+ */
+data class ActivityEvent(
+    val action: String,      // "upload", "delete", "rename", "create_folder", "bulk_delete", "bulk_move"
+    val fileName: String,    // Primary file/folder name affected
+    val actor: String,       // Display name of the user who performed the action
+    val timestamp: Long = System.currentTimeMillis(),
+    val details: String = "" // Optional extra info (e.g., "renamed to X", "3 items")
+)
+
+/**
+ * Thread-safe ring buffer for recent activity events.
+ */
+class ActivityRingBuffer(private val capacity: Int = 50) {
+    private val buffer = arrayOfNulls<ActivityEvent>(capacity)
+    private var head = 0
+    private var size = 0
+
+    @Synchronized
+    fun add(event: ActivityEvent) {
+        buffer[head] = event
+        head = (head + 1) % capacity
+        if (size < capacity) size++
+    }
+
+    @Synchronized
+    fun getAll(): List<ActivityEvent> {
+        if (size == 0) return emptyList()
+        val result = mutableListOf<ActivityEvent>()
+        val start = if (size < capacity) 0 else head
+        for (i in 0 until size) {
+            val idx = (start + i) % capacity
+            buffer[idx]?.let { result.add(it) }
+        }
+        return result.sortedByDescending { it.timestamp }
+    }
+
+    @Synchronized
+    fun clear() {
+        buffer.fill(null)
+        head = 0
+        size = 0
+    }
 }
 
 class PeerManager(
@@ -89,12 +149,36 @@ class PeerManager(
      */
     fun getPeerCount(): Int = peerRegistry.size
 
+    /**
+     * Update a connected peer's role. Returns true if the peer was found and updated.
+     */
+    fun updatePeerRole(browserId: String, role: String): Boolean {
+        val existing = peerRegistry[browserId] ?: return false
+        if (!PeerRole.isValid(role)) return false
+        val updated = existing.copy(role = role.lowercase())
+        peerRegistry[browserId] = updated
+        publishState()
+        Log.i(TAG, "Role updated: ${updated.displayName} ($browserId) → $role")
+        return true
+    }
+
+    /**
+     * Get a peer's role. Returns null if peer not found.
+     */
+    fun getPeerRole(browserId: String): String? = peerRegistry[browserId]?.role
+
+    /**
+     * Get peer info by browserId.
+     */
+    fun getPeerInfo(browserId: String): PeerInfo? = peerRegistry[browserId]
+
     private fun onPeerConnected(browserId: String) {
         val displayName = "User ${peerCounter.incrementAndGet()}"
         val info = PeerInfo(
             browserId = browserId,
             connectedAt = System.currentTimeMillis(),
-            displayName = displayName
+            displayName = displayName,
+            role = PeerRole.VIEWER
         )
         peerRegistry[browserId] = info
         publishState()

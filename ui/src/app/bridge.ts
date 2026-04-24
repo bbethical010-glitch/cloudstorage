@@ -12,6 +12,7 @@ export interface ConnectedPeer {
   browserId: string;
   connectedAt: number;
   displayName: string;
+  role: string;
 }
 
 export interface AppState {
@@ -65,9 +66,11 @@ declare global {
       shareLink?(text: string): void;
       resetNodePassword?(): void;
       toggleGuestAccess?(enabled: boolean): void;
+      changePeerRole?(browserId: string, role: string): void;
     };
     updateWebState?: (stateJson: string) => void;
     onPeerEvent?: (eventJson: string) => void;
+    onActivityEvent?: (eventJson: string) => void;
   }
 }
 
@@ -133,6 +136,12 @@ export const androidBridge = {
   toggleGuestAccess: (enabled: boolean) => {
     if (window.Android?.toggleGuestAccess) {
       window.Android.toggleGuestAccess(enabled);
+    }
+  },
+
+  changePeerRole: (browserId: string, role: string) => {
+    if (window.Android?.changePeerRole) {
+      window.Android.changePeerRole(browserId, role);
     }
   }
 };

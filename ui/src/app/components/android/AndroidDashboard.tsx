@@ -7,7 +7,16 @@ import {
   Power,
   QrCode,
   Users,
-  Circle
+  Circle,
+  Activity,
+  Upload,
+  Trash2,
+  Pencil,
+  FolderPlus,
+  ChevronDown,
+  Shield,
+  ShieldCheck,
+  ShieldAlert
 } from "lucide-react";
 import { Card } from "../ui/card";
 import { Button } from "../ui/button";
@@ -15,7 +24,7 @@ import { Badge } from "../ui/badge";
 import { Switch } from "../ui/switch";
 import { useContext, useState } from "react";
 import { toast } from "sonner";
-import { AppStateContext } from "../../App";
+import { AppStateContext, ActivityFeedContext, ActivityEvent } from "../../App";
 import { androidBridge } from "../../bridge";
 import { ShareQRDialog } from "./ShareQRDialog";
 import "../../../styles/node-switch.css";
@@ -23,8 +32,10 @@ import "../../../styles/node-switch.css";
 export function AndroidDashboard() {
   const ctx = useContext(AppStateContext);
   const appState = ctx?.state;
+  const activityFeed = useContext(ActivityFeedContext);
   const [isRemoteAccessEnabled, setIsRemoteAccessEnabled] = useState(false);
   const [showShareQR, setShowShareQR] = useState(false);
+  const [roleDropdownPeerId, setRoleDropdownPeerId] = useState<string | null>(null);
 
   const isOnline = appState?.node?.isRunning ?? false;
   const folderName = appState?.node?.folderName;
@@ -197,6 +208,21 @@ export function AndroidDashboard() {
                     const connectedMin = Math.floor(connectedMs / 60000);
                     const durationText = connectedMin < 1 ? 'Just now' : connectedMin < 60 ? `${connectedMin}m ago` : `${Math.floor(connectedMin / 60)}h ago`;
 
+                    const roleColors: Record<string, string> = {
+                      viewer: 'border-[#6B7280] text-[#9CA3AF] bg-[#374151]/30',
+                      contributor: 'border-[#3B82F6] text-[#60A5FA] bg-[#3B82F6]/10',
+                      manager: 'border-[#A855F7] text-[#C084FC] bg-[#A855F7]/10',
+                      admin: 'border-[#10B981] text-[#34D399] bg-[#10B981]/10',
+                    };
+                    const roleIcons: Record<string, React.ReactNode> = {
+                      viewer: <Shield className="w-3 h-3" />,
+                      contributor: <ShieldCheck className="w-3 h-3" />,
+                      manager: <ShieldAlert className="w-3 h-3" />,
+                      admin: <ShieldCheck className="w-3 h-3" />,
+                    };
+                    const peerRole = peer.role || 'viewer';
+                    const isDropdownOpen = roleDropdownPeerId === peer.browserId;
+
                     return (
                       <motion.div
                         key={peer.browserId}
@@ -204,21 +230,63 @@ export function AndroidDashboard() {
                         animate={{ opacity: 1, x: 0 }}
                         exit={{ opacity: 0, x: 20 }}
                         transition={{ duration: 0.3 }}
-                        className="flex items-center gap-3 bg-[#0B1220] rounded-2xl px-4 py-3 border border-[#1F2937]"
+                        className="bg-[#0B1220] rounded-2xl px-4 py-3 border border-[#1F2937]"
                       >
-                        <div
-                          className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
-                          style={{ backgroundColor: avatarColor }}
-                        >
-                          {peer.displayName.charAt(peer.displayName.length - 1)}
+                        <div className="flex items-center gap-3">
+                          <div
+                            className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
+                            style={{ backgroundColor: avatarColor }}
+                          >
+                            {peer.displayName.charAt(peer.displayName.length - 1)}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <span className="text-xs font-bold text-white block truncate">{peer.displayName}</span>
+                            <span className="text-[10px] text-[#6B7280] block truncate">{peer.browserId.slice(0, 8)}...</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <Circle className="w-2 h-2 text-[#10B981] fill-[#10B981]" />
+                            <span className="text-[10px] text-[#9CA3AF] font-medium">{durationText}</span>
+                          </div>
                         </div>
-                        <div className="flex-1 min-w-0">
-                          <span className="text-xs font-bold text-white block truncate">{peer.displayName}</span>
-                          <span className="text-[10px] text-[#6B7280] block truncate">{peer.browserId.slice(0, 8)}...</span>
-                        </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <Circle className="w-2 h-2 text-[#10B981] fill-[#10B981]" />
-                          <span className="text-[10px] text-[#9CA3AF] font-medium">{durationText}</span>
+                        {/* Role selector */}
+                        <div className="mt-2 relative">
+                          <button
+                            onClick={() => setRoleDropdownPeerId(isDropdownOpen ? null : peer.browserId)}
+                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border transition-all ${roleColors[peerRole] || roleColors.viewer}`}
+                          >
+                            {roleIcons[peerRole]}
+                            {peerRole.charAt(0).toUpperCase() + peerRole.slice(1)}
+                            <ChevronDown className={`w-3 h-3 transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`} />
+                          </button>
+                          <AnimatePresence>
+                            {isDropdownOpen && (
+                              <motion.div
+                                initial={{ opacity: 0, y: -8 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -8 }}
+                                transition={{ duration: 0.15 }}
+                                className="absolute left-0 top-full mt-1 z-20 bg-[#1F2937] border border-[#374151] rounded-xl overflow-hidden shadow-xl"
+                              >
+                                {(['viewer', 'contributor', 'manager'] as const).map(role => (
+                                  <button
+                                    key={role}
+                                    onClick={() => {
+                                      androidBridge.changePeerRole(peer.browserId, role);
+                                      setRoleDropdownPeerId(null);
+                                      toast.success(`${peer.displayName} → ${role.charAt(0).toUpperCase() + role.slice(1)}`);
+                                    }}
+                                    className={`flex items-center gap-2 w-full px-4 py-2 text-[11px] font-medium transition-colors hover:bg-[#374151] ${
+                                      peerRole === role ? 'text-[#3B82F6] bg-[#3B82F6]/5' : 'text-[#E5E7EB]'
+                                    }`}
+                                  >
+                                    {roleIcons[role]}
+                                    <span>{role.charAt(0).toUpperCase() + role.slice(1)}</span>
+                                    {peerRole === role && <span className="ml-auto text-[#3B82F6]">✓</span>}
+                                  </button>
+                                ))}
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
                         </div>
                       </motion.div>
                     );
@@ -233,6 +301,92 @@ export function AndroidDashboard() {
                   <Users className="w-8 h-8 text-[#374151]" />
                   <span className="text-[11px] text-[#6B7280] font-medium">No active connections</span>
                   <span className="text-[10px] text-[#4B5563]">Users will appear here when they connect</span>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </Card>
+
+          {/* Activity Feed Card */}
+          <Card className="bg-[#111827] border-[#1F2937] p-6 lg:p-8">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-[13px] font-bold text-white tracking-wider flex items-center gap-2">
+                <Activity className="w-4 h-4 text-[#10B981]" />
+                ACTIVITY FEED
+              </h3>
+              <Badge
+                variant="outline"
+                className={`px-2 py-0.5 text-[9px] font-bold rounded-full tracking-wider ${
+                  activityFeed.length > 0
+                    ? 'border-[#10B981] text-[#34D399] bg-[#10B981]/10'
+                    : 'border-[#374151] text-[#6B7280] bg-[#1F2937]/50'
+                }`}
+              >
+                {activityFeed.length > 0 ? 'LIVE' : 'IDLE'}
+              </Badge>
+            </div>
+
+            <AnimatePresence mode="popLayout">
+              {activityFeed.length > 0 ? (
+                <div className="flex flex-col gap-1.5 max-h-[280px] overflow-y-auto scrollbar-thin">
+                  {activityFeed.slice(0, 10).map((event, i) => {
+                    const actionIcons: Record<string, React.ReactNode> = {
+                      upload: <Upload className="w-3.5 h-3.5 text-[#3B82F6]" />,
+                      delete: <Trash2 className="w-3.5 h-3.5 text-[#EF4444]" />,
+                      rename: <Pencil className="w-3.5 h-3.5 text-[#F59E0B]" />,
+                      create_folder: <FolderPlus className="w-3.5 h-3.5 text-[#10B981]" />,
+                      bulk_delete: <Trash2 className="w-3.5 h-3.5 text-[#EF4444]" />,
+                      bulk_move: <FolderOpen className="w-3.5 h-3.5 text-[#A855F7]" />,
+                      role_change: <Shield className="w-3.5 h-3.5 text-[#EC4899]" />,
+                    };
+                    const actionLabels: Record<string, string> = {
+                      upload: 'uploaded',
+                      delete: 'deleted',
+                      rename: 'renamed',
+                      create_folder: 'created',
+                      bulk_delete: 'bulk deleted',
+                      bulk_move: 'moved',
+                      role_change: 'role changed',
+                    };
+                    const elapsed = Date.now() - event.timestamp;
+                    const secs = Math.floor(elapsed / 1000);
+                    const timeText = secs < 60 ? `${secs}s ago` : secs < 3600 ? `${Math.floor(secs / 60)}m ago` : `${Math.floor(secs / 3600)}h ago`;
+
+                    return (
+                      <motion.div
+                        key={`${event.timestamp}-${i}`}
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.2, delay: i * 0.03 }}
+                        className="flex items-center gap-3 bg-[#0B1220] rounded-xl px-3 py-2.5 border border-[#1F2937]"
+                      >
+                        <div className="w-7 h-7 rounded-lg bg-[#1F2937] flex items-center justify-center shrink-0">
+                          {actionIcons[event.action] || <Activity className="w-3.5 h-3.5 text-[#6B7280]" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[11px] text-[#E5E7EB] truncate">
+                            <span className="font-bold text-white">{event.actor}</span>
+                            {' '}{actionLabels[event.action] || event.action}{' '}
+                            <span className="text-[#60A5FA] font-medium">{event.fileName}</span>
+                          </div>
+                          {event.details && (
+                            <span className="text-[9px] text-[#6B7280] block truncate">{event.details}</span>
+                          )}
+                        </div>
+                        <span className="text-[9px] text-[#4B5563] font-medium shrink-0">{timeText}</span>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="flex flex-col items-center py-4 gap-2"
+                >
+                  <Activity className="w-8 h-8 text-[#374151]" />
+                  <span className="text-[11px] text-[#6B7280] font-medium">No activity yet</span>
+                  <span className="text-[10px] text-[#4B5563]">File operations will appear here in real-time</span>
                 </motion.div>
               )}
             </AnimatePresence>

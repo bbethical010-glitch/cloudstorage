@@ -141,6 +141,27 @@ class ServerService : Service() {
         val peerEventsFlow = kotlinx.coroutines.flow.MutableSharedFlow<PeerEvent>(
             extraBufferCapacity = 32
         )
+
+        /**
+         * Activity events (uploads, deletes, renames, etc.) for live feed.
+         */
+        val activityEventsFlow = kotlinx.coroutines.flow.MutableSharedFlow<ActivityEvent>(
+            extraBufferCapacity = 64
+        )
+
+        /**
+         * Ring buffer storing the last 50 activity events for the /api/activity endpoint.
+         */
+        val activityHistory = ActivityRingBuffer(50)
+
+        /**
+         * Emit an activity event to both the shared flow and the ring buffer.
+         */
+        fun emitActivity(action: String, fileName: String, actor: String, details: String = "") {
+            val event = ActivityEvent(action = action, fileName = fileName, actor = actor, details = details)
+            activityHistory.add(event)
+            activityEventsFlow.tryEmit(event)
+        }
     }
 
     private val activeSanitizationMap = java.util.concurrent.ConcurrentHashMap<String, String>()
@@ -222,7 +243,7 @@ class ServerService : Service() {
                     call.response.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,PATCH,OPTIONS")
                     call.response.header(
                         "Access-Control-Allow-Headers",
-                        "Authorization,Content-Type,Range,Accept-Ranges,Accept,X-Node-Id,X-Requested-With,pwd,Cache-Control,X-Archive-Name,X-Upload-Id,X-Upload-Restart,X-Target-Path,X-Batch-Id"
+                        "Authorization,Content-Type,Range,Accept-Ranges,Accept,X-Node-Id,X-Requested-With,pwd,Cache-Control,X-Archive-Name,X-Upload-Id,X-Upload-Restart,X-Target-Path,X-Batch-Id,X-Peer-Id,X-Actor-Name"
                     )
                     call.response.header("Access-Control-Expose-Headers", "Content-Length,Content-Range,Accept-Ranges")
                 }
@@ -273,6 +294,74 @@ class ServerService : Service() {
                             if (consolePassword.isNullOrBlank()) return true
                             return providedToken == consolePassword
                         }
+                    }
+
+                    // ── Role Enforcement ──────────────────────────────────────
+                    val roleHierarchy = listOf(PeerRole.VIEWER, PeerRole.CONTRIBUTOR, PeerRole.MANAGER, PeerRole.ADMIN)
+
+                    fun io.ktor.server.application.ApplicationCall.getCallerRole(): String {
+                        // Check if caller is admin (Android WebView or matching active_token)
+                        val prefs = getSharedPreferences("NodeAuthSettings", android.content.Context.MODE_PRIVATE)
+                        val activeToken = prefs.getString("active_token", null)
+                        val headerToken = request.headers["Authorization"]?.removePrefix("Bearer ")?.trim()
+                        val providedToken = headerToken?.takeIf { it.isNotBlank() }
+                            ?: request.queryParameters["pwd"]?.takeIf { it.isNotBlank() }
+                            ?: request.queryParameters["token"]?.takeIf { it.isNotBlank() }
+
+                        // Admin: matches the active session token or is the console password owner
+                        if (!activeToken.isNullOrBlank() && providedToken == activeToken) {
+                            return PeerRole.ADMIN
+                        }
+                        if (consolePassword != null && providedToken == consolePassword) {
+                            return PeerRole.ADMIN
+                        }
+
+                        // Check X-Peer-Id header for connected peer role lookup
+                        val peerId = request.headers["X-Peer-Id"]?.trim()
+                        if (!peerId.isNullOrBlank()) {
+                            val peers = connectedPeersFlow.value
+                            val peer = peers.find { it.browserId == peerId }
+                            if (peer != null) return peer.role
+                        }
+
+                        // Default: viewer (most restrictive)
+                        return PeerRole.VIEWER
+                    }
+
+                    fun hasMinimumRole(callerRole: String, requiredRole: String): Boolean {
+                        val callerIdx = roleHierarchy.indexOf(callerRole)
+                        val requiredIdx = roleHierarchy.indexOf(requiredRole)
+                        return callerIdx >= requiredIdx
+                    }
+
+                    suspend fun io.ktor.server.application.ApplicationCall.requireRole(minimumRole: String): Boolean {
+                        val role = getCallerRole()
+                        if (!hasMinimumRole(role, minimumRole)) {
+                            respond(HttpStatusCode.Forbidden, mapOf(
+                                "error" to "insufficient_permissions",
+                                "message" to "This action requires '$minimumRole' role or higher. Your role: '$role'",
+                                "requiredRole" to minimumRole,
+                                "currentRole" to role
+                            ))
+                            return false
+                        }
+                        return true
+                    }
+
+                    fun io.ktor.server.application.ApplicationCall.getActorName(): String {
+                        // Check X-Actor-Name header first (set by web console)
+                        val explicitName = request.headers["X-Actor-Name"]?.trim()
+                        if (!explicitName.isNullOrBlank()) return explicitName
+
+                        // Check X-Peer-Id header for connected peer display name
+                        val peerId = request.headers["X-Peer-Id"]?.trim()
+                        if (!peerId.isNullOrBlank()) {
+                            val peer = connectedPeersFlow.value.find { it.browserId == peerId }
+                            if (peer != null) return peer.displayName
+                        }
+
+                        // Default to Admin
+                        return "Admin"
                     }
 
                     route("/api") {
@@ -364,10 +453,62 @@ class ServerService : Service() {
                                 mapOf(
                                     "browserId" to peer.browserId,
                                     "connectedAt" to peer.connectedAt,
-                                    "displayName" to peer.displayName
+                                    "displayName" to peer.displayName,
+                                    "role" to peer.role
                                 )
                             }
                             call.respond(mapOf("peers" to peers, "count" to peers.size))
+                        }
+
+                        // ── Change Peer Role (Admin only) ────────────────────
+                        post("/peers/role") {
+                            if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            if (!call.requireRole(PeerRole.ADMIN)) return@post
+
+                            val jsonStr = call.receiveText()
+                            if (jsonStr.isBlank()) return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "empty_body"))
+
+                            val obj = org.json.JSONObject(jsonStr)
+                            val browserId = obj.optString("browserId", "").trim()
+                            val newRole = obj.optString("role", "").trim().lowercase()
+
+                            if (browserId.isBlank() || newRole.isBlank()) {
+                                return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing_fields", "message" to "Provide browserId and role"))
+                            }
+                            if (!PeerRole.isValid(newRole)) {
+                                return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "invalid_role", "validRoles" to PeerRole.ALL.toList()))
+                            }
+
+                            // Find the peer in the connected peers flow and update
+                            val currentPeers = connectedPeersFlow.value
+                            val peerIndex = currentPeers.indexOfFirst { it.browserId == browserId }
+                            if (peerIndex == -1) {
+                                return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "peer_not_found"))
+                            }
+
+                            val updatedPeer = currentPeers[peerIndex].copy(role = newRole)
+                            val updatedList = currentPeers.toMutableList()
+                            updatedList[peerIndex] = updatedPeer
+                            connectedPeersFlow.value = updatedList
+
+                            emitActivity("role_change", updatedPeer.displayName, call.getActorName(), "Role changed to $newRole")
+
+                            call.respond(mapOf("success" to true, "browserId" to browserId, "role" to newRole, "displayName" to updatedPeer.displayName))
+                        }
+
+                        // ── Activity Feed Endpoint ───────────────────────────
+                        get("/activity") {
+                            if (!call.hasValidAuth()) return@get call.respond(HttpStatusCode.Unauthorized)
+                            val events = activityHistory.getAll().map { event ->
+                                mapOf(
+                                    "action" to event.action,
+                                    "fileName" to event.fileName,
+                                    "actor" to event.actor,
+                                    "timestamp" to event.timestamp,
+                                    "details" to event.details
+                                )
+                            }
+                            call.respond(mapOf("events" to events, "count" to events.size))
                         }
 
                         // ── Guest Access Route ───────────────────────────────
@@ -734,6 +875,8 @@ class ServerService : Service() {
 
                         post("/folder") {
                             if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            if (!call.requireRole(PeerRole.CONTRIBUTOR)) return@post
+                            val actor = call.getActorName()
                             val params = call.receiveParameters()
                             val path = params["path"]
                             val name = params["name"] ?: return@post call.respond(HttpStatusCode.BadRequest, "Missing name")
@@ -742,12 +885,16 @@ class ServerService : Service() {
                             val targetDir = resolveSafePath(root, path) ?: return@post call.respond(HttpStatusCode.NotFound)
 
                             val newDir = targetDir.createDirectory(name)
-                            if (newDir != null) call.respond(HttpStatusCode.OK, "Created")
-                            else call.respond(HttpStatusCode.InternalServerError, "Failed")
+                            if (newDir != null) {
+                                emitActivity("create_folder", name, actor)
+                                call.respond(HttpStatusCode.OK, "Created")
+                            } else call.respond(HttpStatusCode.InternalServerError, "Failed")
                         }
 
                         post("/rename") {
                             if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            if (!call.requireRole(PeerRole.MANAGER)) return@post
+                            val actor = call.getActorName()
                             val params = call.receiveParameters()
                             val path = params["path"]
                             val oldName = params["oldName"] ?: return@post call.respond(HttpStatusCode.BadRequest)
@@ -758,8 +905,10 @@ class ServerService : Service() {
                             val targetFile = targetDir.findFile(oldName) ?: return@post call.respond(HttpStatusCode.NotFound)
 
                             fileOpMutex.withLock {
-                                if (targetFile.renameTo(newName)) call.respond(HttpStatusCode.OK)
-                                else call.respond(HttpStatusCode.InternalServerError)
+                                if (targetFile.renameTo(newName)) {
+                                    emitActivity("rename", oldName, actor, "Renamed to $newName")
+                                    call.respond(HttpStatusCode.OK)
+                                } else call.respond(HttpStatusCode.InternalServerError)
                             }
                         }
 
@@ -813,6 +962,8 @@ class ServerService : Service() {
 
                         post("/delete") {
                             if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "unauthorized"))
+                            if (!call.requireRole(PeerRole.MANAGER)) return@post
+                            val actor = call.getActorName()
                             try {
                                 val queryPath = call.request.queryParameters["path"]
                                 val params = if (queryPath.isNullOrBlank()) call.receiveParameters() else null
@@ -827,6 +978,7 @@ class ServerService : Service() {
                                     else -> ""
                                 }
                                 deletePath(call, fullPath)
+                                emitActivity("delete", fullPath.substringAfterLast("/"), actor)
                             } catch (e: Exception) {
                                 android.util.Log.e("Delete", "Delete error", e)
                                 call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "${e::class.simpleName}: ${e.message}"))
@@ -835,6 +987,8 @@ class ServerService : Service() {
 
                         delete("/delete") {
                             if (!call.hasValidAuth()) return@delete call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "unauthorized"))
+                            if (!call.requireRole(PeerRole.MANAGER)) return@delete
+                            val actor = call.getActorName()
                             try {
                                 val path = call.request.queryParameters["path"]
                                     ?: run {
@@ -842,6 +996,7 @@ class ServerService : Service() {
                                         return@delete
                                     }
                                 deletePath(call, path)
+                                emitActivity("delete", path.substringAfterLast("/"), actor)
                             } catch (e: Exception) {
                                 android.util.Log.e("Delete", "Delete error", e)
                                 call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "${e::class.simpleName}: ${e.message}"))
@@ -851,6 +1006,8 @@ class ServerService : Service() {
                         // ── Recursive Folder Delete ─────────────────────────────────
                         post("/folder_delete") {
                             if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            if (!call.requireRole(PeerRole.MANAGER)) return@post
+                            val folderDeleteActor = call.getActorName()
                             try {
                                 val params = call.receiveParameters()
                                 val path = params["path"] ?: ""
@@ -894,6 +1051,7 @@ class ServerService : Service() {
                                 }
 
                                 val deletedCount = deleteRecursively(targetFolder)
+                                emitActivity("delete", name, folderDeleteActor, "Folder with $deletedCount items")
                                 call.respond(
                                     HttpStatusCode.OK,
                                     mapOf("deleted" to deletedCount, "folder" to name)
@@ -909,6 +1067,8 @@ class ServerService : Service() {
 
                         post("/bulk_action") {
                             if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            if (!call.requireRole(PeerRole.MANAGER)) return@post
+                            val bulkActor = call.getActorName()
                             try {
                                 val jsonStr: String = call.receiveText()
                                 val json = org.json.JSONObject(jsonStr)
@@ -950,6 +1110,7 @@ class ServerService : Service() {
                                         }
                                     }
                                 }
+                                emitActivity("bulk_$action", "${items.length()} items", bulkActor)
                                 call.respond(HttpStatusCode.OK)
                             } catch (e: Exception) {
                                 e.printStackTrace()
@@ -1169,6 +1330,7 @@ class ServerService : Service() {
                                     call.respond(HttpStatusCode.Unauthorized)
                                     return@post
                                 }
+                                if (!call.requireRole(PeerRole.CONTRIBUTOR)) return@post
 
                                 // ── Parse request inputs safely ──────────────────────
                                 val basePath: String
@@ -1438,6 +1600,7 @@ class ServerService : Service() {
 
                         post("/upload/archive") {
                             if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            if (!call.requireRole(PeerRole.CONTRIBUTOR)) return@post
                             
                             val batchId = call.request.headers["X-Batch-Id"]
                                 ?: call.request.queryParameters["batchId"]
@@ -1539,6 +1702,7 @@ class ServerService : Service() {
 
                         post("/upload/archive/chunk") {
                             if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            if (!call.requireRole(PeerRole.CONTRIBUTOR)) return@post
                             val batchId     = call.request.queryParameters["batchId"] ?: return@post
                             val chunkIndex  = call.request.queryParameters["chunkIndex"]?.toIntOrNull() ?: 0
                             val totalChunks = call.request.queryParameters["totalChunks"]?.toIntOrNull() ?: 1
@@ -1610,6 +1774,7 @@ class ServerService : Service() {
 
                         post("/upload_chunk") {
                             if (!call.hasValidAuth()) return@post call.respond(HttpStatusCode.Unauthorized)
+                            if (!call.requireRole(PeerRole.CONTRIBUTOR)) return@post
                             var relativePath: String? = null
                             var chunkIndex: Int = 0
                             var transferId = ""
@@ -1750,7 +1915,9 @@ class ServerService : Service() {
                         }
 
                         post("/upload_complete") {
-                            // Logic to verify file integrity if needed
+                            if (!call.requireRole(PeerRole.CONTRIBUTOR)) return@post
+                            val uploadActor = call.getActorName()
+                            emitActivity("upload", "file", uploadActor)
                             call.respondJson(true)
                         }
 
