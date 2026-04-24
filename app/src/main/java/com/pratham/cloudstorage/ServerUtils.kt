@@ -100,7 +100,7 @@ object NodeUrlBuilder {
         if (normalized.isBlank()) {
             return null
         }
-        return "$normalized/node/$shareCode/console"
+        return "$normalized/node/$shareCode"
     }
 
     /**

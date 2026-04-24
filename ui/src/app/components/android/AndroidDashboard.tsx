@@ -106,7 +106,7 @@ export function AndroidDashboard() {
               </Button>
               <Button 
                 onClick={() => {
-                  const url = appState?.node?.publicUrl || `https://${appState?.node?.relayBaseUrl}/node/${shareCode}/console`;
+                  const url = appState?.node?.publicUrl || `https://${appState?.node?.relayBaseUrl}/node/${shareCode}`;
                   androidBridge.copyToClipboard(url, "Link Copied");
                 }} 
                 variant="outline"
@@ -158,7 +158,7 @@ export function AndroidDashboard() {
                     </Button>
                   </div>
                   <p className="text-[10px] font-mono text-[#6B7280] mt-2 break-all bg-[#0B1220] py-2 px-3 rounded-lg border border-[#1F2937]">
-                    {appState?.node?.publicUrl || `https://${appState?.node?.relayBaseUrl}/node/${shareCode}/console`}
+                    {appState?.node?.publicUrl || `https://${appState?.node?.relayBaseUrl}/node/${shareCode}`}
                   </p>
                 </motion.div>
               )}
