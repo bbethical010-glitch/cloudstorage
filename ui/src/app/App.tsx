@@ -98,7 +98,7 @@ function Main() {
      } catch (e: any) {
        console.error("[JS_DEBUG] Files fetch failed", e.message || e);
      }
-  }, [setAppState]);
+  }, [appStateRaw?.node?.isRunning, setAppState]);
 
   useEffect(() => {
     // Web Console (non-Android): check auth immediately
