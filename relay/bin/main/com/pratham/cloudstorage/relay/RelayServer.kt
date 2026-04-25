@@ -319,6 +319,52 @@ private class SignalingRegistry {
         }
     }
 
+    /**
+     * Forward a streaming DOWNLOAD request - sends request metadata, then receives streaming response.
+     * The agent responds with stream-response packets containing binary chunks.
+     */
+    suspend fun forwardStreamingRequest(
+        agent: AgentConnection,
+        request: RelayEnvelope
+    ): RelayEnvelope? {
+        val requestId = request.requestId ?: return null
+        val deferred = CompletableDeferred<RelayEnvelope>()
+        pendingResponses[requestId] = deferred
+
+        return try {
+            // Send the request envelope (headers only, no body for downloads)
+            agent.sendEnvelope(request.copy(type = "streaming-request"))
+
+            // Wait for the stream to start (first response with isStreaming=true)
+            val startResponse = withTimeoutOrNull(45_000) { deferred.await() }
+            if (startResponse?.isStreaming != true) {
+                // Not a streaming response, return as-is
+                return startResponse
+            }
+
+            // Return the start response - streaming data follows via binary frames
+            startResponse
+        } catch (e: Exception) {
+            pendingResponses.remove(requestId)
+            null
+        }
+    }
+
+    /**
+     * Completes a streaming response by waiting for the stream-end signal.
+     */
+    suspend fun awaitStreamingComplete(requestId: String, timeoutMs: Long = 20 * 60_000L): Boolean {
+        return try {
+            withTimeoutOrNull(timeoutMs) {
+                // Wait for stream-end marker or timeout
+                delay(timeoutMs)
+                true
+            } ?: false
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     fun completeResponse(response: RelayEnvelope) {
         val requestId = response.requestId ?: return
         pendingResponses.remove(requestId)?.complete(response)
@@ -360,7 +406,8 @@ private data class RelayEnvelope(
     val bodyBase64: String? = null,
     val contentLength: Long? = null,
     val status: Int? = null,
-    val error: String? = null
+    val error: String? = null,
+    val isStreaming: Boolean? = null  // Flag for streaming responses
 )
 
 private suspend fun io.ktor.server.application.ApplicationCall.proxyApiRequest(
@@ -428,7 +475,13 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyApiRequest(
         headers = forwardedHeaders
     )
 
-    val relayResponse = if (request.path().endsWith("/upload/archive", ignoreCase = true)) {
+    // Determine if this request/response should use streaming
+    val isLargeDownload = request.path().matches(Regex(".*/(download|download_folder|download_bulk|file-content).*", RegexOption.IGNORE_CASE))
+    val isArchiveUpload = request.path().endsWith("/upload/archive", ignoreCase = true)
+    val shouldStream = isLargeDownload || isArchiveUpload
+
+    val relayResponse = if (isArchiveUpload) {
+        // Upload streaming (already implemented)
         registry.forwardStreamingEnvelope(
             agent,
             relayRequest.copy(
@@ -437,16 +490,29 @@ private suspend fun io.ktor.server.application.ApplicationCall.proxyApiRequest(
             ),
             receiveChannel()
         )
+    } else if (shouldStream) {
+        // Download streaming - request without body, expect streaming response
+        registry.forwardStreamingRequest(
+            agent,
+            relayRequest.copy(isStreaming = true)
+        )
     } else {
+        // Standard request with Base64 body (small payloads only)
         val requestBody = receiveStream().readBytes()
         registry.forwardEnvelope(agent, relayRequest.copy(bodyBase64 = requestBody.encodeBase64()))
     }
+
     if (relayResponse == null) {
         respondJson(mapOf("error" to "node_timeout"), HttpStatusCode.GatewayTimeout)
         return
     }
 
-    respondRelayResponse(relayResponse)
+    // Handle streaming response for downloads
+    if (shouldStream && relayResponse.isStreaming == true) {
+        respondStreamingRelayResponse(relayResponse, registry, requestId, nodeId)
+    } else {
+        respondRelayResponse(relayResponse)
+    }
 }
 
 private suspend fun io.ktor.server.application.ApplicationCall.respondRelayResponse(relayResponse: RelayEnvelope) {
@@ -467,6 +533,73 @@ private suspend fun io.ktor.server.application.ApplicationCall.respondRelayRespo
         ?.let(ContentType::parse)
 
     respondBytes(bodyBytes, contentType = contentType, status = status)
+}
+
+/**
+ * Stream a large response from the Android node without buffering in relay memory.
+ * Sets up WebSocket listener for binary stream chunks, forwards them to HTTP response.
+ */
+private suspend fun io.ktor.server.application.ApplicationCall.respondStreamingRelayResponse(
+    relayResponse: RelayEnvelope,
+    registry: SignalingRegistry,
+    requestId: String,
+    nodeId: String
+) {
+    val status = relayResponse.status?.let(HttpStatusCode::fromValue) ?: HttpStatusCode.BadGateway
+    val contentType = relayResponse.headers?.entries
+        ?.firstOrNull { (key, _) -> key.equals(HttpHeaders.ContentType, ignoreCase = true) }
+        ?.value
+        ?.takeIf { it.isNotBlank() }
+        ?.let(ContentType::parse) ?: ContentType.Application.OctetStream
+
+    // Set response headers
+    response.headers.append(HttpHeaders.ContentType, contentType.toString())
+    relayResponse.headers.orEmpty()
+        .filter { (key, _) -> key.equals(HttpHeaders.ContentRange, ignoreCase = true) || key.equals(HttpHeaders.AcceptRanges, ignoreCase = true) }
+        .forEach { (key, value) ->
+            response.headers.append(key, value, safeOnly = false)
+        }
+
+    // Get the agent WebSocket to listen for incoming binary chunks
+    val agent = registry.getAgent(nodeId)
+    if (agent == null) {
+        respondJson(mapOf("error" to "node_disconnected"), HttpStatusCode.ServiceUnavailable)
+        return
+    }
+
+    // Use respondOutputStream for true streaming - doesn't buffer
+    respondOutputStream(contentType = contentType, status = status) {
+        val buffer = ByteArray(64 * 1024) // 64KB chunks
+        var totalBytes = 0L
+
+        // Listen for binary frames from the agent (stream chunks)
+        // The agent sends: [36-byte requestId][payload]
+        // We need to forward just the payload to the HTTP response
+        while (agent.session.incoming.isClosedForReceive == false) {
+            val frame = agent.session.incoming.receive() ?: break
+            if (frame is Frame.Binary) {
+                val data = frame.data
+                if (data.size >= 36) {
+                    // Extract payload (skip 36-byte header)
+                    val payloadSize = data.size - 36
+                    if (payloadSize > 0) {
+                        write(data, 36, payloadSize)
+                        totalBytes += payloadSize
+                    }
+                }
+                // Check for stream end marker
+                if (frame.isLastFrame()) break
+            } else if (frame is Frame.Text) {
+                // Check for stream-end envelope
+                val text = frame.readText()
+                val envelope = text.toEnvelopeOrNull()
+                if (envelope?.type == "stream-response-end") {
+                    break
+                }
+            }
+        }
+        println("STREAM_COMPLETE: Request $requestId, total bytes: $totalBytes")
+    }
 }
 
 private suspend fun DefaultWebSocketSession.sendEnvelope(envelope: RelayEnvelope) {

@@ -103,6 +103,11 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.AlertDialog
+import androidx.lifecycle.viewmodel.compose.viewModel
+
+enum class VaultView {
+    LOCAL, REMOTE
+}
 
 import android.webkit.JavascriptInterface
 import org.json.JSONObject
@@ -530,6 +535,9 @@ class MainActivity : ComponentActivity() {
     private fun MainScreen() {
         val transferState by UploadNotificationManager.cardState.collectAsState()
         val nodeStatus by UploadNotificationManager.nodeStatus.collectAsState()
+        
+        var currentView by remember { mutableStateOf(VaultView.LOCAL) }
+        val remoteViewModel: RemoteVaultViewModel = viewModel()
 
         // Trigger password setup only when node starts for the first time
         LaunchedEffect(nodeStatus) {
@@ -546,16 +554,26 @@ class MainActivity : ComponentActivity() {
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            // Main WebView area
+            // View Switcher Toggle
+            VaultSwitcher(
+                currentView = currentView,
+                onViewChange = { currentView = it }
+            )
+
+            // Main Content area
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
             ) {
-                AndroidView(
-                    factory = { webView },
-                    modifier = Modifier.fillMaxSize()
-                )
+                if (currentView == VaultView.LOCAL) {
+                    AndroidView(
+                        factory = { webView },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    RemoteVaultScreen(viewModel = remoteViewModel)
+                }
             }
             
             // Node Status Section at the bottom — handles boot animation, live card, and transfers
@@ -1161,6 +1179,64 @@ class MainActivity : ComponentActivity() {
             }
         } catch (e: Exception) {
             android.util.Log.e("NODE_DEBUG", "Battery optimization prompt failed", e)
+        }
+    }
+
+    @Composable
+    private fun VaultSwitcher(
+        currentView: VaultView,
+        onViewChange: (VaultView) -> Unit
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF0A0C14))
+                .padding(top = 12.dp, bottom = 8.dp),
+            horizontalArrangement = Arrangement.Center
+        ) {
+            SegmentedButton(
+                label = "MY VAULT",
+                isSelected = currentView == VaultView.LOCAL,
+                onClick = { onViewChange(VaultView.LOCAL) }
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            SegmentedButton(
+                label = "REMOTE VAULT",
+                isSelected = currentView == VaultView.REMOTE,
+                onClick = { onViewChange(VaultView.REMOTE) }
+            )
+        }
+    }
+
+    @Composable
+    private fun SegmentedButton(
+        label: String,
+        isSelected: Boolean,
+        onClick: () -> Unit
+    ) {
+        Surface(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { onClick() }
+                .width(140.dp),
+            color = if (isSelected) Color(0xFF3B82F6).copy(alpha = 0.12f) else Color.Transparent,
+            border = BorderStroke(
+                width = 1.dp,
+                color = if (isSelected) Color(0xFF3B82F6) else Color(0xFF1C2035)
+            )
+        ) {
+            Text(
+                text = label,
+                modifier = Modifier.padding(vertical = 10.dp),
+                textAlign = TextAlign.Center,
+                style = androidx.compose.ui.text.TextStyle(
+                    fontSize = 10.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (isSelected) Color.White else Color(0xFF7A8099),
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 0.1.sp
+                )
+            )
         }
     }
 }

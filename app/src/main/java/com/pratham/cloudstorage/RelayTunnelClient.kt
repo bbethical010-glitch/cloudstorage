@@ -134,6 +134,16 @@ class RelayTunnelClient(
                                                 val response = forwardToLocalNode(envelope)
                                                 sendTextSafely(relayGson.toJson(response))
                                             }
+                                            "streaming-request" -> {
+                                                // Download streaming - forward request and stream response back
+                                                forwardStreamingToLocalNode(envelope) { responseFrame ->
+                                                    when (responseFrame) {
+                                                        is Frame.Text -> sendTextSafely(responseFrame.readText())
+                                                        is Frame.Binary -> outgoing.send(responseFrame)
+                                                        else -> {}
+                                                    }
+                                                }
+                                            }
                                             "stream-request-start" -> {
                                                 val requestIdStr = envelope.requestId ?: continue
                                                 val requestId = try { UUID.fromString(requestIdStr) } catch(_: Exception) { continue }

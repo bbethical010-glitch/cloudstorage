@@ -2144,11 +2144,18 @@ class ServerService : Service() {
         }
     }
 
+    /**
+     * Sanitize filename for Android SAF compatibility.
+     * Preserves spaces (fixed Phase 1) while removing only truly illegal characters.
+     *
+     * Illegal on Android: * " < > ? | : / \\
+     * Preserved: spaces, parentheses, brackets (now allowed)
+     */
     private fun sanitizeFilename(name: String): String {
         return name
-            .replace(' ', '_')
-            .replace(Regex("[()\\[\\]]"), "")
-            .replace(Regex("[^a-zA-Z0-9._\\-]"), "_")
+            .replace(Regex("[*\"<>?|:/\\\\]"), "")  // Remove only Android-illegal characters
+            .replace(Regex("\\s+"), " ")            // Normalize whitespace to single spaces
+            .trim()
             .trimEnd('.')
             .ifEmpty { "unnamed_file" }
     }
@@ -2158,9 +2165,10 @@ class ServerService : Service() {
      * filesystem characters BEFORE path validation or segmentation.
      *
      * Characters legal on macOS/Windows but illegal on Android storage:
-     *   * " < > ? | :
+     *   * " < > ? | : / \\
      *
      * Forward slashes are preserved as directory separators.
+     * Spaces are preserved (Phase 1 fix).
      */
     private fun sanitizeRelativePath(path: String): String {
         return path
@@ -2168,8 +2176,9 @@ class ServerService : Service() {
             .split('/')                    // Split into segments
             .joinToString("/") { segment ->
                 segment
-                    .replace(Regex("[*\"<>?|:]"), "_")  // Strip Android-illegal chars
-                    .trim()                                // Trim whitespace per segment
+                    .replace(Regex("[*\"<>?|:/\\\\]"), "")  // Strip Android-illegal chars only
+                    .replace(Regex("\\s+"), " ")            // Normalize whitespace
+                    .trim()                                 // Trim outer whitespace only
             }
     }
 

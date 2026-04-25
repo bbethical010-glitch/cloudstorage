@@ -59,6 +59,13 @@
             android:stopWithTask="false"
             android:foregroundServiceType="dataSync" />
 
+        <service
+            android:name=".P2PClientService"
+            android:enabled="true"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="dataSync" />
+
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
