@@ -27,3 +27,4 @@ ui/.env.local
 # Ktor / Relay
 out/
 bin/
+node_modules
