@@ -365,6 +365,12 @@ class RelayTunnelClient(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Streaming proxy failed", e)
+            val errorMsg = relayGson.toJson(mapOf(
+                "type" to "stream-response-error",
+                "requestId" to request.requestId,
+                "error" to (e.message ?: "Streaming proxy failed")
+            ))
+            onFrame(Frame.Text(errorMsg))
         }
     }
 
