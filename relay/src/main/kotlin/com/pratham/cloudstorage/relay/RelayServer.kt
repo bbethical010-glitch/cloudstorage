@@ -587,8 +587,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.respondStreamingR
                         totalBytes += payloadSize
                     }
                 }
-                // Check for stream end marker
-                if (frame.isLastFrame()) break
+                // Check for stream end marker handled via Frame.Text envelope
             } else if (frame is Frame.Text) {
                 // Check for stream-end envelope
                 val text = frame.readText()
