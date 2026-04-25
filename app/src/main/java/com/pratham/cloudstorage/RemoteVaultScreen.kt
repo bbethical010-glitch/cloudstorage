@@ -65,6 +65,7 @@ fun RemoteVaultScreen(
                         RemoteFileExplorer(
                             path = currentPath,
                             files = files,
+                            getFileProgress = { viewModel.getFileProgress(it) },
                             onFileClick = { file ->
                                 if (file.isDirectory) {
                                     viewModel.navigateTo(file.path)
@@ -247,6 +248,7 @@ fun ConnectView(
 fun RemoteFileExplorer(
     path: String,
     files: List<RemoteFile>,
+    getFileProgress: (String) -> Float?,
     onFileClick: (RemoteFile) -> Unit,
     onBackClick: () -> Unit
 ) {
@@ -301,7 +303,7 @@ fun RemoteFileExplorer(
                 contentPadding = PaddingValues(bottom = 16.dp)
             ) {
                 items(files) { file ->
-                    val progress = viewModel.getFileProgress(file.path)
+                    val progress = getFileProgress(file.path)
                     RemoteFileRow(
                         file = file, 
                         progress = progress,

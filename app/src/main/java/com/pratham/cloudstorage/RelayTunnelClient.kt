@@ -136,11 +136,17 @@ class RelayTunnelClient(
                                             }
                                             "streaming-request" -> {
                                                 // Download streaming - forward request and stream response back
-                                                forwardStreamingToLocalNode(envelope) { responseFrame ->
-                                                    when (responseFrame) {
-                                                        is Frame.Text -> sendTextSafely(responseFrame.readText())
-                                                        is Frame.Binary -> outgoing.send(responseFrame)
-                                                        else -> {}
+                                                scope.launch {
+                                                    forwardStreamingToLocalNode(envelope) { responseFrame ->
+                                                        when (responseFrame) {
+                                                            is Frame.Text -> sendTextSafely(responseFrame.readText())
+                                                            is Frame.Binary -> {
+                                                                outgoingMutex.withLock {
+                                                                    outgoing.send(responseFrame)
+                                                                }
+                                                            }
+                                                            else -> {}
+                                                        }
                                                     }
                                                 }
                                             }
@@ -308,6 +314,57 @@ class RelayTunnelClient(
                 bodyBase64 = """{"error":"local_node_unreachable"}""".encodeToByteArray().encodeBase64(),
                 error = error.message
             )
+        }
+    }
+
+    private suspend fun forwardStreamingToLocalNode(request: RelayEnvelope, onFrame: suspend (Frame) -> Unit) {
+        val targetPath = request.path?.takeIf { it.isNotBlank() } ?: "/"
+        val querySuffix = request.query?.takeIf { it.isNotBlank() }?.let { "?$it" }.orEmpty()
+        val targetUrl = "http://127.0.0.1:$DEFAULT_PORT$targetPath$querySuffix"
+
+        try {
+            localNodeClient.prepareRequest(targetUrl) {
+                method = HttpMethod.parse(request.method ?: HttpMethod.Get.value)
+                request.headers.orEmpty().forEach { (key, value) ->
+                    if (!isHopByHopHeader(key) &&
+                        !key.equals(HttpHeaders.Host, ignoreCase = true) &&
+                        !key.equals("X-Node-Id", ignoreCase = true)
+                    ) {
+                        header(key, value)
+                    }
+                }
+            }.execute { response ->
+                val responseHeaders = response.headers.flattenEntries()
+                    .filterNot { (key, _) -> isHopByHopHeader(key) }
+                    .associate { (key, value) -> key to value }
+
+                val startMsg = relayGson.toJson(mapOf(
+                    "type" to "stream-response-start",
+                    "requestId" to request.requestId,
+                    "status" to response.status.value,
+                    "headers" to responseHeaders
+                ))
+                onFrame(Frame.Text(startMsg))
+
+                val channel = response.bodyAsChannel()
+                val buffer = ByteArray(65536)
+                while (!channel.isClosedForRead) {
+                    val bytesRead = channel.readAvailable(buffer, 0, buffer.size)
+                    if (bytesRead > 0) {
+                        onFrame(Frame.Binary(true, buffer.copyOfRange(0, bytesRead)))
+                    } else if (bytesRead == -1) {
+                        break
+                    }
+                }
+                
+                val endMsg = relayGson.toJson(mapOf(
+                    "type" to "stream-response-end",
+                    "requestId" to request.requestId
+                ))
+                onFrame(Frame.Text(endMsg))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Streaming proxy failed", e)
         }
     }
 

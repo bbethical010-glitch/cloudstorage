@@ -78,6 +78,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -105,10 +106,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 
-enum class VaultView {
-    LOCAL, REMOTE
-}
-
+import androidx.compose.ui.draw.clip
 import android.webkit.JavascriptInterface
 import org.json.JSONObject
 import com.journeyapps.barcodescanner.ScanContract
@@ -116,6 +114,11 @@ import com.journeyapps.barcodescanner.ScanOptions
 import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import androidx.compose.foundation.clickable
+
+enum class VaultView {
+    LOCAL, REMOTE
+}
 
 class MainActivity : ComponentActivity() {
 
